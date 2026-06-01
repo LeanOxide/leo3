@@ -309,6 +309,35 @@ impl<'l> MetaMContext<'l> {
         }
     }
 
+    /// Reconstruct a `MetaMContext` from pre-built parts.
+    ///
+    /// This is intended for FFI consumers (e.g., Python bindings) that store
+    /// context/state as unbound objects and need to rebind them to a fresh
+    /// lifetime on each call.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that all parts were originally produced by
+    /// `MetaMContext::new` (or equivalent) and that the types are correct
+    /// (i.e., `env` is actually a `LeanEnvironment`, etc.).
+    pub unsafe fn from_parts(
+        lean: Lean<'l>,
+        env: LeanBound<'l, LeanEnvironment>,
+        core_ctx: LeanBound<'l, CoreContext>,
+        core_state: LeanBound<'l, CoreState>,
+        meta_ctx: LeanBound<'l, MetaContext>,
+        meta_state: LeanBound<'l, MetaState>,
+    ) -> Self {
+        Self {
+            lean,
+            env,
+            core_ctx,
+            core_state,
+            meta_ctx,
+            meta_state,
+        }
+    }
+
     /// Get a reference to the [`LeanEnvironment`] used by this context.
     pub fn env(&self) -> &LeanBound<'l, LeanEnvironment> {
         &self.env
