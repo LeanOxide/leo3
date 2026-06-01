@@ -513,8 +513,11 @@ impl LeanArray {
         xs: LeanBound<'l, Self>,
         ys: &LeanBound<'l, Self>,
     ) -> LeanResult<LeanBound<'l, Self>> {
-        let mut result = xs;
         let ys_size = Self::size(ys);
+        if ys_size == 0 {
+            return Ok(xs);
+        }
+        let mut result = xs;
         for i in 0..ys_size {
             if let Some(elem) = Self::get(ys, i) {
                 result = Self::push(result, elem)?;
@@ -729,15 +732,24 @@ impl LeanArray {
     pub unsafe fn flatten<'l>(arr: LeanBound<'l, Self>) -> LeanResult<LeanBound<'l, Self>> {
         let lean = arr.lean_token();
         let size = Self::size(&arr);
-        let mut result = Self::empty(lean)?;
 
+        // Pre-calculate total capacity to avoid repeated reallocations.
+        let mut total = 0;
+        for i in 0..size {
+            if let Some(inner) = Self::get(&arr, i) {
+                let inner_arr: LeanBound<'l, Self> = inner.cast();
+                total += Self::size(&inner_arr);
+            }
+        }
+
+        let mut result = Self::emptyWithCapacity(lean, total)?;
         for i in 0..size {
             if let Some(inner) = Self::get(&arr, i) {
                 let inner_arr: LeanBound<'l, Self> = inner.cast();
                 let inner_size = Self::size(&inner_arr);
                 for j in 0..inner_size {
                     if let Some(elem) = Self::get(&inner_arr, j) {
-                        result = Self::push(result, elem)?;
+                        result = Self::push_unchecked(result, elem)?;
                     }
                 }
             }

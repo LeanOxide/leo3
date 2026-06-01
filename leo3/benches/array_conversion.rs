@@ -13,7 +13,6 @@ use leo3::prelude::*;
 use std::hint::black_box;
 
 /// Naive implementation (for comparison) - uses regular push without pre-allocation
-#[allow(dead_code)]
 fn vec_to_array_naive<'l>(lean: Lean<'l>, vec: Vec<u64>) -> LeanResult<LeanBound<'l, LeanArray>> {
     let mut arr = LeanArray::empty(lean)?;
 
@@ -27,7 +26,6 @@ fn vec_to_array_naive<'l>(lean: Lean<'l>, vec: Vec<u64>) -> LeanResult<LeanBound
 }
 
 /// Optimized implementation - uses with_capacity + push_unchecked
-#[allow(dead_code)]
 fn vec_to_array_optimized<'l>(
     lean: Lean<'l>,
     vec: Vec<u64>,
@@ -50,7 +48,6 @@ fn vec_to_array_optimized<'l>(
 }
 
 /// Benchmark converting Vec → LeanArray for different sizes
-#[allow(dead_code)]
 fn bench_vec_to_array(c: &mut Criterion) {
     leo3::prepare_freethreaded_lean();
 
@@ -88,7 +85,6 @@ fn bench_vec_to_array(c: &mut Criterion) {
 }
 
 /// Benchmark converting LeanArray → Vec for different sizes
-#[allow(dead_code)]
 fn bench_array_to_vec(c: &mut Criterion) {
     leo3::prepare_freethreaded_lean();
 
@@ -124,7 +120,6 @@ fn bench_array_to_vec(c: &mut Criterion) {
 }
 
 /// Benchmark round-trip conversion Vec → LeanArray → Vec
-#[allow(dead_code)]
 fn bench_roundtrip(c: &mut Criterion) {
     leo3::prepare_freethreaded_lean();
 
@@ -165,12 +160,11 @@ fn bench_roundtrip(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    // bench_vec_to_array,
-    // bench_array_to_vec,
-    // bench_roundtrip,
-    // bench_vec_u8_bulk,
+    bench_vec_to_array,
+    bench_array_to_vec,
+    bench_roundtrip,
+    bench_vec_u8_bulk,
     bench_array_builder,
-    // bench_primitive_fast_paths
 );
 criterion_main!(benches);
 
@@ -179,7 +173,6 @@ criterion_main!(benches);
 // =============================================================================
 
 /// Benchmark Vec<u8> conversion using bulk memcpy vs element-by-element
-#[allow(dead_code)]
 fn bench_vec_u8_bulk(c: &mut Criterion) {
     leo3::prepare_freethreaded_lean();
 

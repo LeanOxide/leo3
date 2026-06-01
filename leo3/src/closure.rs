@@ -450,6 +450,24 @@ impl<'l> LeanClosure<'l> {
         }
     }
 
+    /// Apply this closure to two arguments, consuming the closure.
+    ///
+    /// This is more efficient than [`apply2`](Self::apply2) when you don't
+    /// need to reuse the closure.
+    pub fn apply2_once(
+        self,
+        a: LeanBound<'l, LeanAny>,
+        b: LeanBound<'l, LeanAny>,
+    ) -> LeanBound<'l, LeanAny> {
+        let lean = self.lean_token();
+
+        unsafe {
+            let result =
+                ffi::closure::lean_apply_2(self.into_ptr(), a.into_ptr(), b.into_ptr());
+            LeanBound::from_owned_ptr(lean, result)
+        }
+    }
+
     /// Apply this closure to three arguments.
     pub fn apply3(
         &self,
@@ -463,6 +481,29 @@ impl<'l> LeanClosure<'l> {
         unsafe {
             let result = ffi::closure::lean_apply_3(
                 closure_clone.into_ptr(),
+                a.into_ptr(),
+                b.into_ptr(),
+                c.into_ptr(),
+            );
+            LeanBound::from_owned_ptr(lean, result)
+        }
+    }
+
+    /// Apply this closure to three arguments, consuming the closure.
+    ///
+    /// This is more efficient than [`apply3`](Self::apply3) when you don't
+    /// need to reuse the closure.
+    pub fn apply3_once(
+        self,
+        a: LeanBound<'l, LeanAny>,
+        b: LeanBound<'l, LeanAny>,
+        c: LeanBound<'l, LeanAny>,
+    ) -> LeanBound<'l, LeanAny> {
+        let lean = self.lean_token();
+
+        unsafe {
+            let result = ffi::closure::lean_apply_3(
+                self.into_ptr(),
                 a.into_ptr(),
                 b.into_ptr(),
                 c.into_ptr(),
@@ -485,6 +526,31 @@ impl<'l> LeanClosure<'l> {
         unsafe {
             let result = ffi::closure::lean_apply_4(
                 closure_clone.into_ptr(),
+                a.into_ptr(),
+                b.into_ptr(),
+                c.into_ptr(),
+                d.into_ptr(),
+            );
+            LeanBound::from_owned_ptr(lean, result)
+        }
+    }
+
+    /// Apply this closure to four arguments, consuming the closure.
+    ///
+    /// This is more efficient than [`apply4`](Self::apply4) when you don't
+    /// need to reuse the closure.
+    pub fn apply4_once(
+        self,
+        a: LeanBound<'l, LeanAny>,
+        b: LeanBound<'l, LeanAny>,
+        c: LeanBound<'l, LeanAny>,
+        d: LeanBound<'l, LeanAny>,
+    ) -> LeanBound<'l, LeanAny> {
+        let lean = self.lean_token();
+
+        unsafe {
+            let result = ffi::closure::lean_apply_4(
+                self.into_ptr(),
                 a.into_ptr(),
                 b.into_ptr(),
                 c.into_ptr(),
@@ -520,6 +586,34 @@ impl<'l> LeanClosure<'l> {
         }
     }
 
+    /// Apply this closure to five arguments, consuming the closure.
+    ///
+    /// This is more efficient than [`apply5`](Self::apply5) when you don't
+    /// need to reuse the closure.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply5_once(
+        self,
+        a: LeanBound<'l, LeanAny>,
+        b: LeanBound<'l, LeanAny>,
+        c: LeanBound<'l, LeanAny>,
+        d: LeanBound<'l, LeanAny>,
+        e: LeanBound<'l, LeanAny>,
+    ) -> LeanBound<'l, LeanAny> {
+        let lean = self.lean_token();
+
+        unsafe {
+            let result = ffi::closure::lean_apply_5(
+                self.into_ptr(),
+                a.into_ptr(),
+                b.into_ptr(),
+                c.into_ptr(),
+                d.into_ptr(),
+                e.into_ptr(),
+            );
+            LeanBound::from_owned_ptr(lean, result)
+        }
+    }
+
     /// Apply this closure to six arguments.
     #[allow(clippy::too_many_arguments)]
     pub fn apply6(
@@ -537,6 +631,36 @@ impl<'l> LeanClosure<'l> {
         unsafe {
             let result = ffi::closure::lean_apply_6(
                 closure_clone.into_ptr(),
+                a.into_ptr(),
+                b.into_ptr(),
+                c.into_ptr(),
+                d.into_ptr(),
+                e.into_ptr(),
+                f.into_ptr(),
+            );
+            LeanBound::from_owned_ptr(lean, result)
+        }
+    }
+
+    /// Apply this closure to six arguments, consuming the closure.
+    ///
+    /// This is more efficient than [`apply6`](Self::apply6) when you don't
+    /// need to reuse the closure.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply6_once(
+        self,
+        a: LeanBound<'l, LeanAny>,
+        b: LeanBound<'l, LeanAny>,
+        c: LeanBound<'l, LeanAny>,
+        d: LeanBound<'l, LeanAny>,
+        e: LeanBound<'l, LeanAny>,
+        f: LeanBound<'l, LeanAny>,
+    ) -> LeanBound<'l, LeanAny> {
+        let lean = self.lean_token();
+
+        unsafe {
+            let result = ffi::closure::lean_apply_6(
+                self.into_ptr(),
                 a.into_ptr(),
                 b.into_ptr(),
                 c.into_ptr(),
@@ -578,6 +702,38 @@ impl<'l> LeanClosure<'l> {
         }
     }
 
+    /// Apply this closure to seven arguments, consuming the closure.
+    ///
+    /// This is more efficient than [`apply7`](Self::apply7) when you don't
+    /// need to reuse the closure.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply7_once(
+        self,
+        a: LeanBound<'l, LeanAny>,
+        b: LeanBound<'l, LeanAny>,
+        c: LeanBound<'l, LeanAny>,
+        d: LeanBound<'l, LeanAny>,
+        e: LeanBound<'l, LeanAny>,
+        f: LeanBound<'l, LeanAny>,
+        g: LeanBound<'l, LeanAny>,
+    ) -> LeanBound<'l, LeanAny> {
+        let lean = self.lean_token();
+
+        unsafe {
+            let result = ffi::closure::lean_apply_7(
+                self.into_ptr(),
+                a.into_ptr(),
+                b.into_ptr(),
+                c.into_ptr(),
+                d.into_ptr(),
+                e.into_ptr(),
+                f.into_ptr(),
+                g.into_ptr(),
+            );
+            LeanBound::from_owned_ptr(lean, result)
+        }
+    }
+
     /// Apply this closure to eight arguments.
     #[allow(clippy::too_many_arguments)]
     pub fn apply8(
@@ -597,6 +753,40 @@ impl<'l> LeanClosure<'l> {
         unsafe {
             let result = ffi::closure::lean_apply_8(
                 closure_clone.into_ptr(),
+                a.into_ptr(),
+                b.into_ptr(),
+                c.into_ptr(),
+                d.into_ptr(),
+                e.into_ptr(),
+                f.into_ptr(),
+                g.into_ptr(),
+                h.into_ptr(),
+            );
+            LeanBound::from_owned_ptr(lean, result)
+        }
+    }
+
+    /// Apply this closure to eight arguments, consuming the closure.
+    ///
+    /// This is more efficient than [`apply8`](Self::apply8) when you don't
+    /// need to reuse the closure.
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply8_once(
+        self,
+        a: LeanBound<'l, LeanAny>,
+        b: LeanBound<'l, LeanAny>,
+        c: LeanBound<'l, LeanAny>,
+        d: LeanBound<'l, LeanAny>,
+        e: LeanBound<'l, LeanAny>,
+        f: LeanBound<'l, LeanAny>,
+        g: LeanBound<'l, LeanAny>,
+        h: LeanBound<'l, LeanAny>,
+    ) -> LeanBound<'l, LeanAny> {
+        let lean = self.lean_token();
+
+        unsafe {
+            let result = ffi::closure::lean_apply_8(
+                self.into_ptr(),
                 a.into_ptr(),
                 b.into_ptr(),
                 c.into_ptr(),
