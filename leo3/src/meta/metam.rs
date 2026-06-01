@@ -338,6 +338,31 @@ impl<'l> MetaMContext<'l> {
         }
     }
 
+    /// Decompose this `MetaMContext` into its constituent parts.
+    ///
+    /// This is the inverse of [`from_parts`](Self::from_parts). It consumes
+    /// the context and returns the individual bound objects, which can then
+    /// be unbound for storage across lifetime boundaries.
+    ///
+    /// Returns `(env, core_ctx, core_state, meta_ctx, meta_state)`.
+    pub fn into_parts(
+        self,
+    ) -> (
+        LeanBound<'l, LeanEnvironment>,
+        LeanBound<'l, CoreContext>,
+        LeanBound<'l, CoreState>,
+        LeanBound<'l, MetaContext>,
+        LeanBound<'l, MetaState>,
+    ) {
+        (
+            self.env,
+            self.core_ctx,
+            self.core_state,
+            self.meta_ctx,
+            self.meta_state,
+        )
+    }
+
     /// Get a reference to the [`LeanEnvironment`] used by this context.
     pub fn env(&self) -> &LeanBound<'l, LeanEnvironment> {
         &self.env
