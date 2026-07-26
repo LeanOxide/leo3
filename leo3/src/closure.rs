@@ -468,12 +468,10 @@ impl<'l> LeanClosure<'l> {
         let lean = self.lean_token();
 
         unsafe {
-            let result =
-                ffi::closure::lean_apply_2(self.into_ptr(), a.into_ptr(), b.into_ptr());
+            let result = ffi::closure::lean_apply_2(self.into_ptr(), a.into_ptr(), b.into_ptr());
             LeanBound::from_owned_ptr(lean, result)
         }
     }
-
 }
 
 /// Generates `applyN` and `applyN_once` methods for a given arity.
@@ -530,7 +528,6 @@ impl_apply_n! {
 }
 
 impl<'l> LeanClosure<'l> {
-
     /// Apply this closure to a dynamic number of arguments.
     ///
     /// The arguments are consumed.

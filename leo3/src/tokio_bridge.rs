@@ -101,10 +101,8 @@ impl<T: Send + 'static> TaskHandle<T> {
 /// ```rust,no_run
 /// use leo3::tokio_bridge::lean_block_in_place;
 ///
-/// fn main() {
-///     let result = lean_block_in_place(|| 2 + 2);
-///     assert_eq!(result, 4);
-/// }
+/// let result = lean_block_in_place(|| 2 + 2);
+/// assert_eq!(result, 4);
 /// ```
 pub fn lean_block_in_place<F, R>(f: F) -> R
 where

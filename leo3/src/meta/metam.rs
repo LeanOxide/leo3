@@ -345,6 +345,7 @@ impl<'l> MetaMContext<'l> {
     /// be unbound for storage across lifetime boundaries.
     ///
     /// Returns `(env, core_ctx, core_state, meta_ctx, meta_state)`.
+    #[allow(clippy::type_complexity)]
     pub fn into_parts(
         self,
     ) -> (
