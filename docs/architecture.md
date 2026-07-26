@@ -52,20 +52,24 @@ the generated behavior easier to audit in tests.
 
 ## Module Model
 
-Leo3's current module story has two parts:
+Leo3's current module story has three parts:
 
 - initialization: `#[leanmodule]` generates `initialize_*`
 - export discovery: inline `#[leanfn]` items become the module's implicit export
   set, exposed through `__leo3_module_metadata()` with the same per-binding
-  schema used by standalone `#[leanfn]` accessors
+  schema used by standalone `#[leanfn]` accessors; `exports = [...]` restricts
+  the set to an explicit allow-list
+- nested submodules: inner `mod` blocks containing `#[leanfn]` items are
+  discovered recursively and exposed through
+  `__leo3_module_metadata().submodules` with dot-separated paths
 - host loading: `LeanModule::load(...)` attaches the caller thread, temporarily
   opens Lean's importing window, calls the generated init symbol, and then
   resolves exported `#[leanfn]` C ABI wrappers through arity-checked
   `LeanFunction::callN(...)` helpers
 
-That is more explicit than the earlier "just generate init" phase and now has a
-runtime-tested shared-library success path. Richer registration metadata beyond
-today's implicit inline export set remains future expansion.
+The binding metadata schema is at version 2 (v1 → v2 added `submodules` to
+`LeanModuleMetadata` and the new `LeanSubmoduleMetadata` type). Dotted module
+names (e.g. `Foo.Bar.baz`) are supported for nested Lean module paths.
 
 ## Experimental Areas
 

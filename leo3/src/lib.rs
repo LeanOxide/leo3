@@ -368,7 +368,7 @@ pub struct LeanParameterMetadata {
 
 /// Structured metadata schema version for generated bindings.
 #[doc(hidden)]
-pub const LEO3_BINDING_SCHEMA_VERSION: u32 = 1;
+pub const LEO3_BINDING_SCHEMA_VERSION: u32 = 2;
 
 /// Metadata about a Lean function (used by macros)
 #[doc(hidden)]
@@ -405,6 +405,20 @@ pub struct LeanModuleMetadata {
     /// Module name exposed to Lean.
     pub name: &'static str,
     /// Functions implicitly exported from the module.
+    pub exports: &'static [LeanFunctionMetadata],
+    /// Nested submodule registrations discovered from inner modules.
+    pub submodules: &'static [LeanSubmoduleMetadata],
+}
+
+/// Metadata about a nested submodule discovered inside a `#[leanmodule]`.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeanSubmoduleMetadata {
+    /// Metadata schema version.
+    pub schema_version: u32,
+    /// Dot-separated nested module path (e.g. `Foo.Bar`).
+    pub path: &'static str,
+    /// Functions exported from this submodule.
     pub exports: &'static [LeanFunctionMetadata],
 }
 

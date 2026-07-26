@@ -206,3 +206,123 @@ fn test_module_metadata_tracks_leanfn_exports() {
         leo3::LeanBindingReceiver::None
     );
 }
+
+#[leanmodule(name = "SubmoduleHost")]
+#[allow(unused_imports)]
+mod submodule_host {
+    use leo3::prelude::leanfn;
+
+    #[leanfn(name = "host_top")]
+    #[allow(dead_code)]
+    pub fn top_fn(x: u64) -> u64 {
+        x + 1
+    }
+
+    pub mod inner {
+        use leo3::prelude::leanfn;
+
+        #[leanfn(name = "inner_fn")]
+        #[allow(dead_code)]
+        pub fn inner_export(a: u64) -> u64 {
+            a * 2
+        }
+    }
+
+    pub mod deep {
+        pub mod nested {
+            use leo3::prelude::leanfn;
+
+            #[leanfn(name = "deep_fn")]
+            #[allow(dead_code)]
+            pub fn deep_export(a: u64) -> u64 {
+                a * 3
+            }
+        }
+    }
+}
+
+#[test]
+fn test_submodule_discovery() {
+    let metadata = submodule_host::__leo3_module_metadata();
+    assert_eq!(metadata.name, "SubmoduleHost");
+    assert_eq!(metadata.exports.len(), 1);
+    assert_eq!(metadata.exports[0].name, "host_top");
+
+    assert_eq!(metadata.submodules.len(), 2);
+
+    let inner = metadata
+        .submodules
+        .iter()
+        .find(|s| s.path == "inner")
+        .expect("inner submodule");
+    assert_eq!(inner.exports.len(), 1);
+    assert_eq!(inner.exports[0].name, "inner_fn");
+    assert_eq!(inner.exports[0].rust_name, "inner_export");
+
+    let deep = metadata
+        .submodules
+        .iter()
+        .find(|s| s.path == "deep.nested")
+        .expect("deep.nested submodule");
+    assert_eq!(deep.exports.len(), 1);
+    assert_eq!(deep.exports[0].name, "deep_fn");
+    assert_eq!(deep.exports[0].rust_name, "deep_export");
+}
+
+#[leanmodule(name = "ExplicitExports", exports = ["sel_add"])]
+#[allow(unused_imports)]
+mod explicit_exports_module {
+    use leo3::prelude::leanfn;
+
+    #[leanfn(name = "sel_add")]
+    #[allow(dead_code)]
+    pub fn selected_add(a: u64, b: u64) -> u64 {
+        a + b
+    }
+
+    #[leanfn(name = "sel_mul")]
+    #[allow(dead_code)]
+    pub fn unselected_mul(a: u64, b: u64) -> u64 {
+        a * b
+    }
+}
+
+#[test]
+fn test_explicit_exports_filter() {
+    let metadata = explicit_exports_module::__leo3_module_metadata();
+    assert_eq!(metadata.name, "ExplicitExports");
+    assert_eq!(metadata.exports.len(), 1);
+    assert_eq!(metadata.exports[0].name, "sel_add");
+    assert_eq!(metadata.exports[0].rust_name, "selected_add");
+
+    assert_eq!(explicit_exports_module::selected_add(2, 3), 5);
+    assert_eq!(explicit_exports_module::unselected_mul(2, 3), 6);
+}
+
+#[leanmodule(name = "Foo.Bar.baz")]
+#[allow(unused_imports)]
+mod dotted_module {
+    use leo3::prelude::leanfn;
+
+    #[leanfn(name = "dotted_fn")]
+    #[allow(dead_code)]
+    pub fn dotted_export(x: u64) -> u64 {
+        x
+    }
+}
+
+#[test]
+fn test_dotted_module_name() {
+    let metadata = dotted_module::__leo3_module_metadata();
+    assert_eq!(metadata.name, "Foo.Bar.baz");
+    assert_eq!(metadata.exports.len(), 1);
+    assert_eq!(metadata.exports[0].name, "dotted_fn");
+}
+
+#[test]
+fn test_schema_version_is_v2() {
+    assert_eq!(leo3::LEO3_BINDING_SCHEMA_VERSION, 2);
+
+    let metadata = function_module::__leo3_module_metadata();
+    assert_eq!(metadata.schema_version, 2);
+}

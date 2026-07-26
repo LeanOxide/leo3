@@ -83,14 +83,25 @@ yet a promise that every future wrapper shape has already been designed.
 - `#[leanmodule]`
 - `#[leanmodule(MyModule)]`
 - `#[leanmodule(name = "MyModule")]`
+- `#[leanmodule(name = "Foo.Bar.baz")]` (dotted nested module path)
 - `#[leanmodule(crate = my::leo3)]`
 - `#[leanmodule(name = "MyModule", crate = my::leo3)]`
+- `#[leanmodule(exports = ["fn_a", "fn_b"])]` (explicit export set)
 
 Current module contract:
 
 - generated module init code can target a re-exported `leo3` path
 - inline `#[leanfn]` items inside the annotated module are treated as the
   module's implicit export set
+- `exports = [...]` restricts the implicit export set to the listed names
+  (matched by Lean-visible name or Rust name); unlisted `#[leanfn]` items
+  remain callable from Rust but are excluded from module metadata
+- inner `mod` blocks containing `#[leanfn]` items are discovered as nested
+  submodule registrations and exposed through
+  `__leo3_module_metadata().submodules` with dot-separated paths (e.g.
+  `inner` or `inner.deep`)
+- dotted module names (e.g. `Foo.Bar.baz`) are supported; the generated init
+  function replaces dots with underscores (`initialize_Foo_Bar_baz`)
 - the macro generates `__leo3_module_metadata()` so downstream Rust code can
   inspect the chosen Lean-visible export names and structured binding metadata
 

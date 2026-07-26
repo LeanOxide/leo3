@@ -4,7 +4,10 @@
 //! This crate provides the proc macro attributes for Leo3. The actual implementation
 //! is in `leo3-macros-backend`.
 
-use leo3_binding_ir::{collect_module_exports, quote_runtime_module_metadata, ModuleBinding};
+use leo3_binding_ir::{
+    collect_module_exports, collect_submodule_exports, filter_exports,
+    quote_runtime_module_metadata, ModuleBinding,
+};
 use leo3_macros_backend::{build_lean_function, LeanFunctionOptions};
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -233,7 +236,9 @@ pub fn leanclass(attr: TokenStream, input: TokenStream) -> TokenStream {
 /// - `#[leanmodule]` uses the Rust module identifier
 /// - `#[leanmodule(MyName)]` uses a bare identifier as the Lean module name
 /// - `#[leanmodule(name = "MyName")]` uses an explicit string name
+/// - `#[leanmodule(name = "Foo.Bar")]` uses a dotted nested module path
 /// - `#[leanmodule(crate = my::leo3)]` changes the crate path used in generated code
+/// - `#[leanmodule(exports = ["fn_a", "fn_b"])]` restricts the implicit export set
 #[proc_macro_attribute]
 pub fn leanmodule(attr: TokenStream, input: TokenStream) -> TokenStream {
     let mut item_mod = parse_macro_input!(input as syn::ItemMod);
@@ -246,21 +251,39 @@ pub fn leanmodule(attr: TokenStream, input: TokenStream) -> TokenStream {
         .unwrap_or_else(|| quote! { ::leo3 });
 
     let init_fn_name = syn::Ident::new(
-        &format!("initialize_{}", module_name),
+        &format!("initialize_{}", module_name.replace('.', "_")),
         proc_macro2::Span::call_site(),
     );
 
     let module_binding = match item_mod.content.as_ref() {
-        Some((_, items)) => match collect_module_exports(items) {
-            Ok(exports) => ModuleBinding {
+        Some((_, items)) => {
+            let mut exports = match collect_module_exports(items) {
+                Ok(exports) => exports,
+                Err(error) => return error.into_compile_error().into(),
+            };
+
+            if let Some(ref allowed) = options.exports {
+                exports = match filter_exports(exports, allowed) {
+                    Ok(filtered) => filtered,
+                    Err(error) => return error.into_compile_error().into(),
+                };
+            }
+
+            let submodules = match collect_submodule_exports(items, "") {
+                Ok(submodules) => submodules,
+                Err(error) => return error.into_compile_error().into(),
+            };
+
+            ModuleBinding {
                 name: module_name.clone(),
                 exports,
-            },
-            Err(error) => return error.into_compile_error().into(),
-        },
+                submodules,
+            }
+        }
         None => ModuleBinding {
             name: module_name.clone(),
             exports: Vec::new(),
+            submodules: Vec::new(),
         },
     };
 
@@ -361,6 +384,7 @@ impl UnwrapOrCompileError for syn::Result<TokenStream2> {
 struct LeanModuleOptions {
     name: Option<String>,
     krate: Option<syn::Path>,
+    exports: Option<Vec<String>>,
 }
 
 impl Parse for LeanModuleOptions {
@@ -412,10 +436,33 @@ impl Parse for LeanModuleOptions {
                     };
                     options.krate = Some(path.path);
                 }
+                syn::Meta::NameValue(nv) if nv.path.is_ident("exports") => {
+                    let syn::Expr::Array(array) = nv.value else {
+                        return Err(syn::Error::new_spanned(
+                            nv,
+                            "`exports` must be an array of string literals, e.g. exports = [\"foo\", \"bar\"]",
+                        ));
+                    };
+                    let mut names = Vec::new();
+                    for elem in &array.elems {
+                        let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) = elem
+                        else {
+                            return Err(syn::Error::new_spanned(
+                                elem,
+                                "each `exports` entry must be a string literal",
+                            ));
+                        };
+                        names.push(s.value());
+                    }
+                    options.exports = Some(names);
+                }
                 other => {
                     return Err(syn::Error::new_spanned(
                         other,
-                        "expected #[leanmodule], #[leanmodule(Name)], #[leanmodule(name = \"...\")], or #[leanmodule(crate = path)]",
+                        "expected #[leanmodule], #[leanmodule(Name)], #[leanmodule(name = \"...\")], #[leanmodule(crate = path)], or #[leanmodule(exports = [...])]",
                     ))
                 }
             }
@@ -435,6 +482,7 @@ mod tests {
         let options: LeanModuleOptions = syn::parse_quote! {};
         assert!(options.name.is_none());
         assert!(options.krate.is_none());
+        assert!(options.exports.is_none());
     }
 
     #[test]
@@ -442,6 +490,7 @@ mod tests {
         let options: LeanModuleOptions = syn::parse_quote! { MyModule };
         assert_eq!(options.name.as_deref(), Some("MyModule"));
         assert!(options.krate.is_none());
+        assert!(options.exports.is_none());
     }
 
     #[test]
@@ -457,5 +506,22 @@ mod tests {
                 .to_string(),
             "my :: leo3"
         );
+    }
+
+    #[test]
+    fn parse_exports_option() {
+        let options: LeanModuleOptions =
+            syn::parse_quote! { name = "MyModule", exports = ["foo", "bar"] };
+        assert_eq!(options.name.as_deref(), Some("MyModule"));
+        assert_eq!(
+            options.exports.as_deref(),
+            Some(&["foo".to_string(), "bar".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn parse_dotted_module_name() {
+        let options: LeanModuleOptions = syn::parse_quote! { name = "Foo.Bar.baz" };
+        assert_eq!(options.name.as_deref(), Some("Foo.Bar.baz"));
     }
 }

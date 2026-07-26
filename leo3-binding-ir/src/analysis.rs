@@ -73,6 +73,63 @@ pub fn collect_module_exports(items: &[syn::Item]) -> syn::Result<Vec<FunctionBi
     Ok(exports)
 }
 
+pub fn collect_submodule_exports(
+    items: &[syn::Item],
+    prefix: &str,
+) -> syn::Result<Vec<SubmoduleBinding>> {
+    let mut submodules = Vec::new();
+
+    for item in items {
+        let syn::Item::Mod(module) = item else {
+            continue;
+        };
+
+        let Some((_, sub_items)) = &module.content else {
+            continue;
+        };
+
+        let path = if prefix.is_empty() {
+            module.ident.to_string()
+        } else {
+            format!("{}.{}", prefix, module.ident)
+        };
+
+        let exports = collect_module_exports(sub_items)?;
+        if !exports.is_empty() {
+            submodules.push(SubmoduleBinding {
+                path: path.clone(),
+                exports,
+            });
+        }
+
+        submodules.extend(collect_submodule_exports(sub_items, &path)?);
+    }
+
+    Ok(submodules)
+}
+
+pub fn filter_exports(
+    exports: Vec<FunctionBinding>,
+    allowed: &[String],
+) -> syn::Result<Vec<FunctionBinding>> {
+    let mut result = Vec::new();
+
+    for name in allowed {
+        let found = exports
+            .iter()
+            .find(|e| e.lean_name == *name || e.rust_name == *name)
+            .ok_or_else(|| {
+                syn::Error::new(
+                    proc_macro2::Span::call_site(),
+                    format!("export `{}` not found in module", name),
+                )
+            })?;
+        result.push(found.clone());
+    }
+
+    Ok(result)
+}
+
 pub fn analyze_lean_function(
     func: &syn::ItemFn,
     options: FunctionOptions,

@@ -71,11 +71,35 @@ pub fn quote_runtime_module_metadata(
         .exports
         .iter()
         .map(|export| quote_runtime_function_metadata(export, leo3_crate));
+    let submodules = binding
+        .submodules
+        .iter()
+        .map(|sub| quote_runtime_submodule_metadata(sub, leo3_crate));
 
     quote! {
         #leo3_crate::LeanModuleMetadata {
             schema_version: #leo3_crate::LEO3_BINDING_SCHEMA_VERSION,
             name: #name,
+            exports: &[#(#exports),*],
+            submodules: &[#(#submodules),*],
+        }
+    }
+}
+
+pub fn quote_runtime_submodule_metadata(
+    binding: &SubmoduleBinding,
+    leo3_crate: &TokenStream,
+) -> TokenStream {
+    let path = &binding.path;
+    let exports = binding
+        .exports
+        .iter()
+        .map(|export| quote_runtime_function_metadata(export, leo3_crate));
+
+    quote! {
+        #leo3_crate::LeanSubmoduleMetadata {
+            schema_version: #leo3_crate::LEO3_BINDING_SCHEMA_VERSION,
+            path: #path,
             exports: &[#(#exports),*],
         }
     }

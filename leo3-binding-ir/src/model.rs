@@ -1,4 +1,4 @@
-pub const BINDING_SCHEMA_VERSION: u32 = 1;
+pub const BINDING_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PassingStyle {
@@ -77,9 +77,16 @@ pub struct ClassImplBinding {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubmoduleBinding {
+    pub path: String,
+    pub exports: Vec<FunctionBinding>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModuleBinding {
     pub name: String,
     pub exports: Vec<FunctionBinding>,
+    pub submodules: Vec<SubmoduleBinding>,
 }
 
 #[derive(Default)]
