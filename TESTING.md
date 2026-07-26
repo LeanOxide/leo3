@@ -38,9 +38,7 @@ RUSTC_WRAPPER= LEO3_NO_LEAN=1 cargo test --locked -p leo3 --doc --no-default-fea
 RUSTC_WRAPPER= LEO3_NO_LEAN=1 cargo test --locked -p leo3 --doc --features "macros,task,tokio"
 RUSTC_WRAPPER= LEO3_NO_LEAN=1 cargo test --locked -p leo3-macros --doc
 LEO3_NO_LEAN=1 cargo test --locked -p leo3 --no-default-features --test test_features
-LEO3_NO_LEAN=1 cargo test --locked -p leo3 --no-default-features --test test_surface_contract
-LEO3_NO_LEAN=1 cargo test --locked -p leo3 --no-default-features --features experimental-containers --test test_features
-LEO3_NO_LEAN=1 cargo test --locked -p leo3 --no-default-features --features "experimental-containers,macros,meta,io,module-loading,tokio" --test test_features
+LEO3_NO_LEAN=1 cargo test --locked -p leo3 --no-default-features --features "macros,meta,io,module-loading,tokio" --test test_features
 LEO3_NO_LEAN=1 cargo test --locked -p leo3 --features macros --test test_compile_error
 LEO3_NO_LEAN=1 cargo test --locked -p leo3 --features macros --test test_binding_metadata
 LEO3_NO_LEAN=1 RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo +nightly doc --locked --workspace --no-deps --all-features
@@ -57,10 +55,10 @@ cargo test --locked -p leo3 --features runtime-tests \
   --test test_conversion \
   --test test_gc
 
-cargo test --locked -p leo3 --features "experimental-containers,runtime-tests" \
+cargo test --locked -p leo3 --features runtime-tests \
   --test rbmap_ops
 
-cargo test --locked -p leo3 --features "experimental-containers,runtime-tests" \
+cargo test --locked -p leo3 --features runtime-tests \
   --test hash_containers_ops
 
 cargo test --locked -p leo3 --features "tokio,runtime-tests" \
@@ -145,7 +143,6 @@ Use `LEO3_NO_LEAN=1` whenever you want a compile-only path that should not depen
 ## Test Coverage Map
 
 - `leo3/tests/test_features.rs`: feature-surface smoke tests.
-- `leo3/tests/test_surface_contract.rs` + `leo3/tests/surface_ui/`: compile-fail guardrails for intentionally hidden default-surface items.
 - `leo3/tests/test_compile_error.rs` + `leo3/tests/ui/`: explicit `trybuild` UI coverage for the compile-fail matrix above.
 - `leo3/tests/test_leanfn_macro.rs`: runtime FFI coverage for `#[leanfn]`,
   including borrowed string/vector/slice aliases and their supported
@@ -153,8 +150,8 @@ Use `LEO3_NO_LEAN=1` whenever you want a compile-only path that should not depen
 - `leo3` doctests: runtime initialization, README quick start, string/nat conversion, and task/tokio docs.
 - `leo3-macros` doctests: compile-check macro usage snippets such as `#[leanfn]`, `#[leanclass]`, and derives.
 - `leo3/tests/basic.rs`, `nat_ops.rs`, `string_ops.rs`, `array_ops.rs`, `test_conversion.rs`, `test_gc.rs`: core runtime path.
-- `leo3/tests/hash_containers_ops.rs`, `leo3/tests/hashset_nat_ops.rs`, `leo3/tests/hashset_string_ops.rs`: real Lean `HashMap` / `HashSet` runtime path under `experimental-containers`, including string-key and duplicate-insert coverage.
-- `leo3/tests/rbmap_ops.rs`, `leo3/tests/rbmap_string_ops.rs`: real Lean `RBMap` runtime path under `experimental-containers`, including string-key replacement coverage.
+- `leo3/tests/hash_containers_ops.rs`, `leo3/tests/hashset_nat_ops.rs`, `leo3/tests/hashset_string_ops.rs`: real Lean `HashMap` / `HashSet` runtime path, including string-key and duplicate-insert coverage.
+- `leo3/tests/rbmap_ops.rs`, `leo3/tests/rbmap_string_ops.rs`: real Lean `RBMap` runtime path, including string-key replacement coverage.
 - `leo3/tests/container_key_matrix_ops.rs`: runtime coverage for the non-string
   supported key matrix beyond `Nat`, currently `Int`, across `HashMap`,
   `HashSet`, and `RBMap`.

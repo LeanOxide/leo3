@@ -1,11 +1,11 @@
-//! Example: Experimental Container Wrappers.
+//! Example: Container Wrappers.
 //!
 //! Demonstrates LeanHashMap, LeanHashSet, and LeanRBMap with
 //! insert, find, contains, erase, and iteration.
 //!
 //! Run with:
 //! ```bash
-//! cargo run --example containers --features experimental-containers
+//! cargo run --example containers
 //! ```
 
 #[cfg(not(lean_4_22))]

@@ -24,20 +24,14 @@ current public/runtime/macro contract in one place, while
 Leo3's default public surface does not expose APIs whose behavior is knowingly
 placeholder or semantically misleading.
 
-The following APIs are gated behind `experimental-containers`:
+Container wrappers (`LeanHashMap`, `LeanHashSet`, `LeanRBMap`) are now part of
+the stable default surface on Lean >= 4.22. They use real Lean runtime
+representations for an explicit, narrow key matrix. The `lean_4_22` cfg gate
+remains to reflect the ABI requirement.
 
-- `leo3::types::containers`
-- `leo3::types::LeanHashMap`
-- `leo3::types::LeanHashSet`
-- `leo3::types::LeanRBMap`
-- prelude re-exports for those types
-
-That gating is reflected in Cargo features, README, rustdoc, and surface
-contract tests such as:
+Surface contract tests:
 
 - `leo3/tests/test_features.rs`
-- `leo3/tests/test_surface_contract.rs`
-- `leo3/tests/surface_ui/default_no_containers.rs`
 
 ### Runtime and threading
 
@@ -219,9 +213,9 @@ The compile-fail matrix for those unsupported shapes lives in:
 - `leo3/tests/ui/`
 - `TESTING.md`
 
-## Experimental Surface
+## Container Surface
 
-The main intentionally narrow area is `experimental-containers`.
+Container wrappers are now stable on the default feature set.
 
 Current state:
 
@@ -232,12 +226,10 @@ Current state:
   and `LeanInt64`
 - fixed-width signed integers (`LeanInt8`–`LeanInt64`) use Lean's unboxed
   scalar ABI representation, aligned with Lean's container typeclass instances
-- the whole surface remains feature-gated while that narrow implementation is
-  validated and potentially widened
-- runtime tests now cover duplicate inserts, replacement semantics, string-key
+- the surface requires Lean >= 4.22 (the `lean_4_22` cfg)
+- runtime tests cover duplicate inserts, replacement semantics, string-key
   support, fixed-width signed integer key support, and cross-family parity for
   the supported families
 
-That means the contract today is "real but experimental", not "placeholder but
-stable". The stabilization question remains open and is tracked in
-`docs/remaining-work-checklist.md`.
+The contract is "real and stable for a narrow matrix". Widening the key matrix
+is future expansion, tracked in `docs/remaining-work-checklist.md`.

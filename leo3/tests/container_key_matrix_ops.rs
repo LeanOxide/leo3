@@ -1,10 +1,6 @@
-//! Runtime coverage for the experimental container key matrix.
+//! Runtime coverage for the container key matrix.
 
-#![cfg(all(
-    feature = "experimental-containers",
-    feature = "runtime-tests",
-    lean_4_22
-))]
+#![cfg(all(feature = "runtime-tests", lean_4_22))]
 
 use leo3::prelude::*;
 

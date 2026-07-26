@@ -1,10 +1,6 @@
-//! Cross-family runtime parity checks for experimental containers.
+//! Cross-family runtime parity checks for containers.
 
-#![cfg(all(
-    feature = "experimental-containers",
-    feature = "runtime-tests",
-    lean_4_22
-))]
+#![cfg(all(feature = "runtime-tests", lean_4_22))]
 
 use leo3::prelude::*;
 

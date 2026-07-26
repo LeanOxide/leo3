@@ -71,10 +71,10 @@ The binding metadata schema is at version 2 (v1 → v2 added `submodules` to
 `LeanModuleMetadata` and the new `LeanSubmoduleMetadata` type). Dotted module
 names (e.g. `Foo.Bar.baz`) are supported for nested Lean module paths.
 
-## Experimental Areas
+## Stabilized Container Surface
 
-The main intentionally narrow area is `experimental-containers`.
-
-Those wrappers exist to reserve API shape and feature gating, not to claim that
-Leo3 already has a stable container-semantic story. Any change in their actual
-runtime behavior should be treated as stabilization work, not routine cleanup.
+Container wrappers (`LeanHashMap`, `LeanHashSet`, `LeanRBMap`) are now part of
+the stable default surface on Lean >= 4.22. They use real Lean runtime
+representations for an explicit, narrow key matrix (`LeanNat`, `LeanInt`,
+`LeanString`, `LeanInt8`–`LeanInt64`). Changes to their runtime behavior should
+be treated as stabilization work, not routine cleanup.

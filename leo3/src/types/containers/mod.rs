@@ -3,9 +3,10 @@
 //! This module provides Rust wrappers for Lean4's standard library container types,
 //! including HashMap, RBMap (Red-Black Map), and HashSet.
 //!
-//! These wrappers are currently experimental and only available behind the
-//! `experimental-containers` Cargo feature because their semantics are not yet
-//! complete.
+//! These wrappers use Lean's real runtime representation for an explicit, narrow
+//! key matrix (`LeanNat`, `LeanInt`, `LeanString`, and `LeanInt8`–`LeanInt64`).
+//! The surface is available on the default feature set and requires Lean >= 4.22
+//! (the `lean_4_22` cfg).
 
 pub mod hashmap;
 pub mod hashset;

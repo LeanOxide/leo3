@@ -66,10 +66,6 @@
 //! token, smart pointers, type wrappers/conversions, closures, thunks, and
 //! synchronization helpers. Optional subsystems are enabled explicitly:
 //!
-//! - **`experimental-containers`**: experimental wrappers for `HashMap`,
-//!   `HashSet`, and `RBMap`; all three now use real Lean runtime semantics for
-//!   a narrow key matrix, but remain feature-gated while that support matrix is
-//!   intentionally conservative
 //! - **`macros`**: Procedural macros (`#[leanfn]`, `#[leanclass]`, `#[leanmodule]`)
 //! - **`meta`**: `leo3::meta` metaprogramming APIs
 //! - **`io`**: `leo3::io` helpers for Lean IO / filesystem / process utilities
@@ -163,7 +159,6 @@ pub mod prelude {
         LeanInt16, LeanInt32, LeanInt64, LeanInt8, LeanList, LeanNat, LeanOption, LeanProd,
         LeanString, LeanUInt16, LeanUInt32, LeanUInt64, LeanUInt8, LeanUSize,
     };
-    #[cfg(feature = "experimental-containers")]
     #[cfg(lean_4_22)]
     pub use crate::types::{LeanHashMap, LeanHashSet, LeanRBMap};
 

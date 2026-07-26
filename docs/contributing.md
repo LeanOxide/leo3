@@ -37,11 +37,11 @@ TRYBUILD=overwrite LEO3_NO_LEAN=1 cargo test --locked -p leo3 --features macros 
 
 Review the `leo3/tests/ui/*.stderr` diffs before committing them.
 
-## Experimental Areas
+## Higher-Bar Areas
 
 Treat these as higher-bar changes:
 
-- `experimental-containers`
+- container wrappers (`LeanHashMap`, `LeanHashSet`, `LeanRBMap`)
 - macro-generated type/ABI surfaces
 - runtime initialization and thread-attachment code
 
