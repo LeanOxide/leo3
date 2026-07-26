@@ -1,0 +1,222 @@
+# Getting Started with Leo3
+
+This tutorial walks you through installing Leo3, writing your first exported
+function and class, and running the project's test suite.
+
+## Prerequisites
+
+- **Rust** ≥ 1.88 (install via [rustup](https://rustup.rs))
+- **Lean 4.25.2** (install via [elan](https://github.com/leanprover/elan))
+
+```bash
+# Install elan + Lean (if you don't have them yet)
+curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh
+elan toolchain install leanprover/lean4:v4.25.2
+
+# Verify
+lean --version   # Lean (version 4.25.2, ...)
+rustc --version  # rustc 1.88.x
+```
+
+## Installation
+
+Add `leo3` to your `Cargo.toml`:
+
+```toml
+[dependencies]
+leo3 = "0.2.2"
+```
+
+To use the procedural macros (`#[leanfn]`, `#[leanclass]`, etc.), enable the
+`macros` feature:
+
+```toml
+[dependencies]
+leo3 = { version = "0.2.2", features = ["macros"] }
+```
+
+## Hello, Lean!
+
+Every Leo3 program initializes the Lean runtime and enters a `with_lean` scope
+that gives you a `Lean<'l>` token — proof that the runtime is ready.
+
+```rust,no_run
+use leo3::prelude::*;
+
+fn main() -> LeanResult<()> {
+    leo3::prepare_freethreaded_lean();
+
+    leo3::with_lean(|lean| {
+        let s = LeanString::mk(lean, "Hello from Rust!")?;
+        println!("{}", LeanString::cstr(&s)?);
+
+        let n = LeanNat::from_usize(lean, 42)?;
+        println!("{}", LeanNat::to_usize(&n)?);
+        Ok(())
+    })
+}
+```
+
+Key points:
+
+- `prepare_freethreaded_lean()` pays the one-time initialization cost eagerly.
+- `with_lean(|lean| { ... })` attaches the current thread and hands you the
+  `Lean<'l>` token. All Lean object operations require this token.
+
+## Your First `#[leanfn]`
+
+`#[leanfn]` exports a Rust function so it can be called from Lean through the
+FFI boundary. Enable the `macros` feature, then annotate any function:
+
+```rust,no_run
+use leo3::prelude::*;
+
+#[leo3::leanfn]
+fn add(a: u64, b: u64) -> u64 {
+    a + b
+}
+
+fn main() -> LeanResult<()> {
+    leo3::prepare_freethreaded_lean();
+
+    leo3::with_lean(|lean| {
+        let a = LeanUInt64::mk(lean, 20)?;
+        let b = LeanUInt64::mk(lean, 22)?;
+
+        let result_ptr = unsafe { add(a.into_ptr(), b.into_ptr()) };
+        let result = LeanBound::<LeanUInt64>::from_owned_ptr(lean, result_ptr);
+        println!("20 + 22 = {}", LeanUInt64::to_u64(&result));
+        Ok(())
+    })
+}
+```
+
+The macro generates:
+
+- An `extern "C"` wrapper with the Lean calling convention.
+- A metadata accessor (`__leo3_metadata_add()`) describing the binding schema.
+
+### Supported parameter types
+
+Beyond the base conversion matrix (`u8`–`u64`, `i8`–`i64`, `f32`, `f64`,
+`bool`, `char`, `String`, `Vec<T>`, `Option<T>`, `Result<T, E>`, pairs),
+`#[leanfn]` also accepts borrowed forms: `&str`, `&String`, `&[T]`, `&[T; N]`,
+`&Vec<T>`, `&[u8]`, `&Vec<u8>`.
+
+## Your First `#[leanclass]`
+
+`#[leanclass]` exposes a Rust struct as a Lean external class with
+auto-generated FFI wrappers and Lean declaration strings.
+
+```rust,no_run
+use leo3::prelude::*;
+
+#[derive(Clone)]
+#[leo3::leanclass]
+struct Counter {
+    value: i64,
+}
+
+#[leo3::leanclass]
+impl Counter {
+    fn new() -> Self {
+        Counter { value: 0 }
+    }
+
+    fn get(&self) -> i64 {
+        self.value
+    }
+
+    fn increment(&mut self) {
+        self.value += 1;
+    }
+}
+
+fn main() -> LeanResult<()> {
+    leo3::prepare_freethreaded_lean();
+
+    leo3::with_lean(|lean| {
+        println!("Lean class declaration:\n{}", COUNTER_LEAN_CLASS_DECL);
+        println!("Lean method declarations:\n{}", COUNTER_LEAN_METHODS_DECL);
+        Ok(())
+    })
+}
+```
+
+### Receiver semantics
+
+| Rust receiver | Lean-visible behavior |
+|---|---|
+| *(none)* | Static constructor: `A -> ... -> R` |
+| `&self` | Shared borrow: `Self -> A -> ... -> R` |
+| `&mut self`, returns `()` | Copy-on-write mutation: `Self -> A -> ... -> Self` |
+| `&mut self`, returns `R` | Copy-on-write + value: `Self -> A -> ... -> Prod Self R` |
+
+`&mut self` and `self` methods require the struct to implement `Clone`.
+
+## Modules with `#[leanmodule]`
+
+Group exported functions into a Lean module:
+
+```rust,no_run
+use leo3::prelude::*;
+
+#[leo3::leanmodule(name = "MyMath")]
+mod my_math {
+    use leo3::prelude::*;
+
+    #[leo3::leanfn(name = "my_math_add")]
+    pub fn add(a: u64, b: u64) -> u64 {
+        a + b
+    }
+}
+
+fn main() -> LeanResult<()> {
+    leo3::prepare_freethreaded_lean();
+
+    leo3::with_lean(|_lean| {
+        println!("Rust call: add(3, 4) = {}", my_math::add(3, 4));
+        Ok(())
+    })
+}
+```
+
+## Running the Example
+
+The repository ships a full end-to-end example combining all three macros:
+
+```bash
+cargo run --example macro_pipeline --features macros
+```
+
+## Running Tests
+
+Leo3 uses a tiered test strategy. Most tests can run **without** a Lean
+installation by setting `LEO3_NO_LEAN=1`:
+
+```bash
+# Compile-only smoke tests (no Lean required)
+LEO3_NO_LEAN=1 cargo test --locked --workspace --exclude leo3 --lib
+LEO3_NO_LEAN=1 cargo test --locked -p leo3 --no-default-features --test test_features
+LEO3_NO_LEAN=1 cargo test --locked -p leo3 --features macros --test test_compile_error
+
+# Runtime tests (requires Lean 4.25.2)
+cargo test --locked -p leo3 --features runtime-tests \
+  --test basic --test nat_ops --test string_ops --test array_ops
+
+# Macro runtime tests
+cargo test --locked -p leo3 --features "macros,runtime-tests" \
+  --test test_leanfn_macro --test test_leanclass --test test_macro_pipeline
+
+# Full suite
+cargo test --locked --all-features --workspace
+```
+
+See [TESTING.md](../TESTING.md) for the complete CI tier map.
+
+## Next Steps
+
+- [Architecture overview](architecture.md) — crate layout and design decisions
+- [Contracts](contracts.md) — API stability and semantic guarantees
+- [Contributing guide](contributing.md) — development workflow
+- [PyO3 alignment notes](pyo3-alignment.md) — mapping between PyO3 and Leo3 concepts
