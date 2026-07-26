@@ -5,7 +5,10 @@ use crate::err::LeanResult;
 use crate::ffi;
 use crate::instance::LeanBound;
 use crate::marker::Lean;
-use crate::types::{LeanInt, LeanList, LeanNat, LeanOption, LeanProd, LeanString};
+use crate::types::{
+    LeanInt, LeanInt16, LeanInt32, LeanInt64, LeanInt8, LeanList, LeanNat, LeanOption, LeanProd,
+    LeanString,
+};
 use std::ffi::c_void;
 use std::marker::PhantomData;
 
@@ -27,6 +30,10 @@ unsafe extern "C" {
     static mut l_instHashableNat: *mut ffi::lean_object;
     static mut l_instHashableInt: *mut ffi::lean_object;
     static mut l_instHashableString: *mut ffi::lean_object;
+    static mut l_instHashableInt8: *mut ffi::lean_object;
+    static mut l_instHashableInt16: *mut ffi::lean_object;
+    static mut l_instHashableInt32: *mut ffi::lean_object;
+    static mut l_instHashableInt64: *mut ffi::lean_object;
 
     fn l_instDecidableEqNat___boxed(
         a: *mut ffi::lean_object,
@@ -37,6 +44,22 @@ unsafe extern "C" {
         b: *mut ffi::lean_object,
     ) -> *mut ffi::lean_object;
     fn l_instDecidableEqString___boxed(
+        a: *mut ffi::lean_object,
+        b: *mut ffi::lean_object,
+    ) -> *mut ffi::lean_object;
+    fn l_instDecidableEqInt8___boxed(
+        a: *mut ffi::lean_object,
+        b: *mut ffi::lean_object,
+    ) -> *mut ffi::lean_object;
+    fn l_instDecidableEqInt16___boxed(
+        a: *mut ffi::lean_object,
+        b: *mut ffi::lean_object,
+    ) -> *mut ffi::lean_object;
+    fn l_instDecidableEqInt32___boxed(
+        a: *mut ffi::lean_object,
+        b: *mut ffi::lean_object,
+    ) -> *mut ffi::lean_object;
+    fn l_instDecidableEqInt64___boxed(
         a: *mut ffi::lean_object,
         b: *mut ffi::lean_object,
     ) -> *mut ffi::lean_object;
@@ -92,6 +115,34 @@ impl_hash_key!(
     "l_instDecidableEqString___boxed",
     l_instHashableString,
     "l_instHashableString"
+);
+impl_hash_key!(
+    LeanInt8,
+    l_instDecidableEqInt8___boxed,
+    "l_instDecidableEqInt8___boxed",
+    l_instHashableInt8,
+    "l_instHashableInt8"
+);
+impl_hash_key!(
+    LeanInt16,
+    l_instDecidableEqInt16___boxed,
+    "l_instDecidableEqInt16___boxed",
+    l_instHashableInt16,
+    "l_instHashableInt16"
+);
+impl_hash_key!(
+    LeanInt32,
+    l_instDecidableEqInt32___boxed,
+    "l_instDecidableEqInt32___boxed",
+    l_instHashableInt32,
+    "l_instHashableInt32"
+);
+impl_hash_key!(
+    LeanInt64,
+    l_instDecidableEqInt64___boxed,
+    "l_instDecidableEqInt64___boxed",
+    l_instHashableInt64,
+    "l_instHashableInt64"
 );
 
 #[inline]

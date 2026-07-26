@@ -83,3 +83,53 @@ fn test_string_key_container_families_share_final_semantics() {
     })
     .unwrap();
 }
+
+macro_rules! int_key_parity {
+    ($lean:ident, $key_ty:ty, $mk:expr) => {{
+        let mut hash_map = leo3::types::LeanHashMap::<$key_ty, LeanString>::empty($lean)?;
+        let mut rb_map = leo3::types::LeanRBMap::<$key_ty, LeanString>::empty($lean)?;
+        let mut hash_set = leo3::types::LeanHashSet::<$key_ty>::empty($lean)?;
+
+        let keys: [i64; 4] = [10, -5, 3, -5];
+        for &k in &keys {
+            let v = format!("v{}", k);
+            hash_map = hash_map.insert($lean, ($mk)($lean, k as _)?, LeanString::mk($lean, &v)?)?;
+            rb_map = rb_map.insert($lean, ($mk)($lean, k as _)?, LeanString::mk($lean, &v)?)?;
+            hash_set = hash_set.insert($lean, ($mk)($lean, k as _)?)?;
+        }
+
+        assert_eq!(hash_map.size()?, 3);
+        assert_eq!(rb_map.size()?, 3);
+        assert_eq!(hash_set.size()?, 3);
+
+        hash_map = hash_map.erase($lean, &($mk)($lean, 10 as _)?)?;
+        rb_map = rb_map.erase($lean, &($mk)($lean, 10 as _)?)?;
+        hash_set = hash_set.erase($lean, &($mk)($lean, 10 as _)?)?;
+
+        assert_eq!(hash_map.size()?, 2);
+        assert_eq!(rb_map.size()?, 2);
+        assert_eq!(hash_set.size()?, 2);
+
+        assert!(hash_map.contains($lean, &($mk)($lean, -5 as _)?)?);
+        assert!(rb_map.contains($lean, &($mk)($lean, -5 as _)?)?);
+        assert!(hash_set.contains($lean, &($mk)($lean, -5 as _)?)?);
+        assert!(!hash_map.contains($lean, &($mk)($lean, 10 as _)?)?);
+        assert!(!rb_map.contains($lean, &($mk)($lean, 10 as _)?)?);
+        assert!(!hash_set.contains($lean, &($mk)($lean, 10 as _)?)?);
+    }};
+}
+
+#[test]
+fn test_fixed_width_signed_int_key_container_families_share_final_semantics() {
+    leo3::prepare_freethreaded_lean();
+
+    leo3::with_lean(|lean| {
+        int_key_parity!(lean, LeanInt8, LeanInt8::mk);
+        int_key_parity!(lean, LeanInt16, LeanInt16::mk);
+        int_key_parity!(lean, LeanInt32, LeanInt32::mk);
+        int_key_parity!(lean, LeanInt64, LeanInt64::mk);
+
+        Ok::<_, LeanError>(())
+    })
+    .unwrap();
+}

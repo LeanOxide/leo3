@@ -90,16 +90,23 @@ Current supported key matrix:
 - `LeanNat`
 - `LeanInt`
 - `LeanString`
+- `LeanInt8`
+- `LeanInt16`
+- `LeanInt32`
+- `LeanInt64`
 
 Runtime coverage now includes:
 
 - duplicate insert / dedup semantics
 - replacement semantics for existing keys
 - string-key support
-- cross-family parity checks for the supported string-key paths
+- fixed-width signed integer key support (`Int8`–`Int64`)
+- cross-family parity checks for the supported string-key and
+  fixed-width signed integer key paths
 
-The implementation uses exported compare closures such as `l_instOrdNat` and
-`l_String_instOrd`. This is intentionally narrow but real.
+The implementation uses exported compare closures such as `l_instOrdNat`,
+`l_String_instOrd`, `l_Int8_instOrd`, `l_Int16_instOrd`, `l_Int32_instOrd`,
+and `l_Int64_instOrd`. This is intentionally narrow but real.
 
 ### `HashMap` / `HashSet`
 
@@ -124,18 +131,22 @@ Current supported key matrix:
 - `LeanNat`
 - `LeanInt`
 - `LeanString`
+- `LeanInt8`
+- `LeanInt16`
+- `LeanInt32`
+- `LeanInt64`
 
-Fixed-width signed wrappers such as `LeanInt8` are intentionally not listed
-here: their current wrapper representation is heap-object based, while Lean's
-container typeclass instances for those types use unboxed scalar ABI. They need
-separate representation work before they can be exposed as honest container key
-families.
+Fixed-width signed wrappers (`LeanInt8`–`LeanInt64`) now use Lean's unboxed
+scalar ABI representation, aligned with Lean's container typeclass instances.
+This allows them to be used directly as container keys without additional
+representation work.
 
 Current runtime tests exercise:
 
 - duplicate insert behavior for `HashSet`
 - replacement semantics for `HashMap` / `RBMap`
 - string-key support across all three families
+- fixed-width signed integer key support across all three families
 - `HashSet<String>` duplicate-insert coverage as a normal runtime test, not an
   ignored one
 - parity checks for equivalent final states across `HashMap`, `HashSet`, and

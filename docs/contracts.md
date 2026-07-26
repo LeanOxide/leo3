@@ -216,12 +216,16 @@ Current state:
 
 - `LeanHashMap`, `LeanHashSet`, and `LeanRBMap` all use real Lean runtime
   representations and operations
-- the supported key matrix is still intentionally narrow and explicit:
-  `LeanNat`, `LeanInt`, and `LeanString`
+- the supported key matrix is intentionally narrow and explicit:
+  `LeanNat`, `LeanInt`, `LeanString`, `LeanInt8`, `LeanInt16`, `LeanInt32`,
+  and `LeanInt64`
+- fixed-width signed integers (`LeanInt8`–`LeanInt64`) use Lean's unboxed
+  scalar ABI representation, aligned with Lean's container typeclass instances
 - the whole surface remains feature-gated while that narrow implementation is
   validated and potentially widened
 - runtime tests now cover duplicate inserts, replacement semantics, string-key
-  support, and cross-family parity for the supported families
+  support, fixed-width signed integer key support, and cross-family parity for
+  the supported families
 
 That means the contract today is "real but experimental", not "placeholder but
 stable". The stabilization question remains open and is tracked in
