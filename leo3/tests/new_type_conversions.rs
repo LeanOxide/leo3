@@ -149,8 +149,7 @@ fn test_unit_conversion() {
     leo3::prepare_freethreaded_lean();
     leo3::with_lean(|lean| -> LeanResult<()> {
         let lean_val = ().into_lean(lean)?;
-        let result: () = FromLean::from_lean(&lean_val)?;
-        assert_eq!(result, ());
+        let _: () = FromLean::from_lean(&lean_val)?;
         Ok(())
     })
     .expect("test failed");

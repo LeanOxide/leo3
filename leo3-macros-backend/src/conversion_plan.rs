@@ -206,6 +206,7 @@ pub(crate) fn tuple_borrowed_alias_owned_type(ty: &Type) -> Option<TokenStream> 
     Some(quote! { (#(#item_types),*) })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_storage_plan_binding(
     name: &syn::Ident,
     arg_name: &syn::Ident,
@@ -521,6 +522,7 @@ fn render_option_borrowed_storage_binding(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_result_storage_binding(
     name: &syn::Ident,
     arg_name: &syn::Ident,
@@ -667,6 +669,7 @@ fn generate_result_storage_decode(
     }
 }
 
+#[allow(clippy::only_used_in_recursion)]
 fn generate_tuple_borrowed_storage_decode(
     ty: &Type,
     obj_expr: TokenStream,

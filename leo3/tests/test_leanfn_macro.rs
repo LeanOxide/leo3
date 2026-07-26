@@ -1,6 +1,7 @@
 //! Integration tests for the `#[leanfn]` macro.
 
 #![cfg(feature = "macros")]
+#![allow(clippy::ptr_arg)]
 
 use leo3::prelude::*;
 use leo3::types::LeanExcept;

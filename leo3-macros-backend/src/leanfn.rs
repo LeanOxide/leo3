@@ -167,9 +167,7 @@ fn generate_result_conversion(return_type: &syn::Type, leo3_crate: &TokenStream)
 }
 
 fn lean_source_type(ty: &syn::Type, leo3_crate: &TokenStream) -> TokenStream {
-    if is_borrowed_str(ty) {
-        quote! { #leo3_crate::types::LeanString }
-    } else if is_borrowed_string(ty) {
+    if is_borrowed_str(ty) || is_borrowed_string(ty) {
         quote! { #leo3_crate::types::LeanString }
     } else if is_borrowed_u8_slice(ty) || is_vec_u8(ty) || is_borrowed_vec_u8(ty) {
         quote! { #leo3_crate::types::LeanByteArray }

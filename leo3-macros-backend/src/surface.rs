@@ -506,10 +506,7 @@ fn render_path_type(
     }
 }
 
-fn extract_type_args<'a>(
-    segment: &'a syn::PathSegment,
-    expected: usize,
-) -> Result<Vec<&'a Type>, String> {
+fn extract_type_args(segment: &syn::PathSegment, expected: usize) -> Result<Vec<&Type>, String> {
     let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
         return Err(format!(
             "{} requires exactly {} type argument(s)",
