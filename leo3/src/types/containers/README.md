@@ -2,15 +2,12 @@
 
 ## Current Status
 
-The container wrappers are still exposed only behind the
-`experimental-containers` Cargo feature, but they are no longer all in the same
-state as earlier placeholder code:
+The container wrappers are stable on the default feature set (requires Lean >= 4.22):
 
-- `HashMap`, `HashSet`, and `RBMap` now all use Lean's real runtime
+- `HashMap`, `HashSet`, and `RBMap` all use Lean's real runtime
   representation and real container operations.
-- the supported key matrix is still intentionally narrow and explicit
-- the whole surface remains feature-gated while that narrow implementation is
-  validated and potentially widened
+- the supported key matrix is intentionally narrow and explicit
+- the `lean_4_22` cfg gate remains to reflect the ABI requirement
 
 ## FFI Bindings
 

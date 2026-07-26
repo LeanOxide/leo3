@@ -72,9 +72,9 @@ fn test_promise_feature_surface() {
     fn _promise<'l>(_: leo3::promise::LeanPromise<'l, leo3::instance::LeanAny>) {}
 }
 
-#[cfg(all(feature = "experimental-containers", lean_4_22))]
+#[cfg(lean_4_22)]
 #[test]
-fn test_experimental_containers_feature_surface() {
+fn test_containers_surface() {
     fn _hash_map<'l>(_: leo3::types::LeanHashMap<'l, LeanNat, LeanString>) {}
     fn _hash_set<'l>(_: leo3::types::LeanHashSet<'l, LeanNat>) {}
     fn _rb_map<'l>(_: leo3::types::LeanRBMap<'l, LeanNat, LeanString>) {}

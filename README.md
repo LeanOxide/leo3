@@ -47,8 +47,7 @@ closures, thunks, and synchronization helpers are always available.
 
 | Feature | Enables |
 |---------|---------|
-| _default (none)_ | Core runtime/token APIs, conversions, closures, thunks, sync helpers, Lean type wrappers |
-| `experimental-containers` | Experimental container wrappers for `HashMap`, `HashSet`, `RBMap`; all three now use real Lean runtime semantics for a narrow key matrix |
+| _default (none)_ | Core runtime/token APIs, conversions, closures, thunks, sync helpers, Lean type wrappers, container wrappers (`LeanHashMap`, `LeanHashSet`, `LeanRBMap`; requires Lean >= 4.22) |
 | `macros` | `#[leanfn]`, `#[leanclass]`, `#[leanmodule]`, `#[derive(IntoLean, FromLean)]` |
 | `meta` | `leo3::meta::*` metaprogramming APIs |
 | `io` | `leo3::io::*` IO / filesystem / process / environment helpers |
@@ -60,14 +59,11 @@ closures, thunks, and synchronization helpers are always available.
 Example dependency declarations:
 
 ```toml
-# Minimal core surface
+# Minimal core surface (includes containers on Lean >= 4.22)
 leo3 = "0.2.2"
 
 # Opt into specific subsystems
 leo3 = { version = "0.2.2", features = ["macros", "meta", "task"] }
-
-# Opt into currently experimental container wrappers
-leo3 = { version = "0.2.2", features = ["experimental-containers"] }
 ```
 
 ## Lean Discovery
@@ -107,25 +103,27 @@ Rules behind that table:
 - `FromLean` for `T: ExternalClass + Clone` is clone-based extraction, not borrowing. Borrow-first access goes through `LeanExternal<T>::borrow()`, `try_get_mut()`, and `try_take_inner()` (with `get_ref()` / `get_mut()` still available as lower-level APIs).
 - User-defined types can extend the matrix with manual impls or `#[derive(IntoLean, FromLean)]`.
 
-### Experimental Container Wrappers (`experimental-containers`)
+### Container Wrappers
 
-`LeanHashMap`, `LeanHashSet`, and `LeanRBMap` are available only behind the
-`experimental-containers` feature.
+`LeanHashMap`, `LeanHashSet`, and `LeanRBMap` are available on the default
+feature set (requires Lean >= 4.22).
 
-These APIs are still gated explicitly so the default public surface remains
-semantically honest while container support is being completed.
+These wrappers use Lean's real runtime representation for an explicit, narrow
+key matrix.
 
 Current status:
 
-- `LeanHashMap` now uses Lean's real runtime representation for a narrow key
+- `LeanHashMap` uses Lean's real runtime representation for a narrow key
   matrix by pairing exported `Hashable` closures with real `BEq` closures
   derived from boxed `DecidableEq` functions.
-- `LeanHashSet` now uses the same real runtime path for the same narrow key
+- `LeanHashSet` uses the same real runtime path for the same narrow key
   matrix.
-- `LeanRBMap` now uses Lean's real runtime representation and reduced-arity
-  container entry points for a narrow key matrix (`Nat`, `Int`, and `String`).
-- runtime tests now cover duplicate inserts, replacement semantics, string-key
-  support, and cross-family parity for the supported paths.
+- `LeanRBMap` uses Lean's real runtime representation and reduced-arity
+  container entry points for a narrow key matrix (`Nat`, `Int`, `String`,
+  and `Int8`–`Int64`).
+- runtime tests cover duplicate inserts, replacement semantics, string-key
+  support, fixed-width signed integer key support, and cross-family parity
+  for the supported paths.
 
 ### Procedural Macros (`macros`)
 
@@ -275,7 +273,7 @@ fn main() {
 | `macro_pipeline` | `macros` | `#[leanmodule]`, `#[leanfn]`, `#[leanclass]` end-to-end |
 | `task_async` | `tokio` | Tasks, promises, combinators, and tokio bridge |
 | `external_object` | _(none)_ | Wrap Rust structs as Lean external objects |
-| `containers` | `experimental-containers` | HashMap, HashSet, RBMap wrappers |
+| `containers` | _(none)_ | HashMap, HashSet, RBMap wrappers |
 | `module_loading` | `macros`, `module-loading` | Build and load a cdylib module at runtime |
 
 Run any example with:
@@ -331,8 +329,6 @@ the [PyO3 alignment notes](docs/pyo3-alignment.md), and the
 ```bash
 LEO3_NO_LEAN=1 cargo test --locked --workspace --exclude leo3 --lib
 LEO3_NO_LEAN=1 cargo test --locked -p leo3 --no-default-features --test test_features
-LEO3_NO_LEAN=1 cargo test --locked -p leo3 --no-default-features --test test_surface_contract
-LEO3_NO_LEAN=1 cargo test --locked -p leo3 --no-default-features --features experimental-containers --test test_features
 LEO3_NO_LEAN=1 cargo test --locked -p leo3 --features macros --test test_compile_error
 cargo test --locked --all-features --workspace
 ```

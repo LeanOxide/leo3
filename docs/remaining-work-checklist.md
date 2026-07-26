@@ -30,25 +30,31 @@ No active maturity gaps are tracked for the current hardening pass.
 
 ## Closed For The Current Policy
 
-### Experimental containers
+### Containers
 
 Status:
 
-- Closed for the current conservative contract.
+- Stabilized and ungated on the default feature set.
+
+Decision (2026-07-27):
+
+- The `experimental-containers` feature gate was removed. `LeanHashMap`,
+  `LeanHashSet`, and `LeanRBMap` are now part of the stable default surface.
+- The surface still requires Lean >= 4.22 (the `lean_4_22` cfg), because the
+  implementations rely on Lean's reduced-arity (`_redArg`) container ABI.
 
 What landed:
 
-- `LeanHashMap`, `LeanHashSet`, and `LeanRBMap` now all have real
-  runtime-backed implementations for a narrow key matrix.
-- the supported key matrix is explicit: `LeanNat`, `LeanInt`, and `LeanString`.
-- runtime tests cover supported paths across `HashMap`, `HashSet`, and `RBMap`.
-- The covered string-key paths now include `HashSet<String>` duplicate inserts
-  as a normal runtime test; this is no longer hidden behind `#[ignore]`.
-- Fixed-width signed wrappers are deliberately excluded from the supported
-  container key matrix until their wrapper representation matches Lean's
-  unboxed scalar ABI for those typeclass instances.
-- The surface remains correctly gated behind `experimental-containers` while
-  the matrix is intentionally narrow.
+- `LeanHashMap`, `LeanHashSet`, and `LeanRBMap` all have real runtime-backed
+  implementations for a narrow key matrix.
+- the supported key matrix is explicit: `LeanNat`, `LeanInt`, `LeanString`,
+  and `LeanInt8`–`LeanInt64`.
+- fixed-width signed wrappers (`LeanInt8`–`LeanInt64`) use Lean's unboxed
+  scalar ABI representation, aligned with Lean's container typeclass
+  instances, and are part of the supported matrix.
+- runtime tests cover supported paths across `HashMap`, `HashSet`, and `RBMap`,
+  including duplicate inserts, replacement semantics, string-key support,
+  fixed-width signed integer key support, and cross-family parity.
 
 Code evidence:
 
@@ -64,12 +70,10 @@ Code evidence:
 - `leo3/tests/container_key_matrix_ops.rs`
 - `leo3/tests/container_family_parity.rs`
 
-Definition of done:
+Definition of done (met):
 
 - The supported key matrix is documented, tested, and no longer likely to
   surprise downstream users.
-- The feature-gated surface has a clearly documented reason to remain
-  experimental.
 - Runtime tests cover the supported paths against actual Lean semantics across
   all three container families.
 
@@ -156,8 +160,8 @@ gap.
   `#[leanfn]` export set
 - a broader external-object extraction contract, if Leo3 ever decides to widen
   beyond the current clone-based `FromLean` rule
-- container stabilization for a wider type matrix after one narrow supported
-  path is real
+- widening the container key matrix beyond the current narrow set
+  (`LeanNat`, `LeanInt`, `LeanString`, `LeanInt8`–`LeanInt64`)
 
 ## Maintenance Rule
 

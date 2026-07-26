@@ -1,10 +1,6 @@
 //! Runtime coverage for the real `LeanRBMap` wrapper.
 
-#![cfg(all(
-    feature = "experimental-containers",
-    feature = "runtime-tests",
-    lean_4_22
-))]
+#![cfg(all(feature = "runtime-tests", lean_4_22))]
 
 use leo3::prelude::*;
 

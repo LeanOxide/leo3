@@ -8,9 +8,7 @@ pub mod bitvec;
 pub mod bool;
 pub mod bytearray;
 pub mod char;
-#[cfg(feature = "experimental-containers")]
 #[cfg(lean_4_22)]
-#[cfg_attr(docsrs, doc(cfg(feature = "experimental-containers")))]
 pub mod containers;
 pub mod empty;
 pub mod except;
@@ -35,9 +33,7 @@ pub use bitvec::LeanBitVec;
 pub use bool::LeanBool;
 pub use bytearray::LeanByteArray;
 pub use char::LeanChar;
-#[cfg(feature = "experimental-containers")]
 #[cfg(lean_4_22)]
-#[cfg_attr(docsrs, doc(cfg(feature = "experimental-containers")))]
 pub use containers::{LeanHashMap, LeanHashSet, LeanRBMap};
 pub use empty::LeanEmpty;
 pub use except::LeanExcept;

@@ -1,10 +1,6 @@
 //! Runtime coverage for Lean `HashSet` with `Nat` keys.
 
-#![cfg(all(
-    feature = "experimental-containers",
-    feature = "runtime-tests",
-    lean_4_22
-))]
+#![cfg(all(feature = "runtime-tests", lean_4_22))]
 
 use leo3::prelude::*;
 
