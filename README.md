@@ -303,6 +303,8 @@ leo3/
 
 ## Development
 
+New to Leo3? Start with the [getting-started tutorial](docs/getting-started.md).
+
 See `TESTING.md` for the full tiered CI map, the
 [current contract notes](docs/contracts.md), [architecture notes](docs/architecture.md),
 the [PyO3 alignment notes](docs/pyo3-alignment.md), and the
