@@ -52,11 +52,28 @@ For those areas, code changes should usually come with:
 - a note in `docs/remaining-work-checklist.md` if the change resolves or moves a
   tracked gap
 
+## CHANGELOG Maintenance
+
+Every PR that changes public behavior must update `CHANGELOG.md` in the same
+PR. Follow these rules:
+
+- Use [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) section
+  headings: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`.
+- Add entries under an `[Unreleased]` heading at the top. The release PR
+  renames `[Unreleased]` to the version being cut and adds a fresh empty
+  `[Unreleased]` section.
+- One bullet per user-visible change; reference the PR or issue number.
+- Breaking changes get their own `### Breaking Changes` subsection with a
+  short migration note.
+- Do not log chores, CI-only changes, or internal refactors that have no
+  user-visible effect.
+
 ## Documentation Update Path
 
 Use this rule of thumb:
 
 - README for user-facing feature summaries
+- `CHANGELOG.md` for version-by-version change history
 - `docs/contracts.md` for the current public/runtime/macro contract
 - `docs/architecture.md` for internal model and layering
 - `TESTING.md` for CI/local command truth
