@@ -148,16 +148,207 @@ fn test_expression_sort() {
 
 #[test]
 fn test_expression_const() {
-    // TODO: Full Name and Const testing requires more investigation
-    // Name FFI bindings are implemented and ready to use
     let result: LeanResult<()> = leo3::test_with_lean(|lean| {
-        // Test basic Name creation
-        let _name = LeanName::from_str(lean, "x")?;
+        let name = LeanName::from_str(lean, "Nat")?;
+        let levels = LeanList::nil(lean)?;
+        let expr = LeanExpr::const_(lean, name.clone(), levels)?;
+
+        assert!(LeanExpr::is_const(&expr));
+        assert!(!LeanExpr::is_app(&expr));
+        assert!(!LeanExpr::is_bvar(&expr));
+        assert!(!LeanExpr::is_sort(&expr));
+
+        let extracted_name = LeanExpr::const_name(&expr)?;
+        assert!(LeanName::eq(&extracted_name, &name));
+
+        let extracted_levels = LeanExpr::const_levels(&expr)?;
+        assert!(!extracted_levels.as_ptr().is_null());
 
         Ok(())
     });
 
     assert!(result.is_ok(), "Const test failed: {:?}", result.err());
+}
+
+#[test]
+fn test_expression_const_with_levels() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let name = LeanName::from_str(lean, "List")?;
+        let level = LeanLevel::zero(lean)?;
+        let levels = LeanList::cons(level.cast(), LeanList::nil(lean)?)?;
+        let expr = LeanExpr::const_(lean, name.clone(), levels)?;
+
+        assert!(LeanExpr::is_const(&expr));
+
+        let extracted_name = LeanExpr::const_name(&expr)?;
+        assert!(LeanName::eq(&extracted_name, &name));
+
+        let extracted_levels = LeanExpr::const_levels(&expr)?;
+        assert!(!extracted_levels.as_ptr().is_null());
+
+        Ok(())
+    });
+
+    assert!(
+        result.is_ok(),
+        "Const with levels test failed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_name_anonymous() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let anon = LeanName::anonymous(lean)?;
+        assert_eq!(LeanName::kind(&anon)?, NameKind::Anonymous);
+
+        let anon2 = LeanName::anonymous(lean)?;
+        assert!(LeanName::eq(&anon, &anon2));
+
+        Ok(())
+    });
+
+    assert!(
+        result.is_ok(),
+        "Name anonymous test failed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_name_from_str_and_kind() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let name = LeanName::from_str(lean, "Nat")?;
+        assert_eq!(LeanName::kind(&name)?, NameKind::Str);
+
+        let same = LeanName::from_str(lean, "Nat")?;
+        assert!(LeanName::eq(&name, &same));
+
+        let different = LeanName::from_str(lean, "Int")?;
+        assert!(!LeanName::eq(&name, &different));
+
+        Ok(())
+    });
+
+    assert!(
+        result.is_ok(),
+        "Name from_str test failed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_name_append_num() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let base = LeanName::from_str(lean, "x")?;
+        let num_name = LeanName::append_num(base, lean, 1)?;
+        assert_eq!(LeanName::kind(&num_name)?, NameKind::Num);
+
+        let base2 = LeanName::from_str(lean, "x")?;
+        let num_name2 = LeanName::append_num(base2, lean, 2)?;
+        assert!(!LeanName::eq(&num_name, &num_name2));
+
+        Ok(())
+    });
+
+    assert!(
+        result.is_ok(),
+        "Name append_num test failed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_name_from_components() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let dotted = LeanName::from_components(lean, "Nat.add")?;
+
+        let nat = LeanName::from_str(lean, "Nat")?;
+        let manual = LeanName::append_str(nat, lean, "add")?;
+
+        assert!(LeanName::eq(&dotted, &manual));
+        assert_eq!(LeanName::kind(&dotted)?, NameKind::Str);
+
+        Ok(())
+    });
+
+    assert!(
+        result.is_ok(),
+        "Name from_components test failed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_name_nested_hierarchy() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let deep = LeanName::from_components(lean, "Std.Data.List.head")?;
+
+        let std = LeanName::from_str(lean, "Std")?;
+        let data = LeanName::append_str(std, lean, "Data")?;
+        let list = LeanName::append_str(data, lean, "List")?;
+        let head = LeanName::append_str(list, lean, "head")?;
+
+        assert!(LeanName::eq(&deep, &head));
+
+        Ok(())
+    });
+
+    assert!(
+        result.is_ok(),
+        "Name nested hierarchy test failed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_const_name_extraction_roundtrip() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let name = LeanName::from_components(lean, "Nat.add")?;
+        let levels = LeanList::nil(lean)?;
+        let expr = LeanExpr::const_(lean, name, levels)?;
+
+        let extracted = LeanExpr::const_name(&expr)?;
+        let expected = LeanName::from_components(lean, "Nat.add")?;
+        assert!(LeanName::eq(&extracted, &expected));
+
+        Ok(())
+    });
+
+    assert!(
+        result.is_ok(),
+        "Const name roundtrip test failed: {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn test_const_in_application() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let fn_name = LeanName::from_str(lean, "f")?;
+        let levels = LeanList::nil(lean)?;
+        let f = LeanExpr::const_(lean, fn_name, levels)?;
+
+        let arg = LeanExpr::bvar(lean, 0)?;
+        let app = LeanExpr::app(&f, &arg)?;
+
+        assert!(LeanExpr::is_app(&app));
+
+        let fn_expr = LeanExpr::app_fn(&app)?;
+        assert!(LeanExpr::is_const(&fn_expr));
+
+        let fn_name_extracted = LeanExpr::const_name(&fn_expr)?;
+        let expected = LeanName::from_str(lean, "f")?;
+        assert!(LeanName::eq(&fn_name_extracted, &expected));
+
+        Ok(())
+    });
+
+    assert!(
+        result.is_ok(),
+        "Const in application test failed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
