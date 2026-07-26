@@ -266,6 +266,24 @@ fn main() {
 }
 ```
 
+## Examples
+
+| Example | Feature flags | Description |
+|---------|--------------|-------------|
+| `io_monad` | `io` | IO monad: console, file handles, sequencing |
+| `proof_construction` | `meta` | Build and validate proof terms with MetaM |
+| `macro_pipeline` | `macros` | `#[leanmodule]`, `#[leanfn]`, `#[leanclass]` end-to-end |
+| `task_async` | `tokio` | Tasks, promises, combinators, and tokio bridge |
+| `external_object` | _(none)_ | Wrap Rust structs as Lean external objects |
+| `containers` | `experimental-containers` | HashMap, HashSet, RBMap wrappers |
+| `module_loading` | `macros`, `module-loading` | Build and load a cdylib module at runtime |
+
+Run any example with:
+
+```bash
+cargo run --example <name> --features "<flags>"
+```
+
 ## Architecture
 
 ```text

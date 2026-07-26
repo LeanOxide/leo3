@@ -57,6 +57,21 @@ required-features = ["meta"]
 name = "macro_pipeline"
 required-features = ["macros"]
 
+[[example]]
+name = "task_async"
+required-features = ["tokio"]
+
+[[example]]
+name = "external_object"
+
+[[example]]
+name = "containers"
+required-features = ["experimental-containers"]
+
+[[example]]
+name = "module_loading"
+required-features = ["macros", "module-loading"]
+
 [features]
 # Keep the default public surface intentionally minimal.
 default = []
