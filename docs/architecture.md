@@ -43,6 +43,10 @@ The macros generate Rust shims, not a hidden second runtime:
 
 - `leo3-binding-ir` owns the shared binding semantics model and AST analysis
 - `#[leanfn]` builds FFI wrappers and structured function metadata from that model
+- `#[leanfn]` supports a monomorphization subset for generic functions via
+  `concrete(Ty, name = "...")` annotations; each instance generates its own
+  monomorphized wrapper, metadata, and Lean declaration (see
+  `docs/rfc-generics.md`)
 - `#[leanclass]` builds external-object shims plus declaration and method metadata from that model
 - `#[leanmodule]` builds the module init entry point and module export metadata from that model
 

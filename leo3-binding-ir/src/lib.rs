@@ -7,8 +7,9 @@ mod quoting;
 mod serialize;
 
 pub use analysis::{
-    analyze_lean_class_impl, analyze_lean_class_struct, analyze_lean_function,
-    collect_module_exports, collect_submodule_exports, filter_exports, is_leanfn_attr,
+    analyze_concrete_instance, analyze_lean_class_impl, analyze_lean_class_struct,
+    analyze_lean_function, collect_module_exports, collect_submodule_exports, filter_exports,
+    is_leanfn_attr, substitute_type, ConcreteAttr,
 };
 pub use model::{
     BindingKind, BindingSemantics, ClassImplBinding, ClassMetadata, ClassTypeBinding,

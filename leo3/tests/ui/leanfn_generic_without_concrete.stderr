@@ -1,0 +1,5 @@
+error: Generic functions are not supported yet
+ --> tests/ui/leanfn_generic_without_concrete.rs:2:7
+  |
+2 | fn add<T: std::ops::Add<Output = T>>(a: T, b: T) -> T {
+  |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,7 +1,8 @@
 //! Implementation of the `#[leanfn]` macro.
 
 use leo3_binding_ir::{
-    analyze_lean_function, quote_runtime_function_metadata, FunctionBinding, FunctionOptions,
+    analyze_concrete_instance, analyze_lean_function, quote_runtime_function_metadata,
+    substitute_type, ConcreteAttr, FunctionBinding, FunctionOptions,
 };
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
@@ -14,16 +15,107 @@ use crate::conversion_plan::{
 };
 use crate::{get_leo3_crate, CommonOptions};
 
+pub struct ConcreteInstance {
+    pub types: Vec<syn::Type>,
+    pub name: String,
+}
+
+struct ConcreteArgsParser {
+    types: Vec<syn::Type>,
+    name: Option<String>,
+}
+
+impl Parse for ConcreteArgsParser {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut types = Vec::new();
+        let mut name = None;
+
+        while !input.is_empty() {
+            if input.peek(syn::Ident) && input.peek2(syn::Token![=]) {
+                let ident: syn::Ident = input.parse()?;
+                if ident != "name" {
+                    return Err(syn::Error::new(ident.span(), "expected `name`"));
+                }
+                let _: syn::Token![=] = input.parse()?;
+                let lit: syn::LitStr = input.parse()?;
+                name = Some(lit.value());
+            } else {
+                let ty: syn::Type = input.parse()?;
+                types.push(ty);
+            }
+
+            if !input.is_empty() {
+                let _: syn::Token![,] = input.parse()?;
+            }
+        }
+
+        Ok(ConcreteArgsParser { types, name })
+    }
+}
+
+fn parse_concrete_meta(list: &syn::MetaList) -> syn::Result<ConcreteInstance> {
+    let args: ConcreteArgsParser = list.parse_args()?;
+    let name = args.name.ok_or_else(|| {
+        syn::Error::new_spanned(list, "`concrete` requires `name = \"...\"`")
+    })?;
+    if args.types.is_empty() {
+        return Err(syn::Error::new_spanned(
+            list,
+            "`concrete` requires at least one type argument",
+        ));
+    }
+    Ok(ConcreteInstance {
+        types: args.types,
+        name,
+    })
+}
+
 /// Options for the `#[leanfn]` attribute
 pub struct LeanFunctionOptions {
     pub common: CommonOptions,
+    pub concretes: Vec<ConcreteInstance>,
 }
 
 impl Parse for LeanFunctionOptions {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        Ok(Self {
-            common: input.parse()?,
-        })
+        use syn::punctuated::Punctuated;
+
+        let attrs: Punctuated<syn::Meta, syn::Token![,]> =
+            input.parse_terminated(syn::Meta::parse, syn::Token![,])?;
+
+        let mut common = CommonOptions::default();
+        let mut concretes = Vec::new();
+
+        for attr in attrs {
+            match attr {
+                syn::Meta::NameValue(nv) => {
+                    if nv.path.is_ident("name") {
+                        if let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) = nv.value
+                        {
+                            common.name = Some(s);
+                        }
+                    } else if nv.path.is_ident("crate") {
+                        if let syn::Expr::Path(path) = nv.value {
+                            common.krate = Some(path.path);
+                        }
+                    }
+                }
+                syn::Meta::List(list) if list.path.is_ident("concrete") => {
+                    concretes.push(parse_concrete_meta(&list)?);
+                }
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "Expected name-value attribute like `name = \"...\"`",
+                    ))
+                }
+            }
+        }
+
+        Ok(Self { common, concretes })
     }
 }
 
@@ -37,20 +129,33 @@ struct FunctionInfo {
     vis: syn::Visibility,
 }
 
+fn generic_type_param_names(func: &syn::ItemFn) -> syn::Result<Vec<String>> {
+    func.sig
+        .generics
+        .params
+        .iter()
+        .map(|p| match p {
+            syn::GenericParam::Type(tp) => Ok(tp.ident.to_string()),
+            syn::GenericParam::Lifetime(lt) => Err(syn::Error::new_spanned(
+                lt,
+                "lifetime parameters are not supported with `concrete`",
+            )),
+            syn::GenericParam::Const(cp) => Err(syn::Error::new_spanned(
+                cp,
+                "const parameters are not supported with `concrete`",
+            )),
+        })
+        .collect()
+}
+
 /// Analyze a function signature and extract relevant information
 fn analyze_function(
     func: &syn::ItemFn,
-    options: &LeanFunctionOptions,
+    lean_name: &str,
+    type_mapping: Option<&std::collections::HashMap<String, syn::Type>>,
 ) -> syn::Result<FunctionInfo> {
     let rust_name = func.sig.ident.clone();
-    let lean_name = options
-        .common
-        .name
-        .as_ref()
-        .map(|s| s.value())
-        .unwrap_or_else(|| rust_name.to_string());
 
-    // Extract parameters
     let mut params = Vec::new();
     for input in &func.sig.inputs {
         match input {
@@ -64,7 +169,11 @@ fn analyze_function(
                         ))
                     }
                 };
-                params.push((name, (*pat_type.ty).clone()));
+                let ty = match type_mapping {
+                    Some(mapping) => substitute_type(&pat_type.ty, mapping),
+                    None => (*pat_type.ty).clone(),
+                };
+                params.push((name, ty));
             }
             syn::FnArg::Receiver(_) => {
                 return Err(syn::Error::new_spanned(
@@ -75,14 +184,15 @@ fn analyze_function(
         }
     }
 
-    // Extract return type
     let return_type = match &func.sig.output {
         syn::ReturnType::Default => syn::parse_quote! { () },
-        syn::ReturnType::Type(_, ty) => (**ty).clone(),
+        syn::ReturnType::Type(_, ty) => match type_mapping {
+            Some(mapping) => substitute_type(ty, mapping),
+            None => (**ty).clone(),
+        },
     };
 
-    // Check for generics
-    if !func.sig.generics.params.is_empty() {
+    if type_mapping.is_none() && !func.sig.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &func.sig.generics,
             "Generic functions are not supported yet",
@@ -91,7 +201,7 @@ fn analyze_function(
 
     Ok(FunctionInfo {
         rust_name,
-        lean_name,
+        lean_name: lean_name.to_string(),
         params,
         return_type,
         vis: func.vis.clone(),
@@ -385,7 +495,11 @@ fn generate_ffi_wrapper(info: &FunctionInfo, leo3_crate: &TokenStream) -> TokenS
 }
 
 /// Generate the conversion wrapper (separate for testing)
-fn generate_conversion_wrapper(info: &FunctionInfo, leo3_crate: &TokenStream) -> TokenStream {
+fn generate_conversion_wrapper(
+    info: &FunctionInfo,
+    leo3_crate: &TokenStream,
+    turbofish: Option<&TokenStream>,
+) -> TokenStream {
     let rust_name = &info.rust_name;
     let param_count = info.params.len();
 
@@ -405,16 +519,20 @@ fn generate_conversion_wrapper(info: &FunctionInfo, leo3_crate: &TokenStream) ->
         .map(|(name, _)| quote! { #name })
         .collect();
 
-    // Check if return type is unit
+    let call_expr = match turbofish {
+        Some(tf) => quote! { #rust_name::#tf(#(#call_args),*) },
+        None => quote! { #rust_name(#(#call_args),*) },
+    };
+
     let call_and_return = if matches!(info.return_type, syn::Type::Tuple(ref t) if t.elems.is_empty())
     {
         quote! {
-            #rust_name(#(#call_args),*);
+            #call_expr;
             #result_conversion
         }
     } else {
         quote! {
-            let result = #rust_name(#(#call_args),*);
+            let result = #call_expr;
             #result_conversion
         }
     };
@@ -423,13 +541,10 @@ fn generate_conversion_wrapper(info: &FunctionInfo, leo3_crate: &TokenStream) ->
         pub(crate) unsafe fn __ffi_try_wrapper(
             #(#ffi_params),*
         ) -> #leo3_crate::err::LeanResult<#leo3_crate::ffi::object::lean_obj_res> {
-            // Get Lean token (proves runtime is initialized)
             let lean = #leo3_crate::Lean::assume_initialized();
 
-            // Convert arguments from Lean to Rust
             #(#param_conversions)*
 
-            // Call the original function and convert result
             #call_and_return
         }
     }
@@ -460,30 +575,46 @@ pub fn build_lean_function(
     func: &mut syn::ItemFn,
     options: LeanFunctionOptions,
 ) -> syn::Result<TokenStream> {
+    let leo3_crate = get_leo3_crate(options.common.krate.as_ref());
+
+    if options.concretes.is_empty() {
+        build_lean_function_simple(func, &options, &leo3_crate)
+    } else {
+        build_lean_function_concrete(func, &options, &leo3_crate)
+    }
+}
+
+fn build_lean_function_simple(
+    func: &mut syn::ItemFn,
+    options: &LeanFunctionOptions,
+    leo3_crate: &TokenStream,
+) -> syn::Result<TokenStream> {
     let binding = analyze_lean_function(
         func,
         FunctionOptions {
             lean_name: options.common.name.as_ref().map(|value| value.value()),
         },
     )?;
-    let info = analyze_function(func, &options)?;
-    let leo3_crate = get_leo3_crate(options.common.krate.as_ref());
+    let lean_name = options
+        .common
+        .name
+        .as_ref()
+        .map(|s| s.value())
+        .unwrap_or_else(|| func.sig.ident.to_string());
+    let info = analyze_function(func, &lean_name, None)?;
 
     let rust_name = &info.rust_name;
     let lean_name_ident = format_ident!("{}", &info.lean_name);
     let wrapper_module = format_ident!("__leo3_leanfn_{}", rust_name);
     let metadata_name = format_ident!("__leo3_metadata_{}", rust_name);
 
-    // Generate wrapper components
-    let ffi_wrapper = generate_ffi_wrapper(&info, &leo3_crate);
-    let conversion_wrapper = generate_conversion_wrapper(&info, &leo3_crate);
-    let metadata = generate_metadata(&binding, &leo3_crate);
+    let ffi_wrapper = generate_ffi_wrapper(&info, leo3_crate);
+    let conversion_wrapper = generate_conversion_wrapper(&info, leo3_crate, None);
+    let metadata = generate_metadata(&binding, leo3_crate);
 
-    // Only re-export FFI function if the lean name is different from rust name
     let internal_ffi_name = format_ident!("__ffi_{}", &info.lean_name);
     let ffi_reexport = if *rust_name != info.lean_name {
         quote! {
-            // Re-export FFI function with its Lean name (for FFI calls)
             #[allow(non_snake_case, unused_imports)]
             pub use #wrapper_module::#internal_ffi_name as #lean_name_ident;
         }
@@ -491,36 +622,122 @@ pub fn build_lean_function(
         quote! {}
     };
 
-    // Remove ALL attributes from the function to ensure clean output
     func.attrs.clear();
 
-    // Keep the original function as-is (without any attributes)
     Ok(quote! {
-        // Original function stays at top level - unchanged
         #func
 
-        // Hidden module to hold FFI wrappers and metadata (PyO3 pattern)
         #[allow(non_snake_case, unused_imports)]
         mod #wrapper_module {
             use super::*;
 
-            // FFI entry point with panic boundary
             #ffi_wrapper
 
-            // Conversion logic (testable separately)
             #conversion_wrapper
 
-            // Metadata
             #metadata
         }
 
-        // Re-export FFI function if name is different
         #ffi_reexport
 
-        // Re-export metadata with unique name
         #[doc(hidden)]
         #[allow(non_snake_case)]
         pub use #wrapper_module::__leo3_metadata as #metadata_name;
+    })
+}
+
+fn build_lean_function_concrete(
+    func: &mut syn::ItemFn,
+    options: &LeanFunctionOptions,
+    leo3_crate: &TokenStream,
+) -> syn::Result<TokenStream> {
+    let param_names = generic_type_param_names(func)?;
+
+    let mut seen_names = std::collections::HashSet::new();
+    for concrete in &options.concretes {
+        if !seen_names.insert(&concrete.name) {
+            return Err(syn::Error::new_spanned(
+                func,
+                format!("duplicate concrete name `{}`", concrete.name),
+            ));
+        }
+    }
+
+    let rust_name = func.sig.ident.clone();
+    let mut modules = Vec::new();
+    let mut reexports = Vec::new();
+
+    for concrete in &options.concretes {
+        if param_names.len() != concrete.types.len() {
+            return Err(syn::Error::new_spanned(
+                func,
+                format!(
+                    "expected {} concrete type(s) for {} generic parameter(s), got {}",
+                    param_names.len(),
+                    param_names.len(),
+                    concrete.types.len()
+                ),
+            ));
+        }
+
+        let mapping: std::collections::HashMap<String, syn::Type> = param_names
+            .iter()
+            .cloned()
+            .zip(concrete.types.iter().cloned())
+            .collect();
+
+        let concrete_attr = ConcreteAttr {
+            types: concrete.types.clone(),
+            name: concrete.name.clone(),
+        };
+        let binding = analyze_concrete_instance(func, &concrete_attr)?;
+        let info = analyze_function(func, &concrete.name, Some(&mapping))?;
+
+        let wrapper_module = format_ident!("__leo3_leanfn_{}_{}", rust_name, concrete.name);
+        let metadata_name = format_ident!("__leo3_metadata_{}", concrete.name);
+
+        let turbofish_types = &concrete.types;
+        let turbofish = quote! { <#(#turbofish_types),*> };
+
+        let ffi_wrapper = generate_ffi_wrapper(&info, leo3_crate);
+        let conversion_wrapper =
+            generate_conversion_wrapper(&info, leo3_crate, Some(&turbofish));
+        let metadata = generate_metadata(&binding, leo3_crate);
+
+        let internal_ffi_name = format_ident!("__ffi_{}", &concrete.name);
+        let lean_name_ident = format_ident!("{}", &concrete.name);
+
+        modules.push(quote! {
+            #[allow(non_snake_case, unused_imports)]
+            mod #wrapper_module {
+                use super::*;
+
+                #ffi_wrapper
+
+                #conversion_wrapper
+
+                #metadata
+            }
+        });
+
+        reexports.push(quote! {
+            #[allow(non_snake_case, unused_imports)]
+            pub use #wrapper_module::#internal_ffi_name as #lean_name_ident;
+
+            #[doc(hidden)]
+            #[allow(non_snake_case)]
+            pub use #wrapper_module::__leo3_metadata as #metadata_name;
+        });
+    }
+
+    func.attrs.clear();
+
+    Ok(quote! {
+        #func
+
+        #(#modules)*
+
+        #(#reexports)*
     })
 }
 
@@ -541,6 +758,7 @@ mod tests {
             &mut func,
             LeanFunctionOptions {
                 common: CommonOptions::default(),
+                concretes: Vec::new(),
             },
         )
         .expect("leanfn expansion should succeed");
@@ -566,6 +784,7 @@ mod tests {
             &mut func,
             LeanFunctionOptions {
                 common: CommonOptions::default(),
+                concretes: Vec::new(),
             },
         )
         .expect("leanfn expansion should succeed");
@@ -598,6 +817,7 @@ mod tests {
             &mut func,
             LeanFunctionOptions {
                 common: CommonOptions::default(),
+                concretes: Vec::new(),
             },
         )
         .expect("leanfn expansion should succeed");
@@ -636,6 +856,7 @@ mod tests {
             &mut func,
             LeanFunctionOptions {
                 common: CommonOptions::default(),
+                concretes: Vec::new(),
             },
         )
         .expect("leanfn expansion should succeed");
@@ -664,6 +885,7 @@ mod tests {
             &mut func,
             LeanFunctionOptions {
                 common: CommonOptions::default(),
+                concretes: Vec::new(),
             },
         )
         .expect("leanfn expansion should succeed");
@@ -687,6 +909,7 @@ mod tests {
             &mut func,
             LeanFunctionOptions {
                 common: CommonOptions::default(),
+                concretes: Vec::new(),
             },
         )
         .expect("leanfn expansion should succeed");
@@ -716,6 +939,7 @@ mod tests {
             &mut func,
             LeanFunctionOptions {
                 common: CommonOptions::default(),
+                concretes: Vec::new(),
             },
         )
         .expect("leanfn expansion should succeed");
@@ -757,6 +981,7 @@ mod tests {
             &mut func,
             LeanFunctionOptions {
                 common: CommonOptions::default(),
+                concretes: Vec::new(),
             },
         )
         .expect("leanfn expansion should succeed");
@@ -770,5 +995,148 @@ mod tests {
         assert!(rendered.contains("__words_option_result_err_storage"));
         assert!(rendered.contains("LeanOption :: get"));
         assert!(rendered.contains("LeanExcept :: toRustResult"));
+    }
+
+    #[test]
+    fn concrete_generates_separate_wrappers_per_instance() {
+        let mut func: syn::ItemFn = syn::parse_quote! {
+            fn add<T: std::ops::Add<Output = T>>(a: T, b: T) -> T {
+                a + b
+            }
+        };
+
+        let tokens = build_lean_function(
+            &mut func,
+            LeanFunctionOptions {
+                common: CommonOptions::default(),
+                concretes: vec![
+                    ConcreteInstance {
+                        types: vec![syn::parse_quote! { u64 }],
+                        name: "add_u64".to_string(),
+                    },
+                    ConcreteInstance {
+                        types: vec![syn::parse_quote! { i64 }],
+                        name: "add_i64".to_string(),
+                    },
+                ],
+            },
+        )
+        .expect("concrete leanfn expansion should succeed");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("__ffi_add_u64"));
+        assert!(rendered.contains("__ffi_add_i64"));
+        assert!(rendered.contains("add_u64"));
+        assert!(rendered.contains("add_i64"));
+        assert!(rendered.contains("__leo3_leanfn_add_add_u64"));
+        assert!(rendered.contains("__leo3_leanfn_add_add_i64"));
+        assert!(rendered.contains("__leo3_metadata_add_u64"));
+        assert!(rendered.contains("__leo3_metadata_add_i64"));
+        assert!(rendered.contains("< u64 >"));
+        assert!(rendered.contains("< i64 >"));
+    }
+
+    #[test]
+    fn concrete_supports_two_generic_params() {
+        let mut func: syn::ItemFn = syn::parse_quote! {
+            fn convert<A, B>(input: A) -> B {
+                todo!()
+            }
+        };
+
+        let tokens = build_lean_function(
+            &mut func,
+            LeanFunctionOptions {
+                common: CommonOptions::default(),
+                concretes: vec![ConcreteInstance {
+                    types: vec![syn::parse_quote! { u64 }, syn::parse_quote! { String }],
+                    name: "u64_to_string".to_string(),
+                }],
+            },
+        )
+        .expect("two-param concrete expansion should succeed");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("__ffi_u64_to_string"));
+        assert!(rendered.contains("< u64 , String >"));
+    }
+
+    #[test]
+    fn concrete_rejects_wrong_arity() {
+        let mut func: syn::ItemFn = syn::parse_quote! {
+            fn add<T: std::ops::Add<Output = T>>(a: T, b: T) -> T {
+                a + b
+            }
+        };
+
+        let result = build_lean_function(
+            &mut func,
+            LeanFunctionOptions {
+                common: CommonOptions::default(),
+                concretes: vec![ConcreteInstance {
+                    types: vec![syn::parse_quote! { u64 }, syn::parse_quote! { i64 }],
+                    name: "add_bad".to_string(),
+                }],
+            },
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("expected 1 concrete type(s)"));
+    }
+
+    #[test]
+    fn concrete_rejects_duplicate_names() {
+        let mut func: syn::ItemFn = syn::parse_quote! {
+            fn add<T: std::ops::Add<Output = T>>(a: T, b: T) -> T {
+                a + b
+            }
+        };
+
+        let result = build_lean_function(
+            &mut func,
+            LeanFunctionOptions {
+                common: CommonOptions::default(),
+                concretes: vec![
+                    ConcreteInstance {
+                        types: vec![syn::parse_quote! { u64 }],
+                        name: "add_dup".to_string(),
+                    },
+                    ConcreteInstance {
+                        types: vec![syn::parse_quote! { i64 }],
+                        name: "add_dup".to_string(),
+                    },
+                ],
+            },
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("duplicate concrete name"));
+    }
+
+    #[test]
+    fn concrete_substitutes_types_in_params_and_return() {
+        let mut func: syn::ItemFn = syn::parse_quote! {
+            fn identity<T>(x: T) -> T {
+                x
+            }
+        };
+
+        let tokens = build_lean_function(
+            &mut func,
+            LeanFunctionOptions {
+                common: CommonOptions::default(),
+                concretes: vec![ConcreteInstance {
+                    types: vec![syn::parse_quote! { u64 }],
+                    name: "identity_u64".to_string(),
+                }],
+            },
+        )
+        .expect("identity concrete expansion should succeed");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("FromLean"));
+        assert!(rendered.contains("identity :: < u64 >"));
     }
 }

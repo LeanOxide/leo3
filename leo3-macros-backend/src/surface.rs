@@ -6,6 +6,7 @@
 
 use crate::leanclass::LeanClassOptions;
 use crate::leanfn::LeanFunctionOptions;
+use leo3_binding_ir::substitute_type;
 use quote::ToTokens;
 use std::collections::BTreeSet;
 use syn::{Attribute, ImplItem, Item, ItemFn, ItemImpl, ItemStruct, Type};
@@ -67,13 +68,19 @@ pub fn collect_module_exports(items: &[Item]) -> syn::Result<Vec<String>> {
             }
 
             let options = parse_leanfn_options(attr)?;
-            let name = options
-                .common
-                .name
-                .as_ref()
-                .map(|value| value.value())
-                .unwrap_or_else(|| function.sig.ident.to_string());
-            exports.push(name);
+            if options.concretes.is_empty() {
+                let name = options
+                    .common
+                    .name
+                    .as_ref()
+                    .map(|value| value.value())
+                    .unwrap_or_else(|| function.sig.ident.to_string());
+                exports.push(name);
+            } else {
+                for concrete in &options.concretes {
+                    exports.push(concrete.name.clone());
+                }
+            }
         }
     }
 
@@ -145,14 +152,18 @@ fn render_leanfn_block(function: &ItemFn, attr: &Attribute) -> Result<LeanDeclBl
     let options = parse_leanfn_options(attr)
         .map_err(|err| format!("ignoring malformed #[leanfn(...)] attribute: {err}"))?;
 
+    if function.sig.variadic.is_some() {
+        return Err("skipping variadic binding; variadic functions are not supported".into());
+    }
+
+    if !options.concretes.is_empty() {
+        return render_leanfn_concrete_block(function, &options);
+    }
+
     if !function.sig.generics.params.is_empty() {
         return Err(
             "skipping generic binding; generic exported functions are not supported".into(),
         );
-    }
-
-    if function.sig.variadic.is_some() {
-        return Err("skipping variadic binding; variadic functions are not supported".into());
     }
 
     let lean_name = options
@@ -197,6 +208,99 @@ fn render_leanfn_block(function: &ItemFn, attr: &Attribute) -> Result<LeanDeclBl
             format!("@[extern \"{lean_name}\"]"),
             format!("opaque {lean_name} : {}", signature_parts.join(" → ")),
         ],
+        custom_types,
+    })
+}
+
+fn generic_type_param_names(function: &ItemFn) -> Result<Vec<String>, String> {
+    function
+        .sig
+        .generics
+        .params
+        .iter()
+        .map(|p| match p {
+            syn::GenericParam::Type(tp) => Ok(tp.ident.to_string()),
+            syn::GenericParam::Lifetime(lt) => Err(format!(
+                "lifetime parameter `{}` is not supported with `concrete`",
+                lt.lifetime
+            )),
+            syn::GenericParam::Const(cp) => Err(format!(
+                "const parameter `{}` is not supported with `concrete`",
+                cp.ident
+            )),
+        })
+        .collect()
+}
+
+fn render_leanfn_concrete_block(
+    function: &ItemFn,
+    options: &LeanFunctionOptions,
+) -> Result<LeanDeclBlock, String> {
+    let param_names = generic_type_param_names(function)?;
+    let mut custom_types = BTreeSet::new();
+    let mut lines = Vec::new();
+
+    for concrete in &options.concretes {
+        if param_names.len() != concrete.types.len() {
+            return Err(format!(
+                "expected {} concrete type(s) for {} generic parameter(s), got {}",
+                param_names.len(),
+                param_names.len(),
+                concrete.types.len()
+            ));
+        }
+
+        let mapping: std::collections::HashMap<String, Type> = param_names
+            .iter()
+            .cloned()
+            .zip(concrete.types.iter().cloned())
+            .collect();
+
+        let lean_name = concrete.name.clone();
+        let mut params = Vec::new();
+        for input in &function.sig.inputs {
+            match input {
+                syn::FnArg::Typed(pat_type) => {
+                    let ty = substitute_type(&pat_type.ty, &mapping);
+                    let rendered =
+                        render_param_type(&ty, None, &mut custom_types).map_err(|err| {
+                            format!("unsupported leo3 type in `{lean_name}` parameter: {err}")
+                        })?;
+                    params.push(rendered);
+                }
+                syn::FnArg::Receiver(_) => {
+                    return Err(
+                        "skipping binding with self receiver; only free functions are supported"
+                            .into(),
+                    );
+                }
+            }
+        }
+
+        let return_type = match &function.sig.output {
+            syn::ReturnType::Default => "Unit".to_string(),
+            syn::ReturnType::Type(_, ty) => {
+                let ty = substitute_type(ty, &mapping);
+                render_value_type(&ty, None, &mut custom_types).map_err(|err| {
+                    format!("unsupported leo3 return type in `{lean_name}`: {err}")
+                })?
+            }
+        };
+
+        let mut signature_parts = params;
+        signature_parts.push(return_type);
+
+        lines.push(format!("@[extern \"{lean_name}\"]"));
+        lines.push(format!(
+            "opaque {lean_name} : {}",
+            signature_parts.join(" → ")
+        ));
+    }
+
+    Ok(LeanDeclBlock {
+        item_name: function.sig.ident.to_string(),
+        doc: extract_doc_comments(&function.attrs),
+        lines,
         custom_types,
     })
 }
@@ -541,6 +645,7 @@ fn parse_leanfn_options(attr: &Attribute) -> syn::Result<LeanFunctionOptions> {
     match &attr.meta {
         syn::Meta::Path(_) => Ok(LeanFunctionOptions {
             common: crate::CommonOptions::default(),
+            concretes: Vec::new(),
         }),
         _ => attr.parse_args::<LeanFunctionOptions>(),
     }

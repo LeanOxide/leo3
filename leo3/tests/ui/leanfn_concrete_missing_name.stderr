@@ -1,0 +1,5 @@
+error: `concrete` requires `name = "..."`
+ --> tests/ui/leanfn_concrete_missing_name.rs:1:23
+  |
+1 | #[leo3_macros::leanfn(concrete(u64))]
+  |                       ^^^^^^^^^^^^^

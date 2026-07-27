@@ -228,6 +228,35 @@ Formal rules:
   conversion set, but they do not automatically widen the `#[leanclass]`
   declaration grammar
 
+### `#[leanfn]` monomorphization subset
+
+Generic `#[leanfn]` functions are supported through an explicit monomorphization
+subset using `concrete(Ty, name = "...")` annotations:
+
+```rust
+#[leanfn(concrete(u64, name = "add_u64"), concrete(i64, name = "add_i64"))]
+fn add<T: Add<Output = T>>(a: T, b: T) -> T {
+    a + b
+}
+```
+
+Each `concrete` annotation generates a separate, fully monomorphized C ABI
+wrapper, metadata entry, and Lean-visible declaration. The contract:
+
+- the user must enumerate every concrete instantiation explicitly
+- each instance must have a unique `name = "..."`
+- the number of concrete types must match the number of generic type parameters
+- the original generic function is preserved and called via turbofish
+  (`add::<u64>(...)`) inside each generated wrapper
+- lifetime and const generic parameters are rejected
+- `#[leanclass]` generics remain unsupported (see compile-fail tests)
+
+Compile-fail matrix for the monomorphization subset:
+
+- `leo3/tests/ui/leanfn_generic_without_concrete.rs` — generic fn without `concrete`
+- `leo3/tests/ui/leanfn_concrete_wrong_arity.rs` — wrong number of concrete types
+- `leo3/tests/ui/leanfn_concrete_missing_name.rs` — missing `name = "..."`
+
 ### `#[leanclass]` declaration grammar
 
 Generated Lean declarations support these Rust type shapes:

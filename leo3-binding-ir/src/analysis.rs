@@ -4,9 +4,65 @@ use syn::{punctuated::Punctuated, Token};
 
 use crate::model::*;
 
+pub struct ConcreteAttr {
+    pub types: Vec<syn::Type>,
+    pub name: String,
+}
+
+struct ConcreteArgsParser {
+    types: Vec<syn::Type>,
+    name: Option<String>,
+}
+
+impl Parse for ConcreteArgsParser {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut types = Vec::new();
+        let mut name = None;
+
+        while !input.is_empty() {
+            if input.peek(syn::Ident) && input.peek2(Token![=]) {
+                let ident: syn::Ident = input.parse()?;
+                if ident != "name" {
+                    return Err(syn::Error::new(ident.span(), "expected `name`"));
+                }
+                let _: Token![=] = input.parse()?;
+                let lit: syn::LitStr = input.parse()?;
+                name = Some(lit.value());
+            } else {
+                let ty: syn::Type = input.parse()?;
+                types.push(ty);
+            }
+
+            if !input.is_empty() {
+                let _: Token![,] = input.parse()?;
+            }
+        }
+
+        Ok(ConcreteArgsParser { types, name })
+    }
+}
+
+fn parse_concrete_meta(list: &syn::MetaList) -> syn::Result<ConcreteAttr> {
+    let args: ConcreteArgsParser = list.parse_args()?;
+    let name = args.name.ok_or_else(|| {
+        syn::Error::new_spanned(list, "`concrete` requires `name = \"...\"`")
+    })?;
+    if args.types.is_empty() {
+        return Err(syn::Error::new_spanned(
+            list,
+            "`concrete` requires at least one type argument",
+        ));
+    }
+    Ok(ConcreteAttr {
+        types: args.types,
+        name,
+    })
+}
+
 #[derive(Default)]
 struct CommonAttrOptions {
     name: Option<String>,
+    concretes: Vec<ConcreteAttr>,
 }
 
 impl Parse for CommonAttrOptions {
@@ -27,6 +83,9 @@ impl Parse for CommonAttrOptions {
                     }
                 }
                 syn::Meta::NameValue(nv) if nv.path.is_ident("crate") => {}
+                syn::Meta::List(list) if list.path.is_ident("concrete") => {
+                    options.concretes.push(parse_concrete_meta(&list)?);
+                }
                 other => {
                     return Err(syn::Error::new_spanned(
                         other,
@@ -47,6 +106,161 @@ pub fn is_leanfn_attr(attr: &syn::Attribute) -> bool {
         .is_some_and(|segment| segment.ident == "leanfn")
 }
 
+pub fn substitute_type(
+    ty: &syn::Type,
+    mapping: &std::collections::HashMap<String, syn::Type>,
+) -> syn::Type {
+    match ty {
+        syn::Type::Path(type_path) if type_path.qself.is_none() => {
+            if type_path.path.segments.len() == 1 {
+                let segment = &type_path.path.segments[0];
+                if matches!(segment.arguments, syn::PathArguments::None) {
+                    if let Some(concrete) = mapping.get(&segment.ident.to_string()) {
+                        return concrete.clone();
+                    }
+                }
+            }
+            let mut new_path = type_path.path.clone();
+            for segment in new_path.segments.iter_mut() {
+                if let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments {
+                    for arg in args.args.iter_mut() {
+                        if let syn::GenericArgument::Type(inner) = arg {
+                            *inner = substitute_type(inner, mapping);
+                        }
+                    }
+                }
+            }
+            syn::Type::Path(syn::TypePath {
+                qself: None,
+                path: new_path,
+            })
+        }
+        syn::Type::Reference(reference) => syn::Type::Reference(syn::TypeReference {
+            and_token: reference.and_token,
+            lifetime: reference.lifetime.clone(),
+            mutability: reference.mutability,
+            elem: Box::new(substitute_type(&reference.elem, mapping)),
+        }),
+        syn::Type::Tuple(tuple) => syn::Type::Tuple(syn::TypeTuple {
+            paren_token: tuple.paren_token,
+            elems: tuple
+                .elems
+                .iter()
+                .map(|e| substitute_type(e, mapping))
+                .collect(),
+        }),
+        syn::Type::Array(array) => syn::Type::Array(syn::TypeArray {
+            bracket_token: array.bracket_token,
+            elem: Box::new(substitute_type(&array.elem, mapping)),
+            semi_token: array.semi_token,
+            len: array.len.clone(),
+        }),
+        syn::Type::Slice(slice) => syn::Type::Slice(syn::TypeSlice {
+            bracket_token: slice.bracket_token,
+            elem: Box::new(substitute_type(&slice.elem, mapping)),
+        }),
+        syn::Type::Paren(paren) => syn::Type::Paren(syn::TypeParen {
+            paren_token: paren.paren_token,
+            elem: Box::new(substitute_type(&paren.elem, mapping)),
+        }),
+        syn::Type::Group(group) => syn::Type::Group(syn::TypeGroup {
+            group_token: group.group_token,
+            elem: Box::new(substitute_type(&group.elem, mapping)),
+        }),
+        _ => ty.clone(),
+    }
+}
+
+fn generic_type_param_names(func: &syn::ItemFn) -> syn::Result<Vec<String>> {
+    func.sig
+        .generics
+        .params
+        .iter()
+        .map(|p| match p {
+            syn::GenericParam::Type(tp) => Ok(tp.ident.to_string()),
+            syn::GenericParam::Lifetime(lt) => Err(syn::Error::new_spanned(
+                lt,
+                "lifetime parameters are not supported with `concrete`",
+            )),
+            syn::GenericParam::Const(cp) => Err(syn::Error::new_spanned(
+                cp,
+                "const parameters are not supported with `concrete`",
+            )),
+        })
+        .collect()
+}
+
+pub fn analyze_concrete_instance(
+    func: &syn::ItemFn,
+    concrete: &ConcreteAttr,
+) -> syn::Result<FunctionBinding> {
+    let param_names = generic_type_param_names(func)?;
+
+    if param_names.len() != concrete.types.len() {
+        return Err(syn::Error::new_spanned(
+            func,
+            format!(
+                "expected {} concrete type(s) for {} generic parameter(s), got {}",
+                param_names.len(),
+                param_names.len(),
+                concrete.types.len()
+            ),
+        ));
+    }
+
+    let mapping: std::collections::HashMap<String, syn::Type> = param_names
+        .into_iter()
+        .zip(concrete.types.iter().cloned())
+        .collect();
+
+    let mut params = Vec::new();
+    for input in &func.sig.inputs {
+        match input {
+            syn::FnArg::Typed(pat_type) => {
+                let name = match &*pat_type.pat {
+                    syn::Pat::Ident(ident) => ident.ident.to_string(),
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            pat_type,
+                            "Only simple parameter patterns are supported",
+                        ))
+                    }
+                };
+                let ty = substitute_type(&pat_type.ty, &mapping);
+                params.push(ParameterBinding {
+                    name,
+                    ty: analyze_leanfn_type(&ty)?,
+                    passing: passing_style_for_leanfn(&ty),
+                });
+            }
+            syn::FnArg::Receiver(_) => {
+                return Err(syn::Error::new_spanned(
+                    input,
+                    "Methods with `self` are not supported. Use standalone functions.",
+                ))
+            }
+        }
+    }
+
+    let return_type = match &func.sig.output {
+        syn::ReturnType::Default => unit_binding(),
+        syn::ReturnType::Type(_, ty) => analyze_leanfn_type(&substitute_type(ty, &mapping))?,
+    };
+
+    Ok(FunctionBinding {
+        rust_name: func.sig.ident.to_string(),
+        lean_name: concrete.name.clone(),
+        owner: None,
+        ffi_symbol: concrete.name.clone(),
+        receiver: ReceiverStyle::None,
+        params,
+        return_type,
+        semantics: BindingSemantics::Value,
+        kind: BindingKind::Method,
+        lean_decl: None,
+    })
+}
+
 pub fn collect_module_exports(items: &[syn::Item]) -> syn::Result<Vec<FunctionBinding>> {
     let mut exports = Vec::new();
 
@@ -61,12 +275,19 @@ pub fn collect_module_exports(items: &[syn::Item]) -> syn::Result<Vec<FunctionBi
             }
 
             let options = attr.parse_args::<CommonAttrOptions>()?;
-            exports.push(analyze_lean_function(
-                function,
-                FunctionOptions {
-                    lean_name: options.name,
-                },
-            )?);
+
+            if options.concretes.is_empty() {
+                exports.push(analyze_lean_function(
+                    function,
+                    FunctionOptions {
+                        lean_name: options.name,
+                    },
+                )?);
+            } else {
+                for concrete in &options.concretes {
+                    exports.push(analyze_concrete_instance(function, concrete)?);
+                }
+            }
         }
     }
 

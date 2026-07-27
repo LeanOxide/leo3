@@ -1,0 +1,7 @@
+error: expected 1 concrete type(s) for 1 generic parameter(s), got 2
+ --> tests/ui/leanfn_concrete_wrong_arity.rs:2:1
+  |
+2 | / fn add<T: std::ops::Add<Output = T>>(a: T, b: T) -> T {
+3 | |     a + b
+4 | | }
+  | |_^

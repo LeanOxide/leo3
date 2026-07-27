@@ -844,3 +844,49 @@ fn test_leanfn_try_wrapper_reports_conversion_errors() {
     })
     .unwrap();
 }
+
+// Generic function exposed to Lean through the monomorphization subset.
+#[leanfn(concrete(u64, name = "mono_add_u64"), concrete(i64, name = "mono_add_i64"))]
+fn mono_add<T: std::ops::Add<Output = T>>(a: T, b: T) -> T {
+    a + b
+}
+
+#[test]
+#[cfg_attr(not(feature = "runtime-tests"), ignore = "Requires Lean4 runtime")]
+fn test_leanfn_concrete_u64_instance() {
+    leo3::prepare_freethreaded_lean();
+
+    leo3::with_lean(|lean| -> Result<(), Box<dyn std::error::Error>> {
+        let a = LeanUInt64::mk(lean, 10)?;
+        let b = LeanUInt64::mk(lean, 32)?;
+
+        unsafe {
+            let result_ptr = mono_add_u64(a.into_ptr(), b.into_ptr());
+            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
+            assert_eq!(LeanUInt64::to_u64(&result), 42);
+        }
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+#[cfg_attr(not(feature = "runtime-tests"), ignore = "Requires Lean4 runtime")]
+fn test_leanfn_concrete_i64_instance() {
+    leo3::prepare_freethreaded_lean();
+
+    leo3::with_lean(|lean| -> Result<(), Box<dyn std::error::Error>> {
+        let a = LeanInt64::mk(lean, -10)?;
+        let b = LeanInt64::mk(lean, 52)?;
+
+        unsafe {
+            let result_ptr = mono_add_i64(a.into_ptr(), b.into_ptr());
+            let result: LeanBound<LeanInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
+            assert_eq!(LeanInt64::to_i64(&result), 42);
+        }
+
+        Ok(())
+    })
+    .unwrap();
+}
