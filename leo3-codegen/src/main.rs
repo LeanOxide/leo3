@@ -54,17 +54,13 @@ fn main() -> ExitCode {
 }
 
 fn print_usage() {
-    eprintln!(
-        "leo3-codegen: generate Lean 4 extern declarations from Leo3 cdylib metadata"
-    );
+    eprintln!("leo3-codegen: generate Lean 4 extern declarations from Leo3 cdylib metadata");
     eprintln!();
     eprintln!("USAGE:");
     eprintln!("    leo3-codegen [OPTIONS] <cdylib>...");
     eprintln!();
     eprintln!("OPTIONS:");
-    eprintln!(
-        "    -o, --output <DIR>    Output directory for generated .lean files (default: .)"
-    );
+    eprintln!("    -o, --output <DIR>    Output directory for generated .lean files (default: .)");
     eprintln!("    -h, --help            Print this help message");
     eprintln!();
     eprintln!("EXAMPLES:");
@@ -87,9 +83,8 @@ fn process_library(lib_path: &Path, output_dir: &Path) -> Result<(), String> {
 
     for (name, json_data) in &symbols {
         if let Some(module_name) = name.strip_prefix("__leo3_module_metadata_json_") {
-            let binding: ModuleBinding = serde_json::from_str(json_data).map_err(|e| {
-                format!("failed to parse module metadata for `{module_name}`: {e}")
-            })?;
+            let binding: ModuleBinding = serde_json::from_str(json_data)
+                .map_err(|e| format!("failed to parse module metadata for `{module_name}`: {e}"))?;
             let lean_code = generate_module_lean(&binding);
             let file_name = format!("{}.lean", module_name.replace('.', "/"));
             let file_path = output_dir.join(&file_name);
@@ -101,9 +96,8 @@ fn process_library(lib_path: &Path, output_dir: &Path) -> Result<(), String> {
                 .map_err(|e| format!("failed to write {}: {e}", file_path.display()))?;
             generated.push(file_path);
         } else if let Some(class_name) = name.strip_prefix("__leo3_class_metadata_json_") {
-            let metadata: ClassMetadata = serde_json::from_str(json_data).map_err(|e| {
-                format!("failed to parse class metadata for `{class_name}`: {e}")
-            })?;
+            let metadata: ClassMetadata = serde_json::from_str(json_data)
+                .map_err(|e| format!("failed to parse class metadata for `{class_name}`: {e}"))?;
             let lean_code = generate_class_lean(&metadata);
             let file_path = output_dir.join(format!("{class_name}.lean"));
             std::fs::write(&file_path, &lean_code)
@@ -120,8 +114,7 @@ fn process_library(lib_path: &Path, output_dir: &Path) -> Result<(), String> {
 }
 
 fn extract_metadata_symbols(data: &[u8]) -> Result<Vec<(String, String)>, String> {
-    let obj =
-        object::File::parse(data).map_err(|e| format!("failed to parse object file: {e}"))?;
+    let obj = object::File::parse(data).map_err(|e| format!("failed to parse object file: {e}"))?;
 
     let mut results = Vec::new();
 

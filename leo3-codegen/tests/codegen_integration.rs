@@ -39,10 +39,8 @@ fn dylib_name() -> &'static str {
 }
 
 fn build_fixture() -> PathBuf {
-    let target_dir = std::env::temp_dir().join(format!(
-        "leo3-codegen-fixture-{}",
-        std::process::id()
-    ));
+    let target_dir =
+        std::env::temp_dir().join(format!("leo3-codegen-fixture-{}", std::process::id()));
 
     let status = Command::new("cargo")
         .arg("build")
@@ -67,10 +65,8 @@ fn codegen_generates_module_and_class_lean_files() {
         dylib.display()
     );
 
-    let output_dir = std::env::temp_dir().join(format!(
-        "leo3-codegen-output-{}",
-        std::process::id()
-    ));
+    let output_dir =
+        std::env::temp_dir().join(format!("leo3-codegen-output-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&output_dir);
 
     let output = Command::new(codegen_bin())
@@ -94,8 +90,10 @@ fn codegen_generates_module_and_class_lean_files() {
     );
     let module_content = std::fs::read_to_string(&module_file).unwrap();
     assert!(module_content.contains("-- Module: FixtureModule"));
-    assert!(module_content.contains("@[extern \"fixture_add\"] opaque fixture_add : UInt64 → UInt64 → UInt64"));
-    assert!(module_content.contains("@[extern \"fixture_banner\"] opaque fixture_banner : String → Int32 → String"));
+    assert!(module_content
+        .contains("@[extern \"fixture_add\"] opaque fixture_add : UInt64 → UInt64 → UInt64"));
+    assert!(module_content
+        .contains("@[extern \"fixture_banner\"] opaque fixture_banner : String → Int32 → String"));
 
     let class_file = output_dir.join("FixtureCounter.lean");
     assert!(

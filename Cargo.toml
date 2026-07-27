@@ -12,7 +12,7 @@ members = [
 exclude = ["examples", "leo3-ffi-check"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.88"
 authors = ["Leo3 Contributors"]
@@ -22,11 +22,11 @@ repository = "https://github.com/AndPuQing/leo3.git"
 documentation = "https://docs.rs/leo3"
 
 [workspace.dependencies]
-leo3-ffi = { path = "leo3-ffi", version = "0.2.2" }
-leo3-build-config = { path = "leo3-build-config", version = "0.2.2" }
-leo3-binding-ir = { path = "leo3-binding-ir", version = "0.2.2" }
-leo3-macros = { path = "leo3-macros", version = "0.2.2" }
-leo3-macros-backend = { path = "leo3-macros-backend", version = "0.2.2" }
+leo3-ffi = { path = "leo3-ffi", version = "0.3.0" }
+leo3-build-config = { path = "leo3-build-config", version = "0.3.0" }
+leo3-binding-ir = { path = "leo3-binding-ir", version = "0.3.0" }
+leo3-macros = { path = "leo3-macros", version = "0.3.0" }
+leo3-macros-backend = { path = "leo3-macros-backend", version = "0.3.0" }
 libc = "0.2"
 libloading = "0.9"
 criterion = "0.8"
