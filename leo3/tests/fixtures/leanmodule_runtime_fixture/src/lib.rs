@@ -15,3 +15,24 @@ mod fixture_module {
         format!("{name} has {count} ticks")
     }
 }
+
+#[derive(Clone)]
+#[leanclass]
+pub struct FixtureCounter {
+    value: i32,
+}
+
+#[leanclass]
+impl FixtureCounter {
+    pub fn new(initial: i32) -> Self {
+        FixtureCounter { value: initial }
+    }
+
+    pub fn get(&self) -> i32 {
+        self.value
+    }
+
+    pub fn increment(&mut self) {
+        self.value += 1;
+    }
+}

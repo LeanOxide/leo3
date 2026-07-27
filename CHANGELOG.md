@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `leo3-codegen` CLI tool: reads embedded JSON metadata from cdylib binaries
+  and generates Lean 4 `extern` declaration files for `#[leanmodule]` and
+  `#[leanclass]` exports
+- `#[leanmodule]` and `#[leanclass]` now embed JSON metadata as `#[no_mangle]`
+  static symbols (`__leo3_module_metadata_json_*`, `__leo3_class_metadata_json_*`)
+  in the compiled cdylib for consumption by external tooling
 - Declarative module registration metadata (schema v2): `exports = [...]`
   option for `#[leanmodule]`, dotted nested module paths (e.g. `Foo.Bar.baz`),
   and inner `mod` blocks with `#[leanfn]` discovered as nested submodules

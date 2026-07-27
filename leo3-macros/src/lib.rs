@@ -5,7 +5,7 @@
 //! is in `leo3-macros-backend`.
 
 use leo3_binding_ir::{
-    collect_module_exports, collect_submodule_exports, filter_exports,
+    collect_module_exports, collect_submodule_exports, filter_exports, module_binding_to_json,
     quote_runtime_module_metadata, ModuleBinding,
 };
 use leo3_macros_backend::{build_lean_function, LeanFunctionOptions};
@@ -299,6 +299,18 @@ pub fn leanmodule(attr: TokenStream, input: TokenStream) -> TokenStream {
         items.push(metadata_item);
     }
 
+    let json_str = module_binding_to_json(&module_binding);
+    let json_symbol_name = syn::Ident::new(
+        &format!("__leo3_module_metadata_json_{}", module_name.replace('.', "_")),
+        proc_macro2::Span::call_site(),
+    );
+    let json_bytes = json_str.as_bytes();
+    let json_len = json_bytes.len() + 1;
+    let byte_literals: Vec<proc_macro2::Literal> = json_bytes
+        .iter()
+        .map(|&b| proc_macro2::Literal::u8_suffixed(b))
+        .collect();
+
     let expanded = quote! {
         #item_mod
 
@@ -315,6 +327,11 @@ pub fn leanmodule(attr: TokenStream, input: TokenStream) -> TokenStream {
             let io_ok = #leo3_crate::ffi::io::lean_io_result_mk_ok(unit);
             io_ok as *mut ::std::ffi::c_void
         }
+
+        #[doc(hidden)]
+        #[no_mangle]
+        #[used]
+        pub static #json_symbol_name: [u8; #json_len] = [#(#byte_literals),*, 0u8];
     };
 
     expanded.into()

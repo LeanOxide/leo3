@@ -4,17 +4,19 @@
 mod analysis;
 mod model;
 mod quoting;
+mod serialize;
 
 pub use analysis::{
     analyze_lean_class_impl, analyze_lean_class_struct, analyze_lean_function,
     collect_module_exports, collect_submodule_exports, filter_exports, is_leanfn_attr,
 };
 pub use model::{
-    BindingKind, BindingSemantics, ClassImplBinding, ClassTypeBinding, FunctionBinding,
-    FunctionOptions, ModuleBinding, ParameterBinding, PassingStyle, ReceiverStyle,
-    SubmoduleBinding, TypeBinding, TypeShape, BINDING_SCHEMA_VERSION,
+    BindingKind, BindingSemantics, ClassImplBinding, ClassMetadata, ClassTypeBinding,
+    FunctionBinding, FunctionOptions, ModuleBinding, ParameterBinding, PassingStyle,
+    ReceiverStyle, SubmoduleBinding, TypeBinding, TypeShape, BINDING_SCHEMA_VERSION,
 };
 pub use quoting::{
     quote_runtime_class_metadata, quote_runtime_function_metadata, quote_runtime_module_metadata,
     quote_runtime_submodule_metadata,
 };
+pub use serialize::{class_binding_to_json, module_binding_to_json};

@@ -7,6 +7,7 @@ members = [
     "leo3-binding-ir",
     "leo3-macros",
     "leo3-macros-backend",
+    "leo3-codegen",
 ]
 exclude = ["examples", "leo3-ffi-check"]
 
@@ -26,11 +27,11 @@ leo3-build-config = { path = "leo3-build-config", version = "0.2.2" }
 leo3-binding-ir = { path = "leo3-binding-ir", version = "0.2.2" }
 leo3-macros = { path = "leo3-macros", version = "0.2.2" }
 leo3-macros-backend = { path = "leo3-macros-backend", version = "0.2.2" }
-
-
 libc = "0.2"
 libloading = "0.9"
 criterion = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [profile.release]
 lto = "thin"
