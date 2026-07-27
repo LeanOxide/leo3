@@ -175,6 +175,12 @@ Formal rules:
   `LeanExternal<T>::borrow()`, `try_get_mut()`, and `try_take_inner()` for the
   safe/high-level path, plus `get_ref()`, `get_mut()`, and `take_inner()` for
   lower-level control
+- a trait-level borrow extraction (`FromLeanBorrowed`) was evaluated and
+  rejected: the wrapper-layer API already provides zero-copy access, and a
+  generic trait would only apply to external objects (not to the rest of the
+  conversion matrix). See `docs/external-object-borrow-extraction.md` for the
+  full design record. This remains a long-term design constraint — the clone
+  contract is the stable generic boundary
 - `Vec<u8>` uses helper functions instead of trait specialization on stable
   Rust
 - proc-macro-generated wrappers inherit this contract
