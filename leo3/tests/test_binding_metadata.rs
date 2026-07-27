@@ -22,6 +22,25 @@ impl SchemaCounter {
     }
 }
 
+#[derive(Clone)]
+#[leanclass]
+struct SchemaWidget {
+    size: u32,
+}
+
+#[leanclass]
+impl SchemaWidget {
+    #[getter]
+    fn size(&self) -> u32 {
+        self.size
+    }
+
+    #[setter]
+    fn set_size(&mut self, size: u32) {
+        self.size = size;
+    }
+}
+
 #[leanmodule(name = "SchemaModule")]
 mod schema_module {
     use leo3::prelude::*;
@@ -75,4 +94,32 @@ fn leanclass_metadata_captures_receiver_semantics() {
         .lean_decl
         .expect("method declaration")
         .contains("__lean_ffi_SchemaCounter_bump"));
+}
+
+#[test]
+fn leanclass_metadata_captures_accessor_kind() {
+    let class = __leo3_class_metadata_SchemaWidget();
+    assert_eq!(class.schema_version, leo3::LEO3_BINDING_SCHEMA_VERSION);
+    assert_eq!(class.methods.len(), 2);
+
+    let getter = &class.methods[0];
+    assert_eq!(getter.rust_name, "size");
+    assert_eq!(getter.kind, leo3::LeanBindingKind::Getter);
+    assert_eq!(getter.receiver, leo3::LeanBindingReceiver::Ref);
+    assert_eq!(getter.return_type.lean, Some("UInt32"));
+
+    let setter = &class.methods[1];
+    assert_eq!(setter.rust_name, "set_size");
+    assert_eq!(setter.kind, leo3::LeanBindingKind::Setter);
+    assert_eq!(setter.receiver, leo3::LeanBindingReceiver::MutRef);
+    assert_eq!(setter.semantics, leo3::LeanBindingSemantics::MutatesSelf);
+    assert_eq!(setter.return_type.lean, Some("SchemaWidget"));
+}
+
+#[test]
+fn leanclass_metadata_regular_methods_are_kind_method() {
+    let class = __leo3_class_metadata_SchemaCounter();
+    for method in class.methods {
+        assert_eq!(method.kind, leo3::LeanBindingKind::Method);
+    }
 }

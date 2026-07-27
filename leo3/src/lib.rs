@@ -311,6 +311,18 @@ pub enum LeanBindingSemantics {
     MutatesSelfWithValue,
 }
 
+/// The accessor kind for a generated class binding.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeanBindingKind {
+    /// A regular method.
+    Method,
+    /// A `#[getter]` property accessor (`&self -> T`).
+    Getter,
+    /// A `#[setter]` property accessor (`&mut self, T -> Self`).
+    Setter,
+}
+
 /// The structured Lean-side shape known for a bound Rust type.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -363,7 +375,7 @@ pub struct LeanParameterMetadata {
 
 /// Structured metadata schema version for generated bindings.
 #[doc(hidden)]
-pub const LEO3_BINDING_SCHEMA_VERSION: u32 = 2;
+pub const LEO3_BINDING_SCHEMA_VERSION: u32 = 3;
 
 /// Metadata about a Lean function (used by macros)
 #[doc(hidden)]
@@ -387,6 +399,8 @@ pub struct LeanFunctionMetadata {
     pub return_type: LeanTypeMetadata,
     /// High-level call semantics for the binding.
     pub semantics: LeanBindingSemantics,
+    /// Accessor kind (method / getter / setter) for class bindings.
+    pub kind: LeanBindingKind,
     /// Lean declaration text when the producer emits one directly.
     pub lean_decl: Option<&'static str>,
 }

@@ -1,0 +1,8 @@
+error: #[getter] methods must take &self
+  --> tests/ui/leanclass_getter_wrong_receiver.rs:7:5
+   |
+ 7 | /     #[getter]
+ 8 | |     fn value(&mut self) -> i32 {
+ 9 | |         0
+10 | |     }
+   | |_____^

@@ -10,9 +10,9 @@ pub use analysis::{
     collect_module_exports, collect_submodule_exports, filter_exports, is_leanfn_attr,
 };
 pub use model::{
-    BindingSemantics, ClassImplBinding, ClassTypeBinding, FunctionBinding, FunctionOptions,
-    ModuleBinding, ParameterBinding, PassingStyle, ReceiverStyle, SubmoduleBinding, TypeBinding,
-    TypeShape, BINDING_SCHEMA_VERSION,
+    BindingKind, BindingSemantics, ClassImplBinding, ClassTypeBinding, FunctionBinding,
+    FunctionOptions, ModuleBinding, ParameterBinding, PassingStyle, ReceiverStyle,
+    SubmoduleBinding, TypeBinding, TypeShape, BINDING_SCHEMA_VERSION,
 };
 pub use quoting::{
     quote_runtime_class_metadata, quote_runtime_function_metadata, quote_runtime_module_metadata,

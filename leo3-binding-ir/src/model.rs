@@ -1,4 +1,4 @@
-pub const BINDING_SCHEMA_VERSION: u32 = 2;
+pub const BINDING_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PassingStyle {
@@ -19,6 +19,13 @@ pub enum BindingSemantics {
     Value,
     MutatesSelf,
     MutatesSelfWithValue,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BindingKind {
+    Method,
+    Getter,
+    Setter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +66,7 @@ pub struct FunctionBinding {
     pub params: Vec<ParameterBinding>,
     pub return_type: TypeBinding,
     pub semantics: BindingSemantics,
+    pub kind: BindingKind,
     pub lean_decl: Option<String>,
 }
 

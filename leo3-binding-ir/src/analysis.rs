@@ -186,6 +186,7 @@ pub fn analyze_lean_function(
         params,
         return_type,
         semantics: BindingSemantics::Value,
+        kind: BindingKind::Method,
         lean_decl: None,
     })
 }
@@ -286,6 +287,9 @@ fn analyze_lean_class_method(
         syn::ReturnType::Default => syn::parse_quote! { () },
         syn::ReturnType::Type(_, ty) => (**ty).clone(),
     };
+
+    let kind = detect_binding_kind(method, &receiver, &params, &rust_return)?;
+
     let base_return = analyze_leanclass_type(&rust_return, class_name)?;
     let return_type = match receiver {
         ReceiverStyle::MutRef if is_unit_type(&rust_return) => TypeBinding {
@@ -350,8 +354,76 @@ fn analyze_lean_class_method(
         params,
         return_type,
         semantics,
+        kind,
         lean_decl: Some(lean_decl),
     })
+}
+
+fn has_attr(method: &syn::ImplItemFn, name: &str) -> bool {
+    method.attrs.iter().any(|attr| attr.path().is_ident(name))
+}
+
+fn detect_binding_kind(
+    method: &syn::ImplItemFn,
+    receiver: &ReceiverStyle,
+    params: &[ParameterBinding],
+    rust_return: &syn::Type,
+) -> syn::Result<BindingKind> {
+    let is_getter = has_attr(method, "getter");
+    let is_setter = has_attr(method, "setter");
+
+    if is_getter && is_setter {
+        return Err(syn::Error::new_spanned(
+            method,
+            "#[getter] and #[setter] are mutually exclusive",
+        ));
+    }
+
+    if is_getter {
+        if *receiver != ReceiverStyle::Ref {
+            return Err(syn::Error::new_spanned(
+                method,
+                "#[getter] methods must take &self",
+            ));
+        }
+        if !params.is_empty() {
+            return Err(syn::Error::new_spanned(
+                method,
+                "#[getter] methods must not take additional parameters",
+            ));
+        }
+        if is_unit_type(rust_return) {
+            return Err(syn::Error::new_spanned(
+                method,
+                "#[getter] methods must return a non-unit value",
+            ));
+        }
+        return Ok(BindingKind::Getter);
+    }
+
+    if is_setter {
+        if *receiver != ReceiverStyle::MutRef {
+            return Err(syn::Error::new_spanned(
+                method,
+                "#[setter] methods must take &mut self",
+            ));
+        }
+        if params.len() != 1 {
+            return Err(syn::Error::new_spanned(
+                method,
+                "#[setter] methods must take exactly one parameter",
+            ));
+        }
+        if !is_unit_type(rust_return) {
+            return Err(syn::Error::new_spanned(
+                method,
+                "#[setter] methods must return `()` (the updated object is returned to Lean)",
+            ));
+        }
+        return Ok(BindingKind::Setter);
+    }
+
+    Ok(BindingKind::Method)
 }
 
 fn analyze_leanfn_type(ty: &syn::Type) -> syn::Result<TypeBinding> {

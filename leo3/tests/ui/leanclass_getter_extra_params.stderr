@@ -1,0 +1,8 @@
+error: #[getter] methods must not take additional parameters
+  --> tests/ui/leanclass_getter_extra_params.rs:7:5
+   |
+ 7 | /     #[getter]
+ 8 | |     fn value(&self, extra: i32) -> i32 {
+ 9 | |         extra
+10 | |     }
+   | |_____^

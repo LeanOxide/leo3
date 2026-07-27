@@ -151,3 +151,49 @@ fn test_richer_type_mapping_for_common_supported_shapes() {
         "Missing or incorrect scalar declaration mapping in:\n{decl}"
     );
 }
+
+#[derive(Clone)]
+#[leanclass]
+#[allow(dead_code)]
+struct Property {
+    width: u32,
+}
+
+#[leanclass]
+impl Property {
+    fn create(width: u32) -> Self {
+        Property { width }
+    }
+
+    #[getter]
+    fn width(&self) -> u32 {
+        self.width
+    }
+
+    #[setter]
+    fn set_width(&mut self, width: u32) {
+        self.width = width;
+    }
+}
+
+#[test]
+fn test_lean_methods_decl_getter() {
+    let decl = PROPERTY_LEAN_METHODS_DECL;
+    assert!(
+        decl.contains(
+            r#"@[extern "__lean_ffi_Property_width"] opaque Property.width : Property → UInt32"#
+        ),
+        "Missing or incorrect getter declaration in:\n{decl}"
+    );
+}
+
+#[test]
+fn test_lean_methods_decl_setter() {
+    let decl = PROPERTY_LEAN_METHODS_DECL;
+    assert!(
+        decl.contains(
+            r#"@[extern "__lean_ffi_Property_set_width"] opaque Property.set_width : Property → UInt32 → Property"#
+        ),
+        "Missing or incorrect setter declaration in:\n{decl}"
+    );
+}
