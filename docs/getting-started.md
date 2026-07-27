@@ -260,6 +260,131 @@ cargo test --locked --all-features --workspace
 
 See [TESTING.md](../TESTING.md) for the complete CI tier map.
 
+## Lake Integration (Lean-side)
+
+A Lean project can call Rust code compiled as a `cdylib` through Lake's native
+linking support. The repository ships a working template at
+`examples/lake-integration/`.
+
+### Project layout
+
+```text
+examples/lake-integration/
+├── native/                  # Rust cdylib
+│   ├── Cargo.toml
+│   ├── build.rs
+│   └── src/lib.rs
+└── lean/                    # Lean lake package
+    ├── lakefile.lean
+    ├── lean-toolchain
+    ├── Leo3Example/
+    │   ├── NativeMath.lean  # @[extern] declarations
+    │   └── Accumulator.lean
+    ├── Leo3Example.lean     # library root (imports)
+    └── Main.lean            # executable entry point
+```
+
+### Step 1: Write the Rust cdylib
+
+Export plain `extern "C"` functions. Scalar types (`u64`, `i64`) pass directly;
+`String` values are `lean_object*` pointers that you manipulate through
+`leo3::ffi` helpers:
+
+```rust
+use std::ffi::CStr;
+use std::os::raw::c_char;
+use leo3::ffi::inline::{lean_dec, lean_string_cstr};
+use leo3::ffi::object::{lean_obj_arg, lean_obj_res};
+use leo3::ffi::string::lean_mk_string;
+
+#[no_mangle]
+pub extern "C" fn native_add(a: u64, b: u64) -> u64 {
+    a + b
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn native_greet(name: lean_obj_arg) -> lean_obj_res {
+    let cstr = lean_string_cstr(name);
+    let rust_str = CStr::from_ptr(cstr).to_string_lossy().into_owned();
+    lean_dec(name);
+    let greeting = format!("Hello, {rust_str}! (from Rust)");
+    let c_greeting = std::ffi::CString::new(greeting).unwrap();
+    lean_mk_string(c_greeting.as_ptr() as *const c_char)
+}
+```
+
+Build with `LEO3_NO_LEAN=1` so the cdylib does not link `libleanshared` itself
+(the host Lean executable provides those symbols at runtime):
+
+```bash
+cd native
+LEO3_NO_LEAN=1 cargo build --release
+```
+
+### Step 2: Write Lean `@[extern]` declarations
+
+Each Rust function needs a matching Lean declaration. The C ABI must agree:
+
+| Lean type | C type in Rust |
+|-----------|----------------|
+| `UInt64` | `u64` |
+| `Int64` | `i64` |
+| `Float` | `f64` |
+| `Bool` | `u8` |
+| `String` | `lean_obj_arg` / `lean_obj_res` |
+| `Array T` | `lean_obj_arg` / `lean_obj_res` |
+
+```lean
+-- Leo3Example/NativeMath.lean
+@[extern "native_add"] opaque native_add : UInt64 → UInt64 → UInt64
+@[extern "native_greet"] opaque native_greet : String → String
+```
+
+### Step 3: Configure the lakefile
+
+Use `moreLinkArgs` to point the linker at the cdylib:
+
+```lean
+import Lake
+open Lake DSL
+
+package «MyProject» where
+  leanOptions := #[⟨`autoImplicit, false⟩]
+
+@[default_target]
+lean_lib «MyProject» where
+  moreLinkArgs := #["-L", "../native/target/release", "-l", "my_native_lib"]
+
+lean_exe «app» where
+  root := `Main
+  moreLinkArgs := #["-L", "../native/target/release", "-l", "my_native_lib"]
+```
+
+### Step 4: Build and run
+
+```bash
+cd lean
+lake build app
+LD_LIBRARY_PATH=../native/target/release .lake/build/bin/app
+```
+
+Expected output:
+
+```text
+native_add(20, 22) = 42
+native_greet("Lean") = Hello, Lean! (from Rust)
+```
+
+### Important notes
+
+- Build the cdylib with `LEO3_NO_LEAN=1` to avoid duplicate Lean runtime
+  symbols. The Lean executable already links `libleanshared`.
+- `#[leanfn]` / `#[leanclass]` macros generate wrappers that use `lean_object*`
+  for all parameters (including scalars). For lake integration, write raw
+  `extern "C"` functions with the correct scalar ABI instead.
+- Set `LD_LIBRARY_PATH` (Linux) or `DYLD_LIBRARY_PATH` (macOS) at runtime so
+  the dynamic linker finds the cdylib.
+
 ## Next Steps
 
 - [Architecture overview](architecture.md) — crate layout and design decisions
