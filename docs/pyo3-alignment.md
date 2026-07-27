@@ -53,8 +53,8 @@ Audit source:
   `FromLean` clone-based.
 - Containers (`LeanHashMap`, `LeanHashSet`, `LeanRBMap`) are stable on the
   default surface (Lean >= 4.22) and use real Lean runtime representations for
-  the documented key matrix: `LeanNat`, `LeanInt`, `LeanString`, and
-  `LeanInt8`–`LeanInt64`.
+  the documented key matrix: `LeanNat`, `LeanInt`, `LeanString`,
+  `LeanInt8`–`LeanInt64`, and `LeanUInt8`–`LeanUInt64`.
 - `#[leanmodule]` supports declarative module registration (schema v2):
   `exports = [...]` for explicit export selection, dotted nested module paths
   (e.g. `Foo.Bar.baz`), and inner `mod` blocks with `#[leanfn]` discovered as

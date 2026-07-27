@@ -48,13 +48,14 @@ What landed:
 - `LeanHashMap`, `LeanHashSet`, and `LeanRBMap` all have real runtime-backed
   implementations for a narrow key matrix.
 - the supported key matrix is explicit: `LeanNat`, `LeanInt`, `LeanString`,
-  and `LeanInt8`–`LeanInt64`.
-- fixed-width signed wrappers (`LeanInt8`–`LeanInt64`) use Lean's unboxed
-  scalar ABI representation, aligned with Lean's container typeclass
-  instances, and are part of the supported matrix.
+  `LeanInt8`–`LeanInt64`, and `LeanUInt8`–`LeanUInt64`.
+- fixed-width signed wrappers (`LeanInt8`–`LeanInt64`) and unsigned wrappers
+  (`LeanUInt8`–`LeanUInt64`) use Lean's unboxed scalar ABI representation,
+  aligned with Lean's container typeclass instances, and are part of the
+  supported matrix.
 - runtime tests cover supported paths across `HashMap`, `HashSet`, and `RBMap`,
   including duplicate inserts, replacement semantics, string-key support,
-  fixed-width signed integer key support, and cross-family parity.
+  fixed-width signed and unsigned integer key support, and cross-family parity.
 
 Code evidence:
 
@@ -168,7 +169,8 @@ gap.
 - `#[leanfn]` monomorphization generics subset (`concrete(Ty, name = "...")`
   annotation); general generics are not feasible — see `docs/rfc-generics.md`
 - widening the container key matrix beyond the current narrow set
-  (`LeanNat`, `LeanInt`, `LeanString`, `LeanInt8`–`LeanInt64`)
+  (`LeanNat`, `LeanInt`, `LeanString`, `LeanInt8`–`LeanInt64`,
+  `LeanUInt8`–`LeanUInt64`, `LeanFloat`, `LeanFloat32`)
 
 ## Maintenance Rule
 

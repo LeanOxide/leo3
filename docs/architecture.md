@@ -80,5 +80,6 @@ names (e.g. `Foo.Bar.baz`) are supported for nested Lean module paths.
 Container wrappers (`LeanHashMap`, `LeanHashSet`, `LeanRBMap`) are now part of
 the stable default surface on Lean >= 4.22. They use real Lean runtime
 representations for an explicit, narrow key matrix (`LeanNat`, `LeanInt`,
-`LeanString`, `LeanInt8`–`LeanInt64`). Changes to their runtime behavior should
-be treated as stabilization work, not routine cleanup.
+`LeanString`, `LeanInt8`–`LeanInt64`, and `LeanUInt8`–`LeanUInt64`).
+Changes to their runtime behavior should be treated as stabilization work, not
+routine cleanup.

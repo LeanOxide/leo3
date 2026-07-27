@@ -84,3 +84,18 @@ fn test_fixed_width_signed_int_key_matrix_runtime_semantics() {
     })
     .unwrap();
 }
+
+#[test]
+fn test_fixed_width_unsigned_int_key_matrix_runtime_semantics() {
+    leo3::prepare_freethreaded_lean();
+
+    leo3::with_lean(|lean| {
+        exercise_key_family!(lean, LeanUInt8, LeanUInt8::mk, 1u8, 2u8, 99u8);
+        exercise_key_family!(lean, LeanUInt16, LeanUInt16::mk, 1u16, 2u16, 99u16);
+        exercise_key_family!(lean, LeanUInt32, LeanUInt32::mk, 1u32, 2u32, 99u32);
+        exercise_key_family!(lean, LeanUInt64, LeanUInt64::mk, 1u64, 2u64, 99u64);
+
+        Ok::<_, LeanError>(())
+    })
+    .unwrap();
+}

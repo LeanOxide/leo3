@@ -120,10 +120,10 @@ Current status:
   matrix.
 - `LeanRBMap` uses Lean's real runtime representation and reduced-arity
   container entry points for a narrow key matrix (`Nat`, `Int`, `String`,
-  and `Int8`–`Int64`).
+  `Int8`–`Int64`, and `UInt8`–`UInt64`).
 - runtime tests cover duplicate inserts, replacement semantics, string-key
-  support, fixed-width signed integer key support, and cross-family parity
-  for the supported paths.
+  support, fixed-width signed and unsigned integer key support, and
+  cross-family parity for the supported paths.
 
 ### Procedural Macros (`macros`)
 

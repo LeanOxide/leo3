@@ -7,7 +7,7 @@ use crate::instance::LeanBound;
 use crate::marker::Lean;
 use crate::types::{
     LeanInt, LeanInt16, LeanInt32, LeanInt64, LeanInt8, LeanList, LeanNat, LeanOption, LeanProd,
-    LeanString,
+    LeanString, LeanUInt16, LeanUInt32, LeanUInt64, LeanUInt8,
 };
 use std::ffi::c_void;
 use std::marker::PhantomData;
@@ -23,6 +23,25 @@ pub trait LeanHashKey {
     unsafe fn decidable_eq_boxed() -> *mut c_void;
     #[doc(hidden)]
     unsafe fn hash_closure() -> *mut ffi::lean_object;
+    #[doc(hidden)]
+    unsafe fn make_beq() -> *mut ffi::lean_object {
+        let dec_eq = ffi::inline::lean_alloc_closure(Self::decidable_eq_boxed(), 2, 0);
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            l_instBEqOfDecidableEq___redArg(dec_eq)
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let beq_of_decidable_eq: unsafe extern "C" fn(
+                *mut ffi::lean_object,
+            ) -> *mut ffi::lean_object = std::mem::transmute(super::symbols::required_function(
+                "l_instBEqOfDecidableEq___redArg",
+            ));
+            beq_of_decidable_eq(dec_eq)
+        }
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -34,6 +53,10 @@ unsafe extern "C" {
     static mut l_instHashableInt16: *mut ffi::lean_object;
     static mut l_instHashableInt32: *mut ffi::lean_object;
     static mut l_instHashableInt64: *mut ffi::lean_object;
+    static mut l_instHashableUInt8: *mut ffi::lean_object;
+    static mut l_instHashableUInt16: *mut ffi::lean_object;
+    static mut l_instHashableUInt32: *mut ffi::lean_object;
+    static mut l_instHashableUInt64: *mut ffi::lean_object;
 
     fn l_instDecidableEqNat___boxed(
         a: *mut ffi::lean_object,
@@ -60,6 +83,22 @@ unsafe extern "C" {
         b: *mut ffi::lean_object,
     ) -> *mut ffi::lean_object;
     fn l_instDecidableEqInt64___boxed(
+        a: *mut ffi::lean_object,
+        b: *mut ffi::lean_object,
+    ) -> *mut ffi::lean_object;
+    fn l_instDecidableEqUInt8___boxed(
+        a: *mut ffi::lean_object,
+        b: *mut ffi::lean_object,
+    ) -> *mut ffi::lean_object;
+    fn l_instDecidableEqUInt16___boxed(
+        a: *mut ffi::lean_object,
+        b: *mut ffi::lean_object,
+    ) -> *mut ffi::lean_object;
+    fn l_instDecidableEqUInt32___boxed(
+        a: *mut ffi::lean_object,
+        b: *mut ffi::lean_object,
+    ) -> *mut ffi::lean_object;
+    fn l_instDecidableEqUInt64___boxed(
         a: *mut ffi::lean_object,
         b: *mut ffi::lean_object,
     ) -> *mut ffi::lean_object;
@@ -144,25 +183,38 @@ impl_hash_key!(
     l_instHashableInt64,
     "l_instHashableInt64"
 );
+impl_hash_key!(
+    LeanUInt8,
+    l_instDecidableEqUInt8___boxed,
+    "l_instDecidableEqUInt8___boxed",
+    l_instHashableUInt8,
+    "l_instHashableUInt8"
+);
+impl_hash_key!(
+    LeanUInt16,
+    l_instDecidableEqUInt16___boxed,
+    "l_instDecidableEqUInt16___boxed",
+    l_instHashableUInt16,
+    "l_instHashableUInt16"
+);
+impl_hash_key!(
+    LeanUInt32,
+    l_instDecidableEqUInt32___boxed,
+    "l_instDecidableEqUInt32___boxed",
+    l_instHashableUInt32,
+    "l_instHashableUInt32"
+);
+impl_hash_key!(
+    LeanUInt64,
+    l_instDecidableEqUInt64___boxed,
+    "l_instDecidableEqUInt64___boxed",
+    l_instHashableUInt64,
+    "l_instHashableUInt64"
+);
 
 #[inline]
 pub(super) unsafe fn beq_closure<K: LeanHashKey>() -> *mut ffi::lean_object {
-    let dec_eq = ffi::inline::lean_alloc_closure(K::decidable_eq_boxed(), 2, 0);
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        l_instBEqOfDecidableEq___redArg(dec_eq)
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let beq_of_decidable_eq: unsafe extern "C" fn(
-            *mut ffi::lean_object,
-        ) -> *mut ffi::lean_object = std::mem::transmute(super::symbols::required_function(
-            "l_instBEqOfDecidableEq___redArg",
-        ));
-        beq_of_decidable_eq(dec_eq)
-    }
+    K::make_beq()
 }
 
 #[inline]

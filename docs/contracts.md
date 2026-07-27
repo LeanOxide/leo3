@@ -292,13 +292,14 @@ Current state:
   representations and operations
 - the supported key matrix is intentionally narrow and explicit:
   `LeanNat`, `LeanInt`, `LeanString`, `LeanInt8`, `LeanInt16`, `LeanInt32`,
-  and `LeanInt64`
-- fixed-width signed integers (`LeanInt8`–`LeanInt64`) use Lean's unboxed
-  scalar ABI representation, aligned with Lean's container typeclass instances
+  `LeanInt64`, `LeanUInt8`, `LeanUInt16`, `LeanUInt32`, and `LeanUInt64`
+- fixed-width signed integers (`LeanInt8`–`LeanInt64`) and unsigned integers
+  (`LeanUInt8`–`LeanUInt64`) use Lean's unboxed scalar ABI representation,
+  aligned with Lean's container typeclass instances
 - the surface requires Lean >= 4.22 (the `lean_4_22` cfg)
 - runtime tests cover duplicate inserts, replacement semantics, string-key
-  support, fixed-width signed integer key support, and cross-family parity for
-  the supported families
+  support, fixed-width signed and unsigned integer key support, and
+  cross-family parity for the supported families
 
 The contract is "real and stable for a narrow matrix". Widening the key matrix
 is future expansion, tracked in `docs/remaining-work-checklist.md`.

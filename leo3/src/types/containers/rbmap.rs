@@ -12,7 +12,7 @@ use crate::instance::LeanBound;
 use crate::marker::Lean;
 use crate::types::{
     LeanInt, LeanInt16, LeanInt32, LeanInt64, LeanInt8, LeanList, LeanNat, LeanOption, LeanProd,
-    LeanString,
+    LeanString, LeanUInt16, LeanUInt32, LeanUInt64, LeanUInt8,
 };
 use std::marker::PhantomData;
 
@@ -37,6 +37,10 @@ unsafe extern "C" {
     static mut l_Int16_instOrd: *mut ffi::lean_object;
     static mut l_Int32_instOrd: *mut ffi::lean_object;
     static mut l_Int64_instOrd: *mut ffi::lean_object;
+    static mut l_UInt8_instOrd: *mut ffi::lean_object;
+    static mut l_UInt16_instOrd: *mut ffi::lean_object;
+    static mut l_UInt32_instOrd: *mut ffi::lean_object;
+    static mut l_UInt64_instOrd: *mut ffi::lean_object;
 }
 
 macro_rules! impl_rbmap_key {
@@ -63,6 +67,10 @@ impl_rbmap_key!(LeanInt8, l_Int8_instOrd, "l_Int8_instOrd");
 impl_rbmap_key!(LeanInt16, l_Int16_instOrd, "l_Int16_instOrd");
 impl_rbmap_key!(LeanInt32, l_Int32_instOrd, "l_Int32_instOrd");
 impl_rbmap_key!(LeanInt64, l_Int64_instOrd, "l_Int64_instOrd");
+impl_rbmap_key!(LeanUInt8, l_UInt8_instOrd, "l_UInt8_instOrd");
+impl_rbmap_key!(LeanUInt16, l_UInt16_instOrd, "l_UInt16_instOrd");
+impl_rbmap_key!(LeanUInt32, l_UInt32_instOrd, "l_UInt32_instOrd");
+impl_rbmap_key!(LeanUInt64, l_UInt64_instOrd, "l_UInt64_instOrd");
 
 #[inline]
 unsafe fn owned_cmp<K: LeanRBMapKey>() -> *mut ffi::lean_object {

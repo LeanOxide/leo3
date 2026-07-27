@@ -153,9 +153,10 @@ Use `LEO3_NO_LEAN=1` whenever you want a compile-only path that should not depen
 - `leo3/tests/hash_containers_ops.rs`, `leo3/tests/hashset_nat_ops.rs`, `leo3/tests/hashset_string_ops.rs`: real Lean `HashMap` / `HashSet` runtime path, including string-key and duplicate-insert coverage.
 - `leo3/tests/rbmap_ops.rs`, `leo3/tests/rbmap_string_ops.rs`: real Lean `RBMap` runtime path, including string-key replacement coverage.
 - `leo3/tests/container_key_matrix_ops.rs`: runtime coverage for the non-string
-  supported key matrix beyond `Nat`, currently `Int`, across `HashMap`,
-  `HashSet`, and `RBMap`.
-- `leo3/tests/container_family_parity.rs`: cross-family parity checks for the supported string-key matrix.
+  supported key matrix beyond `Nat`, currently `Int`, `Int8`–`Int64`,
+  `UInt8`–`UInt64`, `Float`, and `Float32`, across `HashMap`, `HashSet`, and
+  `RBMap` (floats are hash-container keys only).
+- `leo3/tests/container_family_parity.rs`: cross-family parity checks for the supported string-key and integer-key matrix.
 - `leo3/tests/test_task_async.rs`, `leo3/tests/test_tokio_bridge.rs`: async/task/tokio runtime path.
 - `leo3/tests/test_lean*.rs`, `test_derive_macros.rs`, `test_conversion_macros.rs`: macro integration path.
 - `leo3/tests/test_binding_metadata.rs`: no-Lean structured metadata contract for `#[leanfn]`, `#[leanmodule]`, and `#[leanclass]`.

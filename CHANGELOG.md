@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Container key matrix extended with fixed-width signed integers
   (`LeanInt8`/`LeanInt16`/`LeanInt32`/`LeanInt64`) across HashMap, HashSet,
   and RBMap families
+- Container key matrix extended with fixed-width unsigned integers
+  (`LeanUInt8`/`LeanUInt16`/`LeanUInt32`/`LeanUInt64`) across HashMap, HashSet,
+  and RBMap families
 - 4 new examples: task/async, external objects, containers, module loading
 - `MetaMContext::from_parts` and `MetaMContext::into_parts` for FFI consumers
 - Borrowed parameter support in `#[leanfn]`
