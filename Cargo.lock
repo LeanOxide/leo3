@@ -370,12 +370,24 @@ version = "0.2.2"
 dependencies = [
  "proc-macro2",
  "quote",
+ "serde",
+ "serde_json",
  "syn",
 ]
 
 [[package]]
 name = "leo3-build-config"
 version = "0.2.2"
+
+[[package]]
+name = "leo3-codegen"
+version = "0.2.2"
+dependencies = [
+ "leo3-binding-ir",
+ "libloading",
+ "object",
+ "serde_json",
+]
 
 [[package]]
 name = "leo3-ffi"
@@ -437,6 +449,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "object"
+version = "0.36.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62948e14d923ea95ea2c7c86c71013138b66525b86bdc08d2dcc262bdb497b87"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

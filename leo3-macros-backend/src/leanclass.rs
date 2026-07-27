@@ -8,8 +8,9 @@
 //! `.lean` files.
 
 use leo3_binding_ir::{
-    analyze_lean_class_impl, analyze_lean_class_struct, quote_runtime_class_metadata,
-    quote_runtime_function_metadata, ClassImplBinding, ClassTypeBinding, FunctionBinding,
+    analyze_lean_class_impl, analyze_lean_class_struct, class_binding_to_json,
+    quote_runtime_class_metadata, quote_runtime_function_metadata, ClassImplBinding,
+    ClassTypeBinding, FunctionBinding,
 };
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -793,6 +794,17 @@ fn generate_lean_code_metadata_for_methods(
     let lean_code = &impl_binding.methods_decl;
     let class_metadata = quote_runtime_class_metadata(class_binding, impl_binding, leo3_crate);
     let class_metadata_fn = format_ident!("__leo3_class_metadata_{}", class_binding.rust_name);
+    let json_symbol_name = format_ident!(
+        "__leo3_class_metadata_json_{}",
+        class_binding.rust_name
+    );
+    let json_str = class_binding_to_json(class_binding, impl_binding);
+    let json_bytes = json_str.as_bytes();
+    let json_len = json_bytes.len() + 1;
+    let byte_literals: Vec<proc_macro2::Literal> = json_bytes
+        .iter()
+        .map(|&b| proc_macro2::Literal::u8_suffixed(b))
+        .collect();
 
     Ok(quote! {
         pub const #const_name: &str = #lean_code;
@@ -801,6 +813,11 @@ fn generate_lean_code_metadata_for_methods(
         pub fn #class_metadata_fn() -> #leo3_crate::LeanClassMetadata {
             #class_metadata
         }
+
+        #[doc(hidden)]
+        #[no_mangle]
+        #[used]
+        pub static #json_symbol_name: [u8; #json_len] = [#(#byte_literals),*, 0u8];
     })
 }
 

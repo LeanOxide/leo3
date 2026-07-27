@@ -1,0 +1,21 @@
+[package]
+name = "leo3-codegen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI tool to generate Lean 4 extern declarations from Leo3 cdylib metadata"
+keywords = ["lean", "lean4", "codegen", "bindings"]
+categories = ["development-tools::ffi"]
+
+[[bin]]
+name = "leo3-codegen"
+path = "src/main.rs"
+
+[dependencies]
+leo3-binding-ir = { workspace = true }
+libloading = { workspace = true }
+object = { version = "0.36", default-features = false, features = ["read_core", "elf", "macho", "pe"] }
+serde_json = { workspace = true }
