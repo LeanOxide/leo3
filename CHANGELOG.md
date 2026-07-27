@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Declarative module registration metadata (schema v2): `exports = [...]`
+  option for `#[leanmodule]`, dotted nested module paths (e.g. `Foo.Bar.baz`),
+  and inner `mod` blocks with `#[leanfn]` discovered as nested submodules
+- Container key matrix extended with fixed-width signed integers
+  (`LeanInt8`/`LeanInt16`/`LeanInt32`/`LeanInt64`) across HashMap, HashSet,
+  and RBMap families
+- 4 new examples: task/async, external objects, containers, module loading
+- `MetaMContext::from_parts` and `MetaMContext::into_parts` for FFI consumers
+- Borrowed parameter support in `#[leanfn]`
+- Shared Leo3 binding metadata model (`leo3-binding-ir`)
+
+### Changed
+
+- Containers stabilized: `experimental-containers` feature gate removed;
+  `LeanHashMap`, `LeanHashSet`, and `LeanRBMap` are now part of the stable
+  default surface on Lean >= 4.22
+- `leo3-binding-ir` refactored: `lib.rs` split into `model`, `analysis`, and
+  `quoting` modules
+- `apply3`–`apply8` boilerplate replaced with macro generation
+- Performance: pre-allocation in `flatten()`, closure `apply_once` variants,
+  benchmarks enabled
+
+### Fixed
+
+- CI fmt and clippy errors
+
+### Breaking Changes
+
+- `experimental-containers` feature removed — containers are now always
+  available by default. Users who explicitly enabled the feature can remove
+  it from their `Cargo.toml`.
+- Binding metadata schema bumped from v1 to v2 (`LeanSubmoduleMetadata`
+  added). Consumers of the binding IR schema must update to handle the new
+  structure.
+
 ## [0.2.2] - 2025-07-01
 
 ### Added
@@ -169,6 +208,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI, release, and security workflows
 - Pre-commit configuration
 
+[Unreleased]: https://github.com/AndPuQing/leo3/compare/v0.2.2...HEAD
 [0.2.2]: https://github.com/AndPuQing/leo3/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/AndPuQing/leo3/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/AndPuQing/leo3/compare/v0.1.6...v0.2.0
