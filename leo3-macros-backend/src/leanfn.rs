@@ -55,9 +55,9 @@ impl Parse for ConcreteArgsParser {
 
 fn parse_concrete_meta(list: &syn::MetaList) -> syn::Result<ConcreteInstance> {
     let args: ConcreteArgsParser = list.parse_args()?;
-    let name = args.name.ok_or_else(|| {
-        syn::Error::new_spanned(list, "`concrete` requires `name = \"...\"`")
-    })?;
+    let name = args
+        .name
+        .ok_or_else(|| syn::Error::new_spanned(list, "`concrete` requires `name = \"...\"`"))?;
     if args.types.is_empty() {
         return Err(syn::Error::new_spanned(
             list,
@@ -700,8 +700,7 @@ fn build_lean_function_concrete(
         let turbofish = quote! { <#(#turbofish_types),*> };
 
         let ffi_wrapper = generate_ffi_wrapper(&info, leo3_crate);
-        let conversion_wrapper =
-            generate_conversion_wrapper(&info, leo3_crate, Some(&turbofish));
+        let conversion_wrapper = generate_conversion_wrapper(&info, leo3_crate, Some(&turbofish));
         let metadata = generate_metadata(&binding, leo3_crate);
 
         let internal_ffi_name = format_ident!("__ffi_{}", &concrete.name);

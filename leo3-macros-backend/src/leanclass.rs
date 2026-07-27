@@ -794,10 +794,7 @@ fn generate_lean_code_metadata_for_methods(
     let lean_code = &impl_binding.methods_decl;
     let class_metadata = quote_runtime_class_metadata(class_binding, impl_binding, leo3_crate);
     let class_metadata_fn = format_ident!("__leo3_class_metadata_{}", class_binding.rust_name);
-    let json_symbol_name = format_ident!(
-        "__leo3_class_metadata_json_{}",
-        class_binding.rust_name
-    );
+    let json_symbol_name = format_ident!("__leo3_class_metadata_json_{}", class_binding.rust_name);
     let json_str = class_binding_to_json(class_binding, impl_binding);
     let json_bytes = json_str.as_bytes();
     let json_len = json_bytes.len() + 1;
