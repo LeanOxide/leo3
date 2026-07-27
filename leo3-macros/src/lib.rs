@@ -301,7 +301,10 @@ pub fn leanmodule(attr: TokenStream, input: TokenStream) -> TokenStream {
 
     let json_str = module_binding_to_json(&module_binding);
     let json_symbol_name = syn::Ident::new(
-        &format!("__leo3_module_metadata_json_{}", module_name.replace('.', "_")),
+        &format!(
+            "__leo3_module_metadata_json_{}",
+            module_name.replace('.', "_")
+        ),
         proc_macro2::Span::call_site(),
     );
     let json_bytes = json_str.as_bytes();

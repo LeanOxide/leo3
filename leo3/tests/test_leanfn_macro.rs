@@ -846,7 +846,10 @@ fn test_leanfn_try_wrapper_reports_conversion_errors() {
 }
 
 // Generic function exposed to Lean through the monomorphization subset.
-#[leanfn(concrete(u64, name = "mono_add_u64"), concrete(i64, name = "mono_add_i64"))]
+#[leanfn(
+    concrete(u64, name = "mono_add_u64"),
+    concrete(i64, name = "mono_add_i64")
+)]
 fn mono_add<T: std::ops::Add<Output = T>>(a: T, b: T) -> T {
     a + b
 }
