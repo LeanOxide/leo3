@@ -44,9 +44,9 @@ impl Parse for ConcreteArgsParser {
 
 fn parse_concrete_meta(list: &syn::MetaList) -> syn::Result<ConcreteAttr> {
     let args: ConcreteArgsParser = list.parse_args()?;
-    let name = args.name.ok_or_else(|| {
-        syn::Error::new_spanned(list, "`concrete` requires `name = \"...\"`")
-    })?;
+    let name = args
+        .name
+        .ok_or_else(|| syn::Error::new_spanned(list, "`concrete` requires `name = \"...\"`"))?;
     if args.types.is_empty() {
         return Err(syn::Error::new_spanned(
             list,
