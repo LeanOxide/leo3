@@ -320,9 +320,9 @@ fn test_dotted_module_name() {
 }
 
 #[test]
-fn test_schema_version_is_v2() {
-    assert_eq!(leo3::LEO3_BINDING_SCHEMA_VERSION, 2);
+fn test_schema_version_is_v3() {
+    assert_eq!(leo3::LEO3_BINDING_SCHEMA_VERSION, 3);
 
     let metadata = function_module::__leo3_module_metadata();
-    assert_eq!(metadata.schema_version, 2);
+    assert_eq!(metadata.schema_version, 3);
 }

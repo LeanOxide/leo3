@@ -153,6 +153,10 @@ pub fn build_lean_class_impl(
     let lean_code_gen =
         generate_lean_code_metadata_for_methods(&class_binding, &impl_binding, &leo3_crate)?;
 
+    // Strip the helper `#[getter]` / `#[setter]` attributes so the compiler
+    // does not reject them as unknown attributes in the emitted impl block.
+    strip_accessor_attrs(item);
+
     // Keep original impl
     let original_impl = quote! { #item };
 
@@ -803,6 +807,19 @@ fn generate_lean_code_metadata_for_methods(
 /// Check if a type is unit ()
 fn is_unit_type(ty: &syn::Type) -> bool {
     matches!(ty, syn::Type::Tuple(t) if t.elems.is_empty())
+}
+
+/// Remove the helper `#[getter]` / `#[setter]` attributes from methods in an
+/// impl block so they are not emitted into the expanded output (where the
+/// compiler would reject them as unknown attributes).
+fn strip_accessor_attrs(item: &mut syn::ItemImpl) {
+    for impl_item in &mut item.items {
+        if let syn::ImplItem::Fn(method) = impl_item {
+            method
+                .attrs
+                .retain(|attr| !attr.path().is_ident("getter") && !attr.path().is_ident("setter"));
+        }
+    }
 }
 
 /// Check if return type is Self

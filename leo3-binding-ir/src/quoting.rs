@@ -18,6 +18,7 @@ pub fn quote_runtime_function_metadata(
         .map(|param| quote_runtime_parameter_metadata(param, leo3_crate));
     let return_type = quote_runtime_type_metadata(&binding.return_type, leo3_crate);
     let semantics = quote_semantics(binding.semantics, leo3_crate);
+    let kind = quote_binding_kind(binding.kind, leo3_crate);
     let lean_decl = quote_opt_str(binding.lean_decl.as_deref());
 
     quote! {
@@ -31,6 +32,7 @@ pub fn quote_runtime_function_metadata(
             params: &[#(#params),*],
             return_type: #return_type,
             semantics: #semantics,
+            kind: #kind,
             lean_decl: #lean_decl,
         }
     }
@@ -168,6 +170,14 @@ fn quote_semantics(semantics: BindingSemantics, leo3_crate: &TokenStream) -> Tok
         BindingSemantics::MutatesSelfWithValue => {
             quote! { #leo3_crate::LeanBindingSemantics::MutatesSelfWithValue }
         }
+    }
+}
+
+fn quote_binding_kind(kind: BindingKind, leo3_crate: &TokenStream) -> TokenStream {
+    match kind {
+        BindingKind::Method => quote! { #leo3_crate::LeanBindingKind::Method },
+        BindingKind::Getter => quote! { #leo3_crate::LeanBindingKind::Getter },
+        BindingKind::Setter => quote! { #leo3_crate::LeanBindingKind::Setter },
     }
 }
 

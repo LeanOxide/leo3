@@ -1,0 +1,8 @@
+error: #[setter] methods must take &mut self
+  --> tests/ui/leanclass_setter_wrong_receiver.rs:7:5
+   |
+ 7 | /     #[setter]
+ 8 | |     fn set_value(&self, value: i32) {
+ 9 | |         let _ = value;
+10 | |     }
+   | |_____^

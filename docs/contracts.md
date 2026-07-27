@@ -118,6 +118,9 @@ Current schema rules:
   can state the Lean-visible type exactly, and absent instead of guessing
 - no consumer is expected to reconstruct `&mut self` / `Prod Self R` semantics
   from strings; that behavior is explicit in metadata
+- class method metadata records the accessor `kind` (`Method`, `Getter`, or
+  `Setter`) so consumers can recognize property-style accessors without
+  re-parsing source attributes
 
 Shared-library loading:
 
@@ -151,6 +154,37 @@ Formal rules:
   conversion path for external objects
 - generated Lean declarations describe runtime behavior literally; the
   mutation-preserving `Prod Self R` form is part of the contract
+
+### `#[leanclass]` property accessors
+
+Methods inside a `#[leanclass]` impl block may be annotated with `#[getter]` or
+`#[setter]` to mark them as property accessors. This is a metadata-level
+distinction: the generated FFI wrappers and Lean declarations reuse the existing
+`&self` / `&mut self` receiver machinery, and the accessor kind is recorded in
+the structured binding metadata (`LeanBindingKind`) so downstream tooling can
+recognize property-style access.
+
+| Annotation | Required signature | Lean-visible type | Recorded kind |
+| --- | --- | --- | --- |
+| `#[getter]` | `fn name(&self) -> T` | `Self -> T` | `Getter` |
+| `#[setter]` | `fn name(&mut self, value: T)` | `Self -> T -> Self` | `Setter` |
+
+Validation rules (enforced at compile time):
+
+- `#[getter]` and `#[setter]` are mutually exclusive on a single method
+- `#[getter]` requires an `&self` receiver, no additional parameters, and a
+  non-unit return type
+- `#[setter]` requires an `&mut self` receiver, exactly one parameter, and a
+  `()` return type (the copy-on-write updated object is returned to Lean)
+- regular methods are recorded with kind `Method`
+
+The compile-fail matrix for invalid accessor definitions lives in:
+
+- `leo3/tests/ui/leanclass_getter_wrong_receiver.rs`
+- `leo3/tests/ui/leanclass_getter_extra_params.rs`
+- `leo3/tests/ui/leanclass_setter_wrong_receiver.rs`
+- `leo3/tests/ui/leanclass_setter_wrong_params.rs`
+- `leo3/tests/ui/leanclass_getter_and_setter.rs`
 
 ### Built-in conversion matrix
 
