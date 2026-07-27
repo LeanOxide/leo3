@@ -93,6 +93,37 @@ cargo llvm-cov --no-report --doc
 cargo llvm-cov report --doctests --lcov --output-path lcov.info
 ```
 
+## Benchmarks
+
+Criterion benchmarks live in `leo3/benches/`. They require a linked Lean runtime
+(no `LEO3_NO_LEAN=1`), and the container/macro suites need the matching
+features enabled.
+
+| Bench file | Covers | Required features |
+| --- | --- | --- |
+| `array_conversion` | `Vec<T>` ↔ `LeanArray`, `Vec<u8>` bulk, `ArrayBuilder` | (none) |
+| `int_ops_small` | small-int scalar fast path | (none) |
+| `int_ops_big` | big-int slow path | (none) |
+| `container_ops` | `HashMap`/`HashSet`/`RBMap` insert/lookup/remove | `runtime-tests` |
+| `string_conversion` | Rust `String`/`&str` ↔ `LeanString` | (none) |
+| `macro_wrapper_overhead` | `#[leanfn]` wrapper vs manual FFI | `macros` |
+
+Run the full suite:
+
+```bash
+cargo bench --locked -p leo3 --features "macros,runtime-tests"
+```
+
+Run a single benchmark:
+
+```bash
+cargo bench --locked -p leo3 --features "macros,runtime-tests" --bench container_ops
+```
+
+Add `-- --quick` for a faster (less statistically rigorous) pass, which is what
+CI uses. Benchmarks run on pushes to `main`/`develop` via the `Bench / Criterion
+Suite` CI job; they are not part of the per-PR required tiers.
+
 ## UI Snapshot Updates
 
 `macro-ui` runs the `trybuild` compile-fail suite in `leo3/tests/ui` explicitly.

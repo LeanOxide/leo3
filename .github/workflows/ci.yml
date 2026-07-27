@@ -371,6 +371,17 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: ${{ github.event_name == 'pull_request' && 'pr' || 'main' }}
 
+  bench:
+    name: Bench / Criterion Suite
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/test.yml
+    with:
+      os: ubuntu-latest
+      lean: stable
+      save-cache: ${{ github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'CI-save-pr-cache') }}
+      suite: Bench / Criterion Suite
+      command: cargo bench --locked -p leo3 --features "macros,runtime-tests" --bench array_conversion --bench int_ops_small --bench int_ops_big --bench container_ops --bench string_conversion --bench macro_wrapper_overhead -- --quick
+
   conclusion:
     name: CI Conclusion
     if: always()
@@ -387,6 +398,7 @@ jobs:
       - runtime-async
       - macro-runtime
       - ffi-check
+      - bench
       - compat-feature-powerset
       - compat-runtime-matrix
       - heavy-careful
