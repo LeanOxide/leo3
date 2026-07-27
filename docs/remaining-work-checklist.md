@@ -137,6 +137,10 @@ What is intentionally not treated as open work right now:
 - trait-level `FromLean` remains clone-based
 - borrow-first extraction remains a wrapper-level API, not a trait-level one
 
+Design record: `docs/external-object-borrow-extraction.md` evaluates a
+trait-level `FromLeanBorrowed` and concludes the wrapper-layer API is
+sufficient.
+
 Re-open this item only if Leo3 deliberately changes the extraction contract.
 
 ### Architecture and contributor docs
@@ -159,7 +163,10 @@ gap.
 - richer module-registration metadata beyond today's implicit inline
   `#[leanfn]` export set
 - a broader external-object extraction contract, if Leo3 ever decides to widen
-  beyond the current clone-based `FromLean` rule
+  beyond the current clone-based `FromLean` rule (see
+  `docs/external-object-borrow-extraction.md`)
+- `#[leanfn]` monomorphization generics subset (`concrete(Ty, name = "...")`
+  annotation); general generics are not feasible — see `docs/rfc-generics.md`
 - widening the container key matrix beyond the current narrow set
   (`LeanNat`, `LeanInt`, `LeanString`, `LeanInt8`–`LeanInt64`)
 
