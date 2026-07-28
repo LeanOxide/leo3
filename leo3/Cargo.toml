@@ -45,6 +45,20 @@ harness = false
 name = "int_ops_big"
 harness = false
 
+[[bench]]
+name = "container_ops"
+harness = false
+required-features = ["runtime-tests"]
+
+[[bench]]
+name = "string_conversion"
+harness = false
+
+[[bench]]
+name = "macro_wrapper_overhead"
+harness = false
+required-features = ["macros"]
+
 [[example]]
 name = "io_monad"
 required-features = ["io"]
