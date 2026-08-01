@@ -15,8 +15,13 @@ use super::*;
 // Environment Creation and Management
 // ============================================================================
 
+// The `lean_mk_empty_environment` C export was removed in Lean 4.33
+// (leanprover/lean4#14306). The Lean-compiled `mkEmptyEnvironment` function
+// still exists as `l_Lean_mkEmptyEnvironment` with an identical ABI, so we
+// dispatch on the version cfg.
+#[cfg(not(lean_4_33))]
 extern "C" {
-    /// Create an empty environment with the specified trust level
+    /// Create an empty environment with the specified trust level (Lean < 4.33)
     ///
     /// Trust level controls type checking:
     /// - 0: Full type checking (safest)
@@ -26,7 +31,49 @@ extern "C" {
     ///
     /// # Safety
     /// Must be called after lean runtime initialization
-    pub fn lean_mk_empty_environment(trust_level: u32, world: lean_obj_arg) -> lean_obj_res;
+    #[link_name = "lean_mk_empty_environment"]
+    fn lean_mk_empty_environment_old(trust_level: u32, world: lean_obj_arg) -> lean_obj_res;
+}
+
+#[cfg(lean_4_33)]
+extern "C" {
+    /// Create an empty environment with the specified trust level (Lean >= 4.33)
+    ///
+    /// Trust level controls type checking:
+    /// - 0: Full type checking (safest)
+    /// - Higher values: Skip certain type checking operations (faster, less safe)
+    ///
+    /// Returns: `IO Environment` (requires IO execution to extract the environment)
+    ///
+    /// # Safety
+    /// Must be called after lean runtime initialization
+    #[link_name = "l_Lean_mkEmptyEnvironment"]
+    fn lean_mk_empty_environment_new(trust_level: u32, world: lean_obj_arg) -> lean_obj_res;
+}
+
+/// Create an empty environment with the specified trust level
+///
+/// Trust level controls type checking:
+/// - 0: Full type checking (safest)
+/// - Higher values: Skip certain type checking operations (faster, less safe)
+///
+/// Returns: `IO Environment` (requires IO execution to extract the environment)
+///
+/// Lean 4.33 removed the `lean_mk_empty_environment` export; the Lean-compiled
+/// `l_Lean_mkEmptyEnvironment` symbol is used instead with an identical ABI.
+///
+/// # Safety
+/// Must be called after lean runtime initialization
+#[inline]
+pub unsafe fn lean_mk_empty_environment(trust_level: u32, world: lean_obj_arg) -> lean_obj_res {
+    #[cfg(not(lean_4_33))]
+    {
+        lean_mk_empty_environment_old(trust_level, world)
+    }
+    #[cfg(lean_4_33)]
+    {
+        lean_mk_empty_environment_new(trust_level, world)
+    }
 }
 
 // ============================================================================
@@ -60,8 +107,11 @@ extern "C" {
 // Environment Modifications (Immutable Updates)
 // ============================================================================
 
+// `lean_add_decl` and `lean_elab_add_decl` gained a `maxRecDepth` argument in
+// Lean 4.33 (leanprover/lean4#13956); we dispatch on the version cfg.
+#[cfg(not(lean_4_33))]
 extern "C" {
-    /// Add a declaration to the kernel environment with type checking
+    /// Add a declaration to the kernel environment with type checking (Lean < 4.33)
     ///
     /// **Note**: This operates on `Lean.Kernel.Environment`, not `Lean.Environment`.
     /// For the elaborator environment (created by `lean_mk_empty_environment`),
@@ -75,13 +125,151 @@ extern "C" {
     ///
     /// # Returns
     /// `Except Kernel.Exception Kernel.Environment`
-    pub fn lean_add_decl(
+    #[link_name = "lean_add_decl"]
+    fn lean_add_decl_old(
         env: lean_obj_arg,
         max_heartbeat: usize,
         decl: lean_obj_arg,
         cancel_token: lean_obj_arg,
     ) -> lean_obj_res;
 
+    /// Add a declaration to the elaborator environment with type checking (Lean < 4.33)
+    ///
+    /// This operates on `Lean.Environment` (created by `lean_mk_empty_environment`).
+    ///
+    /// # Parameters
+    /// - `env`: Environment object (consumed)
+    /// - `max_heartbeat`: Maximum heartbeats for type checking (0 = unlimited)
+    /// - `decl`: Declaration object (borrowed @&)
+    /// - `cancel_token`: Optional IO.CancelToken for cancellation (borrowed @&)
+    ///
+    /// # Returns
+    /// `Except Kernel.Exception Environment`
+    #[link_name = "lean_elab_add_decl"]
+    fn lean_elab_add_decl_old(
+        env: lean_obj_arg,
+        max_heartbeat: usize,
+        decl: lean_obj_arg,
+        cancel_token: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+#[cfg(lean_4_33)]
+extern "C" {
+    /// Add a declaration to the kernel environment with type checking (Lean >= 4.33)
+    ///
+    /// **Note**: This operates on `Lean.Kernel.Environment`, not `Lean.Environment`.
+    /// For the elaborator environment (created by `lean_mk_empty_environment`),
+    /// use `lean_elab_add_decl` instead.
+    ///
+    /// # Parameters
+    /// - `env`: Kernel.Environment object (consumed)
+    /// - `max_heartbeat`: Maximum heartbeats for type checking (0 = unlimited)
+    /// - `max_rec_depth`: Maximum kernel recursion depth (0 = unlimited)
+    /// - `decl`: Declaration object (borrowed @&)
+    /// - `cancel_token`: Optional IO.CancelToken for cancellation (borrowed @&)
+    ///
+    /// # Returns
+    /// `Except Kernel.Exception Kernel.Environment`
+    #[link_name = "lean_add_decl"]
+    fn lean_add_decl_new(
+        env: lean_obj_arg,
+        max_heartbeat: usize,
+        max_rec_depth: usize,
+        decl: lean_obj_arg,
+        cancel_token: lean_obj_arg,
+    ) -> lean_obj_res;
+
+    /// Add a declaration to the elaborator environment with type checking (Lean >= 4.33)
+    ///
+    /// This operates on `Lean.Environment` (created by `lean_mk_empty_environment`).
+    ///
+    /// # Parameters
+    /// - `env`: Environment object (consumed)
+    /// - `max_heartbeat`: Maximum heartbeats for type checking (0 = unlimited)
+    /// - `max_rec_depth`: Maximum kernel recursion depth (0 = unlimited)
+    /// - `decl`: Declaration object (borrowed @&)
+    /// - `cancel_token`: Optional IO.CancelToken for cancellation (borrowed @&)
+    ///
+    /// # Returns
+    /// `Except Kernel.Exception Environment`
+    #[link_name = "lean_elab_add_decl"]
+    fn lean_elab_add_decl_new(
+        env: lean_obj_arg,
+        max_heartbeat: usize,
+        max_rec_depth: usize,
+        decl: lean_obj_arg,
+        cancel_token: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+/// Add a declaration to the kernel environment with type checking
+///
+/// **Note**: This operates on `Lean.Kernel.Environment`, not `Lean.Environment`.
+/// For the elaborator environment (created by `lean_mk_empty_environment`),
+/// use `lean_elab_add_decl` instead.
+///
+/// # Parameters
+/// - `env`: Kernel.Environment object (consumed)
+/// - `max_heartbeat`: Maximum heartbeats for type checking (0 = unlimited)
+/// - `decl`: Declaration object (borrowed @&)
+/// - `cancel_token`: Optional IO.CancelToken for cancellation (borrowed @&)
+///
+/// # Returns
+/// `Except Kernel.Exception Kernel.Environment`
+///
+/// Lean 4.33 added a `maxRecDepth` argument; `0` (unlimited) preserves the
+/// pre-4.33 behavior.
+#[inline]
+pub unsafe fn lean_add_decl(
+    env: lean_obj_arg,
+    max_heartbeat: usize,
+    decl: lean_obj_arg,
+    cancel_token: lean_obj_arg,
+) -> lean_obj_res {
+    #[cfg(not(lean_4_33))]
+    {
+        lean_add_decl_old(env, max_heartbeat, decl, cancel_token)
+    }
+    #[cfg(lean_4_33)]
+    {
+        lean_add_decl_new(env, max_heartbeat, 0, decl, cancel_token)
+    }
+}
+
+/// Add a declaration to the elaborator environment with type checking
+///
+/// This operates on `Lean.Environment` (created by `lean_mk_empty_environment`).
+///
+/// # Parameters
+/// - `env`: Environment object (consumed)
+/// - `max_heartbeat`: Maximum heartbeats for type checking (0 = unlimited)
+/// - `decl`: Declaration object (borrowed @&)
+/// - `cancel_token`: Optional IO.CancelToken for cancellation (borrowed @&)
+///
+/// # Returns
+/// `Except Kernel.Exception Environment`
+///
+/// Lean 4.33 added a `maxRecDepth` argument; `0` (unlimited) preserves the
+/// pre-4.33 behavior.
+#[inline]
+pub unsafe fn lean_elab_add_decl(
+    env: lean_obj_arg,
+    max_heartbeat: usize,
+    decl: lean_obj_arg,
+    cancel_token: lean_obj_arg,
+) -> lean_obj_res {
+    #[cfg(not(lean_4_33))]
+    {
+        lean_elab_add_decl_old(env, max_heartbeat, decl, cancel_token)
+    }
+    #[cfg(lean_4_33)]
+    {
+        lean_elab_add_decl_new(env, max_heartbeat, 0, decl, cancel_token)
+    }
+}
+
+extern "C" {
     /// Add a declaration to the kernel environment without type checking
     ///
     /// **Note**: This operates on `Lean.Kernel.Environment`, not `Lean.Environment`.
@@ -94,25 +282,6 @@ extern "C" {
     /// # Returns
     /// `Except Kernel.Exception Kernel.Environment`
     pub fn lean_add_decl_without_checking(env: lean_obj_arg, decl: lean_obj_arg) -> lean_obj_res;
-
-    /// Add a declaration to the elaborator environment with type checking
-    ///
-    /// This operates on `Lean.Environment` (created by `lean_mk_empty_environment`).
-    ///
-    /// # Parameters
-    /// - `env`: Environment object (consumed)
-    /// - `max_heartbeat`: Maximum heartbeats for type checking (0 = unlimited)
-    /// - `decl`: Declaration object (borrowed @&)
-    /// - `cancel_token`: Optional IO.CancelToken for cancellation (borrowed @&)
-    ///
-    /// # Returns
-    /// `Except Kernel.Exception Environment`
-    pub fn lean_elab_add_decl(
-        env: lean_obj_arg,
-        max_heartbeat: usize,
-        decl: lean_obj_arg,
-        cancel_token: lean_obj_arg,
-    ) -> lean_obj_res;
 
     /// Add a declaration to the elaborator environment without type checking
     ///

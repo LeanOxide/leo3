@@ -302,7 +302,7 @@ leo3/
 - `#[repr(transparent)]` zero-cost wrappers
 - Copy-on-write semantics for `&mut self` FFI methods
 - Worker thread architecture for all Lean runtime calls (avoids mimalloc heap issues)
-- Version support: Lean 4.20.0–4.30 with `#[cfg(lean_4_25)]` gates
+- Version support: Lean 4.20.0–4.33+ with `#[cfg(lean_4_25)]` gates
 
 ### Comparison with PyO3
 

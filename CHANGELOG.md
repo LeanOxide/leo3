@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Lean 4.33+ compat: `lean_mk_empty_environment` export was removed; bind the
+  Lean-compiled `l_Lean_mkEmptyEnvironment` symbol instead (leanprover/lean4#14306)
+- Lean 4.33+ compat: `lean_add_decl`/`lean_elab_add_decl` gained a `maxRecDepth`
+  argument; pass `0` (unlimited) to preserve prior behavior (leanprover/lean4#13956)
+
 ## [0.3.0] - 2026-07-27
 
 ### Added
