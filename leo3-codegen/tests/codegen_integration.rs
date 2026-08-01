@@ -117,3 +117,52 @@ fn codegen_generates_module_and_class_lean_files() {
 
     let _ = std::fs::remove_dir_all(&output_dir);
 }
+
+/// Regression test for the macOS-only failure where the linker does not surface
+/// the `#[no_mangle] #[used]` metadata symbols in a dylib's symbol table.
+///
+/// The macros also embed a self-describing framed copy of each metadata entry
+/// into a dedicated link section. This test verifies that `leo3-codegen` can
+/// recover the metadata purely from that section (no symbol table), which is the
+/// fallback path macOS relies on. It runs on every platform, so a regression in
+/// the framing/section layout is caught even though Linux itself uses symbols.
+#[test]
+fn metadata_is_recoverable_from_dedicated_section() {
+    use object::{Object, ObjectSection};
+
+    let dylib = build_fixture();
+    let data = std::fs::read(&dylib).expect("should read built fixture");
+    let obj = object::File::parse(data.as_slice()).expect("should parse object file");
+
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for section in obj.sections() {
+        let name = section.name().unwrap_or("");
+        if !name.contains(leo3_binding_ir::METADATA_SECTION_MARKER) {
+            continue;
+        }
+        if let Ok(section_data) = section.data() {
+            entries.extend(leo3_binding_ir::parse_metadata_entries(section_data));
+        }
+    }
+
+    let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(
+        names.contains(&"__leo3_module_metadata_json_FixtureModule"),
+        "expected module metadata entry in section, got: {names:?}"
+    );
+    assert!(
+        names.contains(&"__leo3_class_metadata_json_FixtureCounter"),
+        "expected class metadata entry in section, got: {names:?}"
+    );
+
+    // Each recovered JSON payload must deserialize into its IR type.
+    for (name, json) in &entries {
+        if name.starts_with("__leo3_module_metadata_json_") {
+            let _: leo3_binding_ir::ModuleBinding =
+                serde_json::from_str(json).expect("module metadata JSON should parse");
+        } else if name.starts_with("__leo3_class_metadata_json_") {
+            let _: leo3_binding_ir::ClassMetadata =
+                serde_json::from_str(json).expect("class metadata JSON should parse");
+        }
+    }
+}

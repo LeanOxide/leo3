@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `leo3-codegen` on macOS: the Mach-O linker does not surface the unreferenced
+  `#[no_mangle] #[used]` metadata symbols in a dylib's symbol table, so codegen
+  failed with "no leo3 metadata symbols found in library". The macros now also
+  embed each metadata entry (framed with a magic marker and explicit lengths)
+  into a dedicated `__leo3_meta` link section, and `leo3-codegen` scans that
+  section as a cross-platform fallback, merging the result with any symbols it
+  finds. Linux behavior is unchanged (symbols still used); fixes the
+  `compat-runtime-matrix` macOS failures (W-138)
 - Lean 4.33+ compat: `lean_mk_empty_environment` export was removed; bind the
   Lean-compiled `l_Lean_mkEmptyEnvironment` symbol instead (leanprover/lean4#14306)
 - Lean 4.33+ compat: `lean_add_decl`/`lean_elab_add_decl` gained a `maxRecDepth`

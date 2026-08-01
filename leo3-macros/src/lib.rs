@@ -300,19 +300,33 @@ pub fn leanmodule(attr: TokenStream, input: TokenStream) -> TokenStream {
     }
 
     let json_str = module_binding_to_json(&module_binding);
-    let json_symbol_name = syn::Ident::new(
-        &format!(
-            "__leo3_module_metadata_json_{}",
-            module_name.replace('.', "_")
-        ),
-        proc_macro2::Span::call_site(),
+    let json_symbol_name_str = format!(
+        "__leo3_module_metadata_json_{}",
+        module_name.replace('.', "_")
     );
+    let json_symbol_name = syn::Ident::new(&json_symbol_name_str, proc_macro2::Span::call_site());
     let json_bytes = json_str.as_bytes();
     let json_len = json_bytes.len() + 1;
     let byte_literals: Vec<proc_macro2::Literal> = json_bytes
         .iter()
         .map(|&b| proc_macro2::Literal::u8_suffixed(b))
         .collect();
+
+    // Cross-platform fallback: also embed the metadata into a dedicated link
+    // section so `leo3-codegen` can recover it even when the linker does not
+    // surface the `#[no_mangle]` symbol (notably macOS Mach-O dylibs).
+    let section_static_ident = syn::Ident::new(
+        &format!(
+            "__leo3_module_metadata_section_{}",
+            module_name.replace('.', "_")
+        ),
+        proc_macro2::Span::call_site(),
+    );
+    let section_static = leo3_binding_ir::quote_metadata_section_static(
+        &section_static_ident,
+        &json_symbol_name_str,
+        &json_str,
+    );
 
     let expanded = quote! {
         #item_mod
@@ -335,6 +349,8 @@ pub fn leanmodule(attr: TokenStream, input: TokenStream) -> TokenStream {
         #[no_mangle]
         #[used]
         pub static #json_symbol_name: [u8; #json_len] = [#(#byte_literals),*, 0u8];
+
+        #section_static
     };
 
     expanded.into()
