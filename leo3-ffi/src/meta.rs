@@ -185,7 +185,7 @@ extern "C" {
         world: lean_obj_arg,
     ) -> lean_obj_res;
 
-    /// Type check an expression
+    /// Type check an expression (Lean < 4.31)
     ///
     /// `def check (e : Expr) : MetaM Unit`
     ///
@@ -194,8 +194,35 @@ extern "C" {
     ///
     /// # Safety
     /// - All arguments must be valid Lean objects (consumed)
+    #[cfg(not(lean_4_31))]
     pub fn l_Lean_Meta_check(
         expr: lean_obj_arg,
+        meta_ctx: lean_obj_arg,
+        meta_state: lean_obj_arg,
+        core_ctx: lean_obj_arg,
+        core_state: lean_obj_arg,
+        world: lean_obj_arg,
+    ) -> lean_obj_res;
+
+    /// Type check an expression (Lean >= 4.31, boxed calling convention)
+    ///
+    /// Lean 4.31 changed `Meta.check` from `(e : Expr)` to
+    /// `(e : Expr) (transparency : TransparencyMode := .all)`, so the compiled
+    /// `l_Lean_Meta_check` now takes 7 arguments (expr, transparency, meta_ctx,
+    /// meta_state_ref, core_ctx, core_state_ref, world) with `transparency`
+    /// passed as an unboxed `uint8`. The compiler-generated `___boxed` wrapper
+    /// takes every argument as a boxed Lean object and unboxes the scalar ones,
+    /// which is the convention `lean_alloc_closure` requires.
+    ///
+    /// # Safety
+    /// - All arguments must be valid Lean objects (consumed)
+    /// - `transparency` must be a boxed `TransparencyMode` tag
+    ///   (`lean_box(0)` = `TransparencyMode.all`, the Lean default; note the
+    ///   constructor order is `all | default | reducible | instances | none`)
+    #[cfg(lean_4_31)]
+    pub fn l_Lean_Meta_check___boxed(
+        expr: lean_obj_arg,
+        transparency: lean_obj_arg,
         meta_ctx: lean_obj_arg,
         meta_state: lean_obj_arg,
         core_ctx: lean_obj_arg,
@@ -308,6 +335,47 @@ extern "C" {
         core_state: lean_obj_arg,
         world: lean_obj_arg,
     ) -> lean_obj_res;
+}
+
+/// Allocate a closure for `Meta.check` with `expr` already fixed, dispatching
+/// to the correct symbol and arity for the Lean version.
+///
+/// Lean < 4.31: `check (e : Expr) : MetaM Unit` compiles to 6 arguments
+/// `(expr, meta_ctx, meta_state_ref, core_ctx, core_state_ref, world)`.
+///
+/// Lean >= 4.31: `check (e : Expr) (transparency : TransparencyMode := .all)`
+/// compiles to 7 arguments with `transparency` passed as an unboxed scalar, so
+/// the closure must target the compiler-generated `l_Lean_Meta_check___boxed`
+/// wrapper (all-boxed ABI) and additionally fix the default transparency
+/// (`TransparencyMode.all`, constructor tag 0 — the inductive is declared
+/// `all | default | reducible | instances | none`).
+///
+/// # Safety
+/// - `expr` must be a valid `Expr` object. Its reference count is incremented.
+#[inline]
+pub unsafe fn lean_meta_check_closure(expr: *mut lean_object) -> *mut lean_object {
+    #[cfg(not(lean_4_31))]
+    {
+        crate::lean_inc(expr);
+        let closure =
+            crate::inline::lean_alloc_closure(l_Lean_Meta_check as *mut std::ffi::c_void, 6, 1);
+        crate::inline::lean_closure_set(closure, 0, expr);
+        closure
+    }
+    #[cfg(lean_4_31)]
+    {
+        crate::lean_inc(expr);
+        let closure = crate::inline::lean_alloc_closure(
+            l_Lean_Meta_check___boxed as *mut std::ffi::c_void,
+            7,
+            2,
+        );
+        crate::inline::lean_closure_set(closure, 0, expr);
+        // `TransparencyMode.all` is constructor tag 0 (Lean's default for `check`);
+        // the inductive is declared `all | default | reducible | instances | none`.
+        crate::inline::lean_closure_set(closure, 1, crate::lean_box(0));
+        closure
+    }
 }
 
 // ============================================================================

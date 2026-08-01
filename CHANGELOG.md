@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Lean-compiled `l_Lean_mkEmptyEnvironment` symbol instead (leanprover/lean4#14306)
 - Lean 4.33+ compat: `lean_add_decl`/`lean_elab_add_decl` gained a `maxRecDepth`
   argument; pass `0` (unlimited) to preserve prior behavior (leanprover/lean4#13956)
+- Lean 4.31+ compat: `Meta.check` gained a `transparency : TransparencyMode`
+  parameter, changing the compiled `l_Lean_Meta_check` arity from 6 to 7 with an
+  unboxed scalar argument. `MetaMContext::check` now builds its closure via
+  `lean_meta_check_closure`, which targets the compiler-generated
+  `l_Lean_Meta_check___boxed` wrapper and fixes the default
+  `TransparencyMode.all` on `lean_4_31`; the old arity-shifted closure corrupted
+  the `Core.Context` reader and segfaulted in `checkTraceOption`
 - `leo3-codegen` integration test strips CI instrumentation flags from the nested
   fixture build and resolves the binary via `CARGO_BIN_EXE_leo3-codegen` so it
   works under ASan / llvm-cov and redirected target dirs
