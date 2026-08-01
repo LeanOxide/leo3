@@ -10,8 +10,9 @@ use crate::model::*;
 /// This is the cross-platform counterpart to the `#[no_mangle]` JSON symbols:
 /// on Mach-O the linker does not surface those unreferenced data symbols in the
 /// dylib symbol table, so `leo3-codegen` recovers the metadata by scanning the
-/// dedicated section instead. The entry is self-describing (see
-/// [`crate::embed`]) so the scanner can find it regardless of padding/ordering.
+/// dedicated section instead. The entry is self-describing (see the `embed`
+/// module and [`crate::parse_metadata_entries`]) so the scanner can find it
+/// regardless of padding/ordering.
 ///
 /// * `static_ident` - unique identifier for the generated static.
 /// * `symbol_name` - the full metadata symbol name embedded in the framing
