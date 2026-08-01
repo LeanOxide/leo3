@@ -1,6 +1,6 @@
 # Leo3 Remaining Work Checklist
 
-Status snapshot as of 2026-05-01.
+Status snapshot as of 2026-08-01 (synced with the released 0.3.0 state).
 
 This file tracks the maturity gaps that are still meaningfully open after the
 current hardening pass. It is not a re-listing of every future enhancement
@@ -23,6 +23,11 @@ The earlier four-item list no longer matches the codebase:
 That means the old broad unresolved list is closed for the current conservative
 policy. Remaining items below are future expansion, not blockers for the
 current hardening pass.
+
+The 0.3.0 release additionally landed two items that earlier snapshots of this
+checklist still listed under future expansion: the `#[leanfn]` monomorphization
+generics subset and the fixed-width signed/unsigned container keys. Both are
+now tracked as closed below.
 
 ## Active Remaining Work
 
@@ -80,6 +85,35 @@ Definition of done (met):
 
 Re-open this item only if Leo3 deliberately widens the key matrix or changes the
 fixed-width integer wrapper representation.
+
+### `#[leanfn]` monomorphization generics subset
+
+Status:
+
+- Landed in 0.3.0; closed for the current conservative policy.
+
+What landed:
+
+- generic `#[leanfn]` functions are supported through an explicit
+  monomorphization subset using `concrete(Ty, name = "...")` annotations;
+  each annotation generates a separate, fully monomorphized C ABI wrapper,
+  metadata entry, and Lean-visible declaration
+- the contract is documented in `docs/contracts.md` (the
+  "`#[leanfn]` monomorphization subset" section) and the design rationale in
+  `docs/rfc-generics.md`
+- compile-fail coverage: `leo3/tests/ui/leanfn_generic_without_concrete.rs`,
+  `leo3/tests/ui/leanfn_concrete_wrong_arity.rs`, and
+  `leo3/tests/ui/leanfn_concrete_missing_name.rs`
+- runtime coverage: `leo3/tests/test_leanfn_macro.rs` exercises concrete
+  `u64` / `i64` instances end to end
+
+Definition of done (met):
+
+- the subset is documented, tested, and no longer tracked as open work.
+
+Re-open this item only if Leo3 deliberately changes the monomorphization
+contract. General (non-enumerated) generics remain intentionally infeasible —
+see `docs/rfc-generics.md`.
 
 ### Real module-loading success-path coverage
 
@@ -166,11 +200,12 @@ gap.
 - a broader external-object extraction contract, if Leo3 ever decides to widen
   beyond the current clone-based `FromLean` rule (see
   `docs/external-object-borrow-extraction.md`)
-- `#[leanfn]` monomorphization generics subset (`concrete(Ty, name = "...")`
-  annotation); general generics are not feasible — see `docs/rfc-generics.md`
+- general `#[leanfn]` generics beyond the landed monomorphization subset
+  (`concrete(Ty, name = "...")`); intentionally not feasible — see
+  `docs/rfc-generics.md`
 - widening the container key matrix beyond the current narrow set
   (`LeanNat`, `LeanInt`, `LeanString`, `LeanInt8`–`LeanInt64`,
-  `LeanUInt8`–`LeanUInt64`, `LeanFloat`, `LeanFloat32`)
+  `LeanUInt8`–`LeanUInt64`), for example floating-point or user-defined keys
 
 ## Maintenance Rule
 
