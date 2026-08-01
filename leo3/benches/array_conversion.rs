@@ -17,7 +17,7 @@ fn vec_to_array_naive<'l>(lean: Lean<'l>, vec: Vec<u64>) -> LeanResult<LeanBound
     let mut arr = LeanArray::empty(lean)?;
 
     for item in vec {
-        let lean_item = LeanNat::from_usize(lean, item as usize)?;
+        let lean_item = LeanUInt64::mk(lean, item)?;
         let any_item: LeanBound<'l, LeanAny> = lean_item.cast();
         arr = LeanArray::push(arr, any_item)?;
     }
@@ -39,7 +39,7 @@ fn vec_to_array_optimized<'l>(
     let mut arr = LeanArray::with_capacity(lean, len)?;
 
     for item in vec {
-        let lean_item = LeanNat::from_usize(lean, item as usize)?;
+        let lean_item = LeanUInt64::mk(lean, item)?;
         let any_item: LeanBound<'l, LeanAny> = lean_item.cast();
         arr = unsafe { LeanArray::push_unchecked(arr, any_item)? };
     }
@@ -95,7 +95,7 @@ fn bench_array_to_vec(c: &mut Criterion) {
         let arr = leo3::with_lean(|lean| -> LeanResult<_> {
             let mut arr = LeanArray::empty(lean)?;
             for i in 0..*size {
-                let n = LeanNat::from_usize(lean, i)?;
+                let n = LeanUInt64::mk(lean, i as u64)?;
                 arr = LeanArray::push(arr, n.cast())?;
             }
             Ok(arr.unbind())
