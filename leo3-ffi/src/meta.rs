@@ -187,13 +187,20 @@ extern "C" {
 
     /// Type check an expression
     ///
-    /// `def check (e : Expr) : MetaM Unit`
+    /// Lean < 4.33: `def check (e : Expr) : MetaM Unit` — takes 6 arguments like
+    /// other MetaM functions:
+    ///   expr, meta_ctx, meta_state_ref, core_ctx, core_state_ref, world
     ///
-    /// Compiled by Lean's compiler. Takes 6 arguments like other MetaM functions:
-    /// expr, meta_ctx, meta_state_ref, core_ctx, core_state_ref, world
+    /// Lean >= 4.33: `def check (e : Expr) (transparency : TransparencyMode := .all)`
+    /// — takes 7 arguments with an (unboxed) `TransparencyMode` right after `expr`:
+    ///   expr, transparency, meta_ctx, meta_state_ref, core_ctx, core_state_ref, world
+    ///
+    /// Callers must build the MetaM closure with the matching arity (see
+    /// `MetaMContext::check`); the extra `transparency` argument is passed unboxed.
     ///
     /// # Safety
-    /// - All arguments must be valid Lean objects (consumed)
+    /// - All arguments must be valid Lean objects (consumed), except `transparency`
+    ///   on Lean >= 4.33 which is a raw unboxed `TransparencyMode` tag
     pub fn l_Lean_Meta_check(
         expr: lean_obj_arg,
         meta_ctx: lean_obj_arg,

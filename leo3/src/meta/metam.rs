@@ -761,16 +761,44 @@ impl<'l> MetaMContext<'l> {
     pub fn check(&mut self, expr: &LeanBound<'l, LeanExpr>) -> LeanResult<()> {
         crate::runtime::ensure_meta_initialized();
         unsafe {
-            // Create a MetaM closure: partially apply l_Lean_Meta_check with expr.
-            // check : Expr → MetaM Unit compiles to arity 6:
-            // (expr, meta_ctx, meta_state_ref, core_ctx, core_state_ref, world)
+            // Create a MetaM closure: partially apply `l_Lean_Meta_check`.
+            //
+            // Lean < 4.33: `check : Expr → MetaM Unit` compiles to arity 6:
+            //   (expr, meta_ctx, meta_state_ref, core_ctx, core_state_ref, world)
+            // so only `expr` is curried.
+            //
+            // Lean >= 4.33: `check (e : Expr) (transparency : TransparencyMode := .all)`
+            // gained a `transparency` parameter, so it compiles to arity 7 with the
+            // transparency right after the expression:
+            //   (expr, transparency, meta_ctx, meta_state_ref, core_ctx, core_state_ref, world)
+            // We curry the default `.all` transparency so behaviour matches older versions.
+            #[cfg(not(lean_4_33))]
+            const CHECK_ARITY: u32 = 6;
+            #[cfg(not(lean_4_33))]
+            const CHECK_CURRIED: u32 = 1;
+            #[cfg(lean_4_33)]
+            const CHECK_ARITY: u32 = 7;
+            #[cfg(lean_4_33)]
+            const CHECK_CURRIED: u32 = 2;
+
             ffi::lean_inc(expr.as_ptr());
             let closure = ffi::inline::lean_alloc_closure(
                 ffi::meta::l_Lean_Meta_check as *mut std::ffi::c_void,
-                6,
-                1,
+                CHECK_ARITY,
+                CHECK_CURRIED,
             );
             ffi::inline::lean_closure_set(closure, 0, expr.as_ptr());
+            #[cfg(lean_4_33)]
+            {
+                // `TransparencyMode.all` is constructor tag 0. `l_Lean_Meta_check`
+                // reads this argument *unboxed* — it feeds the raw low byte straight
+                // into `TransparencyMode_toUInt64` (see the `xor %esi,%esi` in Lean's
+                // own `isTypeCorrect`) — so we must curry the raw tag `0` rather than
+                // `lean_box(0)`. The value occupies the pointer-sized argument slot and
+                // is passed through verbatim; it is never dereferenced as an object.
+                let transparency_all: *mut ffi::lean_object = std::ptr::null_mut();
+                ffi::inline::lean_closure_set(closure, 1, transparency_all);
+            }
 
             let computation = LeanBound::from_owned_ptr(self.lean, closure);
             let _result = self.run(computation)?;

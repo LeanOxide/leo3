@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Lean-compiled `l_Lean_mkEmptyEnvironment` symbol instead (leanprover/lean4#14306)
 - Lean 4.33+ compat: `lean_add_decl`/`lean_elab_add_decl` gained a `maxRecDepth`
   argument; pass `0` (unlimited) to preserve prior behavior (leanprover/lean4#13956)
+- Lean 4.33+ compat: `Lean.Meta.check` gained a `transparency : TransparencyMode`
+  parameter (default `.all`), changing its compiled arity from 6 to 7; curry the
+  extra (unboxed) `.all` argument into the MetaM closure so `check` / `is_type_correct`
+  no longer SIGSEGV in `checkTraceOption` on beta 4.33
 - `leo3-codegen` integration test strips CI instrumentation flags from the nested
   fixture build and resolves the binary via `CARGO_BIN_EXE_leo3-codegen` so it
   works under ASan / llvm-cov and redirected target dirs
