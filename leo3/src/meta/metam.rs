@@ -761,16 +761,44 @@ impl<'l> MetaMContext<'l> {
     pub fn check(&mut self, expr: &LeanBound<'l, LeanExpr>) -> LeanResult<()> {
         crate::runtime::ensure_meta_initialized();
         unsafe {
-            // Create a MetaM closure: partially apply l_Lean_Meta_check with expr.
-            // check : Expr → MetaM Unit compiles to arity 6:
-            // (expr, meta_ctx, meta_state_ref, core_ctx, core_state_ref, world)
+            // Create a MetaM closure by partially applying `l_Lean_Meta_check`.
+            //
+            // Lean < 4.31: `check (e : Expr) : MetaM Unit` compiles to arity 6:
+            //   (expr, meta_ctx, meta_state_ref, core_ctx, core_state_ref, world)
+            //
+            // Lean >= 4.31: `check (e : Expr) (transparency : TransparencyMode := .all)`
+            //   gained a `transparency` argument right after `expr`, so the compiled
+            //   arity is 7:
+            //   (expr, transparency, meta_ctx, meta_state_ref, core_ctx, core_state_ref, world)
+            //
+            // Failing to fix `transparency` shifts every monad argument down by one
+            // slot: `check` then reads the core *state* reference as if it were the
+            // core *context*, dereferences a bogus `options` field, and SIGSEGVs in
+            // the trace machinery (`withTraceNode` -> `checkTraceOption`). This was
+            // the macOS/Linux + Lean stable/nightly matrix crash in W-134.
             ffi::lean_inc(expr.as_ptr());
-            let closure = ffi::inline::lean_alloc_closure(
-                ffi::meta::l_Lean_Meta_check as *mut std::ffi::c_void,
-                6,
-                1,
-            );
-            ffi::inline::lean_closure_set(closure, 0, expr.as_ptr());
+            #[cfg(not(lean_4_31))]
+            let closure = {
+                let c = ffi::inline::lean_alloc_closure(
+                    ffi::meta::l_Lean_Meta_check as *mut std::ffi::c_void,
+                    6,
+                    1,
+                );
+                ffi::inline::lean_closure_set(c, 0, expr.as_ptr());
+                c
+            };
+            #[cfg(lean_4_31)]
+            let closure = {
+                let c = ffi::inline::lean_alloc_closure(
+                    ffi::meta::l_Lean_Meta_check as *mut std::ffi::c_void,
+                    7,
+                    2,
+                );
+                ffi::inline::lean_closure_set(c, 0, expr.as_ptr());
+                // Default `transparency := .all`; `TransparencyMode.all` is ctor tag 0.
+                ffi::inline::lean_closure_set(c, 1, ffi::lean_box(0));
+                c
+            };
 
             let computation = LeanBound::from_owned_ptr(self.lean, closure);
             let _result = self.run(computation)?;

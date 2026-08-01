@@ -232,6 +232,47 @@ fn test_metam_check_rejects_ill_typed_expr() {
     assert!(result.is_ok(), "test failed: {:?}", result.err());
 }
 
+/// Regression test for W-134: `MetaMContext::check` SIGSEGV on Lean >= 4.31.
+///
+/// Lean 4.31 added a `transparency : TransparencyMode` parameter to `Lean.Meta.check`
+/// (`def check (e : Expr) (transparency := .all) : MetaM Unit`), changing the compiled
+/// function's arity from 6 to 7. leo3 builds the `check` MetaM closure by partially
+/// applying the compiled `l_Lean_Meta_check`; if the closure arity / captured arguments
+/// don't match the real signature, every monad argument shifts by one slot and `check`
+/// reads the core *state* reference as the core *context*, dereferencing a bogus
+/// `options` field and segfaulting inside the trace machinery (`withTraceNode`).
+///
+/// Exercising `check` on both a well-typed and an ill-typed expression keeps that
+/// code path covered so a future arity mismatch fails loudly instead of crashing
+/// the whole test binary (which previously took down the full-matrix CI job).
+#[test]
+fn test_metam_check_arity_regression_w134() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let env = LeanEnvironment::empty(lean, 0)?;
+        let mut ctx = MetaMContext::new(lean, env)?;
+
+        // Well-typed: `Sort 0` checks successfully.
+        let good = LeanExpr::sort(lean, LeanLevel::zero(lean)?)?;
+        ctx.check(&good)?;
+
+        // Ill-typed: `(λ x : Sort 2, x) (Sort 0)` is rejected with Err (not a crash).
+        let x_name = LeanName::from_str(lean, "x")?;
+        let level2 = LeanLevel::succ(LeanLevel::one(lean)?)?;
+        let sort2 = LeanExpr::sort(lean, level2)?;
+        let body = LeanExpr::bvar(lean, 0)?;
+        let lambda = LeanExpr::lambda(x_name, sort2, body, BinderInfo::Default)?;
+        let prop = LeanExpr::sort(lean, LeanLevel::zero(lean)?)?;
+        let bad_app = LeanExpr::app(&lambda, &prop)?;
+        assert!(
+            ctx.check(&bad_app).is_err(),
+            "check() should reject ill-typed application without crashing"
+        );
+
+        Ok(())
+    });
+    assert!(result.is_ok(), "test failed: {:?}", result.err());
+}
+
 // ============================================================================
 // Recovery after errors — runtime still usable
 // ============================================================================
