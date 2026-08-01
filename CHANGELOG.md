@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Applied nightly rustfmt formatting fixes across the workspace
+- Docs synced with the released 0.3.0 state: the `#[leanfn]` monomorphization
+  generics subset and fixed-width container keys are no longer listed as
+  future work in `docs/remaining-work-checklist.md`; README / TESTING /
+  container docs no longer claim `Float` / `Float32` container key support
+  that has not landed
 
 ### Fixed
 

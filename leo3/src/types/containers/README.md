@@ -111,9 +111,6 @@ The implementation uses exported compare closures such as `l_instOrdNat`,
 `l_Int64_instOrd`, `l_UInt8_instOrd`, `l_UInt16_instOrd`, `l_UInt32_instOrd`,
 and `l_UInt64_instOrd`. This is intentionally narrow but real.
 
-Note: `RBMap` does not support `LeanFloat` / `LeanFloat32` keys because Lean has
-no total order (`Ord`) for floats (NaN breaks totality).
-
 ### `HashMap` / `HashSet`
 
 `leo3/src/types/containers/hashmap.rs` and
@@ -145,23 +142,11 @@ Current supported key matrix:
 - `LeanUInt16`
 - `LeanUInt32`
 - `LeanUInt64`
-- `LeanFloat`
-- `LeanFloat32`
 
 Fixed-width signed wrappers (`LeanInt8`–`LeanInt64`) and unsigned wrappers
 (`LeanUInt8`–`LeanUInt64`) now use Lean's unboxed scalar ABI representation,
 aligned with Lean's container typeclass instances. This allows them to be used
 directly as container keys without additional representation work.
-
-Floating-point keys (`LeanFloat`, `LeanFloat32`) use Lean's exported `BEq`
-instances (`l_instBEqFloat`, `l_instBEqFloat32`), which implement IEEE 754
-bitwise equality. Leo3 supplies a matching `Hashable` closure that hashes the
-IEEE 754 bit pattern (normalizing `+0.0` / `-0.0` to one bucket so equal values
-land in the same bucket). NaN keys are stored but never found: `NaN != NaN`
-under IEEE 754 equality, so `contains` / `find` / `get` return false / none for
-NaN keys, and repeated NaN inserts into a `HashSet` create duplicate entries.
-Floats do not support `RBMap` keys because Lean has no total order (`Ord`) for
-them.
 
 Current runtime tests exercise:
 
@@ -170,8 +155,6 @@ Current runtime tests exercise:
 - string-key support across all three families
 - fixed-width signed integer key support across all three families
 - fixed-width unsigned integer key support across all three families
-- floating-point key support across `HashMap` and `HashSet`
-- NaN key semantics for `LeanFloat` / `LeanFloat32`
 - `HashSet<String>` duplicate-insert coverage as a normal runtime test, not an
   ignored one
 - parity checks for equivalent final states across `HashMap`, `HashSet`, and

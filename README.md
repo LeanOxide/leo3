@@ -153,6 +153,13 @@ and `Option<Result<T, E>>` where the borrowed value is copied into wrapper-local
 storage before the Rust function is called. Borrowed return values for the same
 string/vector/slice family are converted back to owned Lean values.
 
+Generic `#[leanfn]` functions are supported through an explicit
+monomorphization subset: `#[leanfn(concrete(u64, name = "add_u64"), concrete(i64, name = "add_i64"))]`
+generates one fully monomorphized C ABI wrapper, metadata entry, and
+Lean-visible declaration per annotation. General (non-enumerated) generics
+remain unsupported by design; see `docs/rfc-generics.md` and the
+"`#[leanfn]` monomorphization subset" section of `docs/contracts.md`.
+
 `#[leanclass]` — Expose Rust structs as Lean external classes with auto-generated FFI wrappers and Lean source declarations:
 
 ```rust,no_run

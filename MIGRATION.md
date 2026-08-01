@@ -41,8 +41,8 @@ structure.
   monomorphization subset via `concrete(Ty, name = "...")` annotations.
 - **Property accessors**: `#[leanclass]` supports `#[getter]` / `#[setter]`
   attributes to generate Lean accessor functions.
-- **Extended key matrix**: Containers now support `UInt8`–`UInt64` and
-  `Float`/`Float32` keys in addition to the existing signed integer keys.
+- **Extended key matrix**: Containers now support `UInt8`–`UInt64` keys in
+  addition to the existing signed integer keys.
 - **`leo3-codegen` CLI**: Reads embedded JSON metadata from cdylib binaries
   and generates Lean 4 `extern` declaration files.
 - **Declarative module registration**: `#[leanmodule]` supports

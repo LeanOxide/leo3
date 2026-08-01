@@ -5,7 +5,7 @@
 //!
 //! These wrappers use Lean's real runtime representation for an explicit, narrow
 //! key matrix (`LeanNat`, `LeanInt`, `LeanString`, `LeanInt8`–`LeanInt64`,
-//! `LeanUInt8`–`LeanUInt64`, `LeanFloat`, and `LeanFloat32`).
+//! and `LeanUInt8`–`LeanUInt64`).
 //! The surface is available on the default feature set and requires Lean >= 4.22
 //! (the `lean_4_22` cfg).
 
