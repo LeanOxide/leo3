@@ -24,7 +24,7 @@ Add `leo3` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-leo3 = "0.2.2"
+leo3 = "0.3.0"
 ```
 
 To use the procedural macros (`#[leanfn]`, `#[leanclass]`, etc.), enable the
@@ -32,7 +32,7 @@ To use the procedural macros (`#[leanfn]`, `#[leanclass]`, etc.), enable the
 
 ```toml
 [dependencies]
-leo3 = { version = "0.2.2", features = ["macros"] }
+leo3 = { version = "0.3.0", features = ["macros"] }
 ```
 
 ## Hello, Lean!

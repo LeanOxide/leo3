@@ -7,12 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Lake integration template: working `examples/lake-integration/` project with a
+  Rust `cdylib` (scalar + `String` `extern "C"` functions), a Lake package with
+  matching `@[extern]` declarations, and a step-by-step guide in
+  `docs/getting-started.md` (#145)
+
+### Changed
+
+- Applied nightly rustfmt formatting fixes across the workspace
+
 ### Fixed
 
 - Lean 4.33+ compat: `lean_mk_empty_environment` export was removed; bind the
   Lean-compiled `l_Lean_mkEmptyEnvironment` symbol instead (leanprover/lean4#14306)
 - Lean 4.33+ compat: `lean_add_decl`/`lean_elab_add_decl` gained a `maxRecDepth`
   argument; pass `0` (unlimited) to preserve prior behavior (leanprover/lean4#13956)
+- `leo3-codegen` integration test strips CI instrumentation flags from the nested
+  fixture build and resolves the binary via `CARGO_BIN_EXE_leo3-codegen` so it
+  works under ASan / llvm-cov and redirected target dirs
+- `array_conversion` benchmarks build `LeanArray` with `LeanUInt64` so
+  `Vec<u64>` round-trips no longer read garbage from tagged Nat scalars
+- trybuild UI snapshot test strips inherited `CARGO_ENCODED_RUSTFLAGS` so the
+  `invalid_lifetime.stderr` snapshot stays deterministic under `cargo careful`
 
 ## [0.3.0] - 2026-07-27
 
