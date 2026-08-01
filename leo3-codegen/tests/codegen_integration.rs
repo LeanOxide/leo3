@@ -12,6 +12,9 @@ fn fixture_manifest() -> PathBuf {
 }
 
 fn codegen_bin() -> PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_leo3-codegen") {
+        return PathBuf::from(path);
+    }
     let mut path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("target")
@@ -48,6 +51,10 @@ fn build_fixture() -> PathBuf {
         .arg("--manifest-path")
         .arg(fixture_manifest())
         .env("CARGO_TARGET_DIR", &target_dir)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
         .status()
         .expect("fixture cargo build should start");
 
