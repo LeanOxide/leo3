@@ -143,7 +143,56 @@ fn collect_metadata(obj: &object::File) -> Result<Vec<(String, String)>, String>
         }
     }
 
+    // PE (Windows) complement: linked DLLs no longer carry a COFF symbol table,
+    // but `#[no_mangle]` metadata statics are present in the export table.
+    for (name, json) in extract_metadata_from_exports(obj) {
+        if seen.insert(name.clone()) {
+            results.push((name, json));
+        }
+    }
+
     Ok(results)
+}
+
+fn extract_metadata_from_exports(obj: &object::File) -> Vec<(String, String)> {
+    use object::read::pe::ExportTarget;
+
+    let export_tables: Vec<_> = match obj {
+        object::File::Pe32(pe) => vec![pe.export_table()],
+        object::File::Pe64(pe) => vec![pe.export_table()],
+        _ => Vec::new(),
+    };
+
+    let mut results = Vec::new();
+    for table in export_tables.into_iter().flatten().flatten() {
+        let Ok(exports) = table.exports() else {
+            continue;
+        };
+        for export in exports {
+            let Some(name_bytes) = export.name else {
+                continue;
+            };
+            let Ok(name) = std::str::from_utf8(name_bytes) else {
+                continue;
+            };
+            let is_metadata = name.starts_with("__leo3_module_metadata_json_")
+                || name.starts_with("__leo3_class_metadata_json_");
+            if !is_metadata {
+                continue;
+            }
+            let ExportTarget::Address(address) = export.target else {
+                continue;
+            };
+            // Export addresses are RVAs, matching the section addresses used by
+            // the readers below. Exports carry no size; the JSON statics are
+            // NUL-terminated.
+            let Ok(json) = read_null_terminated_at(obj, u64::from(address)) else {
+                continue;
+            };
+            results.push((name.to_string(), json));
+        }
+    }
+    results
 }
 
 fn extract_metadata_from_sections(obj: &object::File) -> Vec<(String, String)> {

@@ -22,17 +22,20 @@ pub const METADATA_ENTRY_MAGIC: [u8; 4] = *b"L3MJ";
 
 /// Substring used to locate the Leo3 metadata section in a binary.
 ///
-/// The section is named `__leo3_meta` on ELF/PE and placed in the `__DATA`
-/// segment on Mach-O (`__DATA,__leo3_meta`), where the section name reported by
-/// readers is just `__leo3_meta`. Matching on this substring works for all of
+/// The section is named `leo3meta` on ELF/PE and placed in the `__DATA`
+/// segment on Mach-O (`__DATA,__leo3meta`), where the section name reported by
+/// readers is just `__leo3meta`. Matching on this substring works for all of
 /// them without needing to know the exact per-platform spelling.
-pub const METADATA_SECTION_MARKER: &str = "leo3_meta";
+///
+/// The non-Apple name is deliberately at most 8 bytes: PE section names longer
+/// than that are truncated by MSVC's `link.exe`, which would break the match.
+pub const METADATA_SECTION_MARKER: &str = "leo3meta";
 
-/// The link section used on non-Apple targets.
-pub const METADATA_SECTION_NAME: &str = "__leo3_meta";
+/// The link section used on non-Apple targets (kept <= 8 bytes for PE).
+pub const METADATA_SECTION_NAME: &str = "leo3meta";
 
 /// The link section used on Apple (Mach-O) targets: `segment,section`.
-pub const METADATA_SECTION_NAME_APPLE: &str = "__DATA,__leo3_meta";
+pub const METADATA_SECTION_NAME_APPLE: &str = "__DATA,__leo3meta";
 
 /// Build a self-describing framed metadata entry.
 ///

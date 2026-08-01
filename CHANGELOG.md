@@ -32,14 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   symbol was introduced, masked by fail-fast). The flag is now resolved at
   runtime via `dlsym` (Unix) / `GetProcAddress` (Windows) and degrades to a
   no-op when unavailable; Unix behavior is unchanged (W-138)
-- `leo3-codegen` on macOS: the Mach-O linker does not surface the unreferenced
-  `#[no_mangle] #[used]` metadata symbols in a dylib's symbol table, so codegen
-  failed with "no leo3 metadata symbols found in library". The macros now also
-  embed each metadata entry (framed with a magic marker and explicit lengths)
-  into a dedicated `__leo3_meta` link section, and `leo3-codegen` scans that
-  section as a cross-platform fallback, merging the result with any symbols it
-  finds. Linux behavior is unchanged (symbols still used); fixes the
-  `compat-runtime-matrix` macOS failures (W-138)
+- `leo3-codegen` on macOS and Windows: the Mach-O linker does not surface the
+  unreferenced `#[no_mangle] #[used]` metadata symbols in a dylib's symbol
+  table, and PE DLLs only carry them in the export table (the COFF symbol
+  table is stripped), so codegen failed to find any metadata. The macros now
+  also embed each metadata entry (framed with a magic marker and explicit
+  lengths) into a dedicated `leo3meta` link section (`__DATA,__leo3meta` on
+  Apple targets; the name is kept <= 8 bytes because MSVC `link.exe`
+  truncates longer PE section names), and `leo3-codegen` scans that section
+  plus the PE export table as cross-platform fallbacks, merging the results
+  with any symbols it finds. Linux behavior is unchanged (symbols still
+  used); fixes the `compat-runtime-matrix` macOS/Windows failures (W-138)
 - Lean 4.33+ compat: `lean_mk_empty_environment` export was removed; bind the
   Lean-compiled `l_Lean_mkEmptyEnvironment` symbol instead (leanprover/lean4#14306)
 - Lean 4.33+ compat: `lean_add_decl`/`lean_elab_add_decl` gained a `maxRecDepth`
