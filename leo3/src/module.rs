@@ -12,10 +12,79 @@ use crate::{LeanBound, LeanError};
 use libloading::{Library, Symbol};
 use std::path::Path;
 
+/// Lean's private `importingRef` symbol name (NUL-terminated).
+///
+/// This is not part of Lean's public C API and is not exported by every Lean
+/// build (Lean's Windows DLLs do not export private `l_` symbols), so it is
+/// resolved at runtime rather than linked directly.
+const LEAN_IMPORTING_REF_SYMBOL: &[u8] = b"l___private_Lean_ImportingFlag_0__Lean_importingRef\0";
+
+/// Locate Lean's private `importingRef` STRef in the current process.
+///
+/// Returns `None` when the symbol is unavailable (notably on Windows, where
+/// Lean's DLLs do not export it), in which case [`set_importing_flag`]
+/// degrades to a no-op: module loading still works, only the emulation of
+/// Lean's `withImporting` window is skipped.
+unsafe fn importing_ref_slot() -> Option<*mut ffi::lean_object> {
+    #[cfg(unix)]
+    {
+        // The Lean shared libraries are linked into the current image, so
+        // their symbols are in the global scope.
+        let symbol = libc::dlsym(
+            libc::RTLD_DEFAULT,
+            LEAN_IMPORTING_REF_SYMBOL.as_ptr().cast::<libc::c_char>(),
+        );
+        let slot = symbol.cast::<*mut ffi::lean_object>();
+        if slot.is_null() {
+            return None;
+        }
+        // The global holds a pointer to the initialized STRef; it is null
+        // until Lean's ImportingFlag module initializer has run.
+        let reference = *slot;
+        (!reference.is_null()).then_some(reference)
+    }
+    #[cfg(windows)]
+    {
+        extern "system" {
+            fn GetModuleHandleW(lpModuleName: *const u16) -> *mut std::ffi::c_void;
+            fn GetProcAddress(
+                hModule: *mut std::ffi::c_void,
+                lpProcName: *const u8,
+            ) -> *mut std::ffi::c_void;
+        }
+
+        // When exported at all, the symbol lives in Lean's shared runtime DLL.
+        for name in ["libleanshared.dll", "libInit_shared.dll"] {
+            let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+            let handle = GetModuleHandleW(wide.as_ptr());
+            if handle.is_null() {
+                continue;
+            }
+            let symbol = GetProcAddress(handle, LEAN_IMPORTING_REF_SYMBOL.as_ptr());
+            let slot = symbol.cast::<*mut ffi::lean_object>();
+            if slot.is_null() {
+                continue;
+            }
+            let reference = *slot;
+            if !reference.is_null() {
+                return Some(reference);
+            }
+        }
+        None
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
+}
+
 unsafe fn set_importing_flag(importing: bool) {
+    let Some(reference) = importing_ref_slot() else {
+        return;
+    };
     let value = ffi::inline::lean_box(importing as usize);
     let world = ffi::io::lean_io_mk_world();
-    let result = ffi::lean_st_ref_set(ffi::lean_importing_ref, value, world);
+    let result = ffi::lean_st_ref_set(reference, value, world);
     ffi::lean_dec(result);
 }
 

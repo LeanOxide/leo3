@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Windows linking: `leo3::module::set_importing_flag` referenced Lean's private
+  `l___private_Lean_ImportingFlag_0__Lean_importingRef` symbol directly, but
+  Lean's Windows DLLs do not export private `l_` symbols, so `link.exe` failed
+  with `LNK2019` on every `compat-runtime-matrix` Windows leg (latent since the
+  symbol was introduced, masked by fail-fast). The flag is now resolved at
+  runtime via `dlsym` (Unix) / `GetProcAddress` (Windows) and degrades to a
+  no-op when unavailable; Unix behavior is unchanged (W-138)
 - `leo3-codegen` on macOS: the Mach-O linker does not surface the unreferenced
   `#[no_mangle] #[used]` metadata symbols in a dylib's symbol table, so codegen
   failed with "no leo3 metadata symbols found in library". The macros now also

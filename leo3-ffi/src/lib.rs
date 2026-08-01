@@ -228,6 +228,14 @@ extern "C" {
     /// by Lean's own `withImporting` wrapper when loading plugins whose
     /// initializers register options or environment extensions after
     /// `IO.initializing` has ended.
+    ///
+    /// # Do not reference this static directly
+    ///
+    /// Lean's Windows DLLs do not export this private symbol, so any direct
+    /// reference makes `link.exe` fail with `LNK2019: unresolved external
+    /// symbol` on every Windows build. Resolve it at runtime instead: `leo3`
+    /// looks it up via `dlsym` / `GetProcAddress` and degrades to a no-op when
+    /// it is unavailable (see `leo3::module`).
     #[link_name = "l___private_Lean_ImportingFlag_0__Lean_importingRef"]
     pub static mut lean_importing_ref: *mut lean_object;
 }
