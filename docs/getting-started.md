@@ -235,6 +235,10 @@ The tool discovers metadata by scanning the cdylib's symbol table for
 `__leo3_module_metadata_json_*` and `__leo3_class_metadata_json_*` symbols, so
 it works on ELF (Linux), Mach-O (macOS), and PE (Windows) binaries.
 
+For the full install-to-Lake-project walkthrough, cross-platform extraction
+details, and current limitations, see the
+[`leo3-codegen` guide](codegen.md).
+
 ## Running Tests
 
 Leo3 uses a tiered test strategy. Most tests can run **without** a Lean
@@ -389,5 +393,6 @@ native_greet("Lean") = Hello, Lean! (from Rust)
 
 - [Architecture overview](architecture.md) — crate layout and design decisions
 - [Contracts](contracts.md) — API stability and semantic guarantees
+- [`leo3-codegen` guide](codegen.md) — generate Lean `extern` declarations from a cdylib
 - [Contributing guide](contributing.md) — development workflow
 - [PyO3 alignment notes](pyo3-alignment.md) — mapping between PyO3 and Leo3 concepts

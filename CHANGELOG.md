@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `docs/codegen.md`: standalone `leo3-codegen` guide — installation from
+  crates.io, the full cdylib → codegen → Lake project walkthrough (verified on
+  Linux), cross-platform metadata extraction (ELF symbols / Mach-O section /
+  PE exports), and the current scalar-ABI and class-elaboration limitations
+  tracked in #159
+
 ### Changed
 
 - `release.yml`: the publish step now skips crate versions that are already
