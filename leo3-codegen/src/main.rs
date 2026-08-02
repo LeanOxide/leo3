@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use leo3_binding_ir::{ClassMetadata, FunctionBinding, ModuleBinding};
+use leo3_binding_ir::{
+    parse_metadata_entries, ClassMetadata, FunctionBinding, ModuleBinding, METADATA_SECTION_MARKER,
+};
 use object::{Object, ObjectSection, ObjectSymbol};
 
 fn main() -> ExitCode {
@@ -70,10 +72,16 @@ fn print_usage() {
 fn process_library(lib_path: &Path, output_dir: &Path) -> Result<(), String> {
     let data = std::fs::read(lib_path).map_err(|e| format!("failed to read file: {e}"))?;
 
-    let symbols = extract_metadata_symbols(&data)?;
+    let obj = object::File::parse(data.as_slice())
+        .map_err(|e| format!("failed to parse object file: {e}"))?;
+
+    let symbols = collect_metadata(&obj)?;
 
     if symbols.is_empty() {
-        return Err("no leo3 metadata symbols found in library".to_string());
+        return Err(
+            "no leo3 metadata found in library (checked symbol table and metadata section)"
+                .to_string(),
+        );
     }
 
     std::fs::create_dir_all(output_dir)
@@ -113,9 +121,100 @@ fn process_library(lib_path: &Path, output_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn extract_metadata_symbols(data: &[u8]) -> Result<Vec<(String, String)>, String> {
-    let obj = object::File::parse(data).map_err(|e| format!("failed to parse object file: {e}"))?;
+fn collect_metadata(obj: &object::File) -> Result<Vec<(String, String)>, String> {
+    let mut results: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
 
+    // Primary path: the symbol table. Works on ELF (Linux), where the
+    // `#[no_mangle] #[used]` metadata globals land in the dynamic symbol table.
+    for (name, json) in extract_metadata_symbols(obj)? {
+        if seen.insert(name.clone()) {
+            results.push((name, json));
+        }
+    }
+
+    // Fallback / complement: scan the dedicated metadata section. On Mach-O
+    // (macOS) dylibs the linker does not surface those unreferenced data symbols
+    // in the symbol table, but the macros also embed a self-describing framed
+    // copy into a dedicated section that we can recover here.
+    for (name, json) in extract_metadata_from_sections(obj) {
+        if seen.insert(name.clone()) {
+            results.push((name, json));
+        }
+    }
+
+    // PE (Windows) complement: linked DLLs no longer carry a COFF symbol table,
+    // but `#[no_mangle]` metadata statics are present in the export table.
+    for (name, json) in extract_metadata_from_exports(obj) {
+        if seen.insert(name.clone()) {
+            results.push((name, json));
+        }
+    }
+
+    Ok(results)
+}
+
+fn extract_metadata_from_exports(obj: &object::File) -> Vec<(String, String)> {
+    use object::read::pe::ExportTarget;
+
+    let export_tables: Vec<_> = match obj {
+        object::File::Pe32(pe) => vec![pe.export_table()],
+        object::File::Pe64(pe) => vec![pe.export_table()],
+        _ => Vec::new(),
+    };
+
+    let mut results = Vec::new();
+    for table in export_tables.into_iter().flatten().flatten() {
+        let Ok(exports) = table.exports() else {
+            continue;
+        };
+        for export in exports {
+            let Some(name_bytes) = export.name else {
+                continue;
+            };
+            let Ok(name) = std::str::from_utf8(name_bytes) else {
+                continue;
+            };
+            let is_metadata = name.starts_with("__leo3_module_metadata_json_")
+                || name.starts_with("__leo3_class_metadata_json_");
+            if !is_metadata {
+                continue;
+            }
+            let ExportTarget::Address(address) = export.target else {
+                continue;
+            };
+            // Export addresses are RVAs, matching the section addresses used by
+            // the readers below. Exports carry no size; the JSON statics are
+            // NUL-terminated.
+            let Ok(json) = read_null_terminated_at(obj, u64::from(address)) else {
+                continue;
+            };
+            results.push((name.to_string(), json));
+        }
+    }
+    results
+}
+
+fn extract_metadata_from_sections(obj: &object::File) -> Vec<(String, String)> {
+    let mut results = Vec::new();
+    for section in obj.sections() {
+        let name = match section.name() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        if !name.contains(METADATA_SECTION_MARKER) {
+            continue;
+        }
+        let data = match section.data() {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        results.extend(parse_metadata_entries(data));
+    }
+    results
+}
+
+fn extract_metadata_symbols(obj: &object::File) -> Result<Vec<(String, String)>, String> {
     let mut results = Vec::new();
 
     for symbol in obj.symbols() {
@@ -134,9 +233,9 @@ fn extract_metadata_symbols(data: &[u8]) -> Result<Vec<(String, String)>, String
         let size = symbol.size();
 
         let json = if size > 0 {
-            read_bytes_at(&obj, address, size as usize)?
+            read_bytes_at(obj, address, size as usize)?
         } else {
-            read_null_terminated_at(&obj, address)?
+            read_null_terminated_at(obj, address)?
         };
 
         results.push((name.to_string(), json));

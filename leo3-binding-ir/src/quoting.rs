@@ -1,7 +1,41 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use crate::embed::{frame_metadata_entry, METADATA_SECTION_NAME, METADATA_SECTION_NAME_APPLE};
 use crate::model::*;
+
+/// Emit a `#[used]` static that embeds a framed metadata entry into the Leo3
+/// metadata link section.
+///
+/// This is the cross-platform counterpart to the `#[no_mangle]` JSON symbols:
+/// on Mach-O the linker does not surface those unreferenced data symbols in the
+/// dylib symbol table, so `leo3-codegen` recovers the metadata by scanning the
+/// dedicated section instead. The entry is self-describing (see the `embed`
+/// module and [`crate::parse_metadata_entries`]) so the scanner can find it
+/// regardless of padding/ordering.
+///
+/// * `static_ident` - unique identifier for the generated static.
+/// * `symbol_name` - the full metadata symbol name embedded in the framing
+///   (e.g. `__leo3_module_metadata_json_Foo`); its prefix tells consumers
+///   whether this is module or class metadata.
+/// * `json_str` - the serialized metadata JSON.
+pub fn quote_metadata_section_static(
+    static_ident: &proc_macro2::Ident,
+    symbol_name: &str,
+    json_str: &str,
+) -> TokenStream {
+    let framed = frame_metadata_entry(symbol_name, json_str);
+    let framed_len = framed.len();
+    let byte_literals = framed.iter().map(|&b| proc_macro2::Literal::u8_suffixed(b));
+
+    quote! {
+        #[doc(hidden)]
+        #[used]
+        #[cfg_attr(target_vendor = "apple", link_section = #METADATA_SECTION_NAME_APPLE)]
+        #[cfg_attr(not(target_vendor = "apple"), link_section = #METADATA_SECTION_NAME)]
+        static #static_ident: [u8; #framed_len] = [#(#byte_literals),*];
+    }
+}
 
 pub fn quote_runtime_function_metadata(
     binding: &FunctionBinding,
