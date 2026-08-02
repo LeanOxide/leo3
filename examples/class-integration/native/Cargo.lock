@@ -9,6 +9,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "class-integration"
+version = "0.1.0"
+dependencies = [
+ "leo3",
+ "leo3-build-config",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -47,14 +55,6 @@ dependencies = [
  "leo3-build-config",
  "libc",
  "libloading",
-]
-
-[[package]]
-name = "leo3-lake-example"
-version = "0.1.0"
-dependencies = [
- "leo3",
- "leo3-build-config",
 ]
 
 [[package]]

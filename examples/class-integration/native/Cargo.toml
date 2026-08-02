@@ -1,0 +1,16 @@
+[package]
+name = "class-integration"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+leo3 = { path = "../../../leo3", features = ["macros"] }
+
+[build-dependencies]
+leo3-build-config = { path = "../../../leo3-build-config" }
+
+[workspace]
