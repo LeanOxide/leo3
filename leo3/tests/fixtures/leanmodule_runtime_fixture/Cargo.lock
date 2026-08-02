@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "leo3"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leo3-build-config",
  "leo3-ffi",
@@ -35,7 +35,7 @@ dependencies = [
 
 [[package]]
 name = "leo3-binding-ir"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -46,11 +46,11 @@ dependencies = [
 
 [[package]]
 name = "leo3-build-config"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "leo3-ffi"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leo3-build-config",
  "libc",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "leo3-macros"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leo3-binding-ir",
  "leo3-macros-backend",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "leo3-macros-backend"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "leo3-binding-ir",
  "proc-macro2",
