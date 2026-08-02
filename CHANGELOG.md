@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `release.yml`: the publish step now skips crate versions that are already
+  published on crates.io, so a partially failed release can be retried (via
+  job re-run or `workflow_dispatch`) without bumping the version or
+  overwriting the tag
+
 ## [0.3.1] - 2026-08-03
 
 ### Added
