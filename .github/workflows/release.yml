@@ -49,12 +49,17 @@ jobs:
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
+      # Publish in dependency-topological order: each crate's workspace
+      # dependencies (including build-dependencies) must already be on
+      # crates.io before it can be published.
       - name: Publish to crates.io
         run: |
+          cargo publish -p leo3-build-config
+          cargo publish -p leo3-binding-ir
           cargo publish -p leo3-macros-backend
           cargo publish -p leo3-macros
-          cargo publish -p leo3-build-config
           cargo publish -p leo3-ffi
+          cargo publish -p leo3-codegen
           cargo publish -p leo3
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-03
+
 ### Added
 
 - Lake integration template: working `examples/lake-integration/` project with a
@@ -278,7 +280,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI, release, and security workflows
 - Pre-commit configuration
 
-[Unreleased]: https://github.com/AndPuQing/leo3/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/AndPuQing/leo3/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/AndPuQing/leo3/compare/v0.2.2...v0.3.1
 [0.3.0]: https://github.com/AndPuQing/leo3/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/AndPuQing/leo3/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/AndPuQing/leo3/compare/v0.2.0...v0.2.1
