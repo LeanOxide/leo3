@@ -229,21 +229,11 @@ fn unwrap_result_or_zero(value: Result<u64, String>) -> u64 {
 fn test_leanfn_double() {
     leo3::prepare_freethreaded_lean();
 
-    leo3::with_lean(|lean| -> Result<(), Box<dyn std::error::Error>> {
-        // Create Lean UInt64
-        let input = LeanUInt64::mk(lean, 21)?;
-
-        // Call via FFI (simulating Lean calling us)
-        // Access FFI function via internal name
-        unsafe {
-            let result_ptr = __leo3_leanfn_double::__ffi_double(input.into_ptr());
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 42);
-        }
-
-        Ok(())
-    })
-    .unwrap();
+    // Scalar-only exports use Lean's unboxed extern ABI: the wrapper takes
+    // a raw `u64` and returns a raw `u64`, with no Lean objects involved.
+    unsafe {
+        assert_eq!(__leo3_leanfn_double::__ffi_double(21), 42);
+    }
 }
 
 #[test]
@@ -251,21 +241,12 @@ fn test_leanfn_double() {
 fn test_leanfn_with_name() {
     leo3::prepare_freethreaded_lean();
 
-    leo3::with_lean(|lean| -> Result<(), Box<dyn std::error::Error>> {
-        let a = LeanUInt64::mk(lean, 10)?;
-        let b = LeanUInt64::mk(lean, 32)?;
-
-        unsafe {
-            // Function is exported as "my_add" (different from rust name "add")
-            // So it's available at top level
-            let result_ptr = my_add(a.into_ptr(), b.into_ptr());
-            let result = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 42);
-        }
-
-        Ok(())
-    })
-    .unwrap();
+    unsafe {
+        // Function is exported as "my_add" (different from rust name "add")
+        // So it's available at top level. Both parameters and the result
+        // cross unboxed.
+        assert_eq!(my_add(10, 32), 42);
+    }
 }
 
 #[test]
@@ -292,23 +273,11 @@ fn test_leanfn_string() {
 fn test_leanfn_bool() {
     leo3::prepare_freethreaded_lean();
 
-    leo3::with_lean(|lean| -> Result<(), Box<dyn std::error::Error>> {
-        let input_true = LeanBool::mk(lean, true)?;
-        let input_false = LeanBool::mk(lean, false)?;
-
-        unsafe {
-            let result_ptr = __leo3_leanfn_negate::__ffi_negate(input_true.into_ptr());
-            let result: LeanBound<LeanBool> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert!(!LeanBool::toBool(&result));
-
-            let result_ptr = __leo3_leanfn_negate::__ffi_negate(input_false.into_ptr());
-            let result: LeanBound<LeanBool> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert!(LeanBool::toBool(&result));
-        }
-
-        Ok(())
-    })
-    .unwrap();
+    // `Bool` crosses the boundary as `u8` (Lean's `uint8_t` convention).
+    unsafe {
+        assert_eq!(__leo3_leanfn_negate::__ffi_negate(1), 0);
+        assert_eq!(__leo3_leanfn_negate::__ffi_negate(0), 1);
+    }
 }
 
 #[test]
@@ -317,14 +286,9 @@ fn test_leanfn_mixed_types() {
     leo3::prepare_freethreaded_lean();
 
     leo3::with_lean(|lean| -> Result<(), Box<dyn std::error::Error>> {
-        let n = LeanUInt64::mk(lean, 42)?;
-        let positive = LeanBool::mk(lean, true)?;
-
         unsafe {
-            let result_ptr = __leo3_leanfn_describe_number::__ffi_describe_number(
-                n.into_ptr(),
-                positive.into_ptr(),
-            );
+            // Scalars cross unboxed; the `String` result stays boxed.
+            let result_ptr = __leo3_leanfn_describe_number::__ffi_describe_number(42, 1);
             let result: LeanBound<LeanString> = LeanBound::from_owned_ptr(lean, result_ptr);
             assert_eq!(LeanString::cstr(&result)?, "positive 42");
         }
@@ -340,12 +304,11 @@ fn test_leanfn_unit_return() {
     leo3::prepare_freethreaded_lean();
 
     leo3::with_lean(|lean| -> Result<(), Box<dyn std::error::Error>> {
-        let input = LeanUInt64::mk(lean, 42)?;
-
         unsafe {
-            let result_ptr = __leo3_leanfn_do_nothing::__ffi_do_nothing(input.into_ptr());
-            // Unit return should be a constructor with tag 0 and 0 fields
-            // Using LeanUInt64 as a placeholder type since we just check the pointer
+            // The `u64` parameter crosses unboxed; the unit return is still
+            // a boxed constructor with tag 0 and 0 fields. Using LeanUInt64
+            // as a placeholder type since we just check the pointer.
+            let result_ptr = __leo3_leanfn_do_nothing::__ffi_do_nothing(42);
             let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
             // Just verify it doesn't crash
             assert!(!result.as_ptr().is_null());
@@ -405,9 +368,8 @@ fn test_leanfn_vec_sum() {
         arr = LeanArray::push(arr, n3.cast())?;
 
         unsafe {
-            let result_ptr = __leo3_leanfn_sum_vec::__ffi_sum_vec(arr.into_ptr());
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 60);
+            // The array crosses boxed; the `u64` sum comes back unboxed.
+            assert_eq!(__leo3_leanfn_sum_vec::__ffi_sum_vec(arr.into_ptr()), 60);
         }
 
         Ok(())
@@ -423,10 +385,9 @@ fn test_leanfn_vec_return() {
     leo3::with_lean(|lean| -> Result<(), Box<dyn std::error::Error>> {
         use leo3::types::LeanArray;
 
-        let n = LeanUInt64::mk(lean, 5)?;
-
         unsafe {
-            let result_ptr = __leo3_leanfn_range_vec::__ffi_range_vec(n.into_ptr());
+            // The `u64` bound crosses unboxed; the array result stays boxed.
+            let result_ptr = __leo3_leanfn_range_vec::__ffi_range_vec(5);
             let result: LeanBound<LeanArray> = LeanBound::from_owned_ptr(lean, result_ptr);
 
             // Verify array has 5 elements: [0, 1, 2, 3, 4]
@@ -524,12 +485,12 @@ fn test_leanfn_large_vec() {
         }
 
         unsafe {
-            let result_ptr = __leo3_leanfn_sum_large_vec::__ffi_sum_large_vec(arr.into_ptr());
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-
             // Sum of 0..1000 is 999*1000/2 = 499500
             let expected: u64 = (0..size).sum();
-            assert_eq!(LeanUInt64::to_u64(&result), expected);
+            assert_eq!(
+                __leo3_leanfn_sum_large_vec::__ffi_sum_large_vec(arr.into_ptr()),
+                expected
+            );
         }
 
         Ok(())
@@ -552,9 +513,10 @@ fn test_leanfn_fixed_array_sum() {
         }
 
         unsafe {
-            let result_ptr = __leo3_leanfn_sum_array::__ffi_sum_array(arr.into_ptr());
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 100);
+            assert_eq!(
+                __leo3_leanfn_sum_array::__ffi_sum_array(arr.into_ptr()),
+                100
+            );
         }
 
         Ok(())
@@ -577,10 +539,10 @@ fn test_leanfn_borrowed_slice_sum() {
         }
 
         unsafe {
-            let result_ptr =
-                __leo3_leanfn_sum_borrowed_slice::__ffi_sum_borrowed_slice(arr.into_ptr());
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 60);
+            assert_eq!(
+                __leo3_leanfn_sum_borrowed_slice::__ffi_sum_borrowed_slice(arr.into_ptr()),
+                60
+            );
         }
 
         Ok(())
@@ -603,10 +565,10 @@ fn test_leanfn_borrowed_array_sum() {
         }
 
         unsafe {
-            let result_ptr =
-                __leo3_leanfn_sum_borrowed_array::__ffi_sum_borrowed_array(arr.into_ptr());
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 24);
+            assert_eq!(
+                __leo3_leanfn_sum_borrowed_array::__ffi_sum_borrowed_array(arr.into_ptr()),
+                24
+            );
         }
 
         Ok(())
@@ -625,20 +587,18 @@ fn test_leanfn_borrowed_owned_alias_params() {
         let words = lean_u64_array(lean, &[10, 20, 30])?;
 
         unsafe {
-            let result_ptr =
-                __leo3_leanfn_borrowed_string_len::__ffi_borrowed_string_len(name.into_ptr());
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 8);
-
-            let result_ptr =
-                __leo3_leanfn_borrowed_vec_u8_sum::__ffi_borrowed_vec_u8_sum(bytes.into_ptr());
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 10);
-
-            let result_ptr =
-                __leo3_leanfn_borrowed_vec_u64_sum::__ffi_borrowed_vec_u64_sum(words.into_ptr());
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 60);
+            assert_eq!(
+                __leo3_leanfn_borrowed_string_len::__ffi_borrowed_string_len(name.into_ptr()),
+                8
+            );
+            assert_eq!(
+                __leo3_leanfn_borrowed_vec_u8_sum::__ffi_borrowed_vec_u8_sum(bytes.into_ptr()),
+                10
+            );
+            assert_eq!(
+                __leo3_leanfn_borrowed_vec_u64_sum::__ffi_borrowed_vec_u64_sum(words.into_ptr()),
+                60
+            );
         }
 
         Ok(())
@@ -682,79 +642,79 @@ fn test_leanfn_borrowed_owned_alias_nested_params() {
         let tuple_slices = LeanProd::mk(slice_values.clone().cast(), fixed_array_values.cast())?;
 
         unsafe {
-            let result_ptr =
+            assert_eq!(
                 __leo3_leanfn_option_borrowed_alias_score::__ffi_option_borrowed_alias_score(
                     opt_name.into_ptr(),
                     opt_bytes.into_ptr(),
                     opt_words.into_ptr(),
-                );
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 6 + 10 + 31);
+                ),
+                6 + 10 + 31
+            );
 
-            let result_ptr =
+            assert_eq!(
                 __leo3_leanfn_result_borrowed_alias_score::__ffi_result_borrowed_alias_score(
                     result_name.into_ptr(),
                     result_bytes.into_ptr(),
                     result_words.into_ptr(),
-                );
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 6 + 10 + 31);
+                ),
+                6 + 10 + 31
+            );
 
-            let result_ptr =
+            assert_eq!(
                 __leo3_leanfn_tuple_borrowed_alias_score::__ffi_tuple_borrowed_alias_score(
                     tuple.into_ptr(),
-                );
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 6 + 10 + 31);
+                ),
+                6 + 10 + 31
+            );
 
-            let result_ptr =
+            assert_eq!(
                 __leo3_leanfn_option_result_borrowed_alias_score::__ffi_option_result_borrowed_alias_score(
                     nested_some.into_ptr(),
-                );
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 31);
+                ),
+                31
+            );
 
-            let result_ptr =
+            assert_eq!(
                 __leo3_leanfn_option_result_borrowed_alias_score::__ffi_option_result_borrowed_alias_score(
                     nested_err_some.into_ptr(),
-                );
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 3);
+                ),
+                3
+            );
 
-            let result_ptr =
+            assert_eq!(
                 __leo3_leanfn_option_result_borrowed_alias_score::__ffi_option_result_borrowed_alias_score(
                     nested_none.into_ptr(),
-                );
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 0);
+                ),
+                0
+            );
 
-            let result_ptr =
+            assert_eq!(
                 __leo3_leanfn_option_borrowed_slice_score::__ffi_option_borrowed_slice_score(
                     opt_slice_values.into_ptr(),
-                );
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 12);
+                ),
+                12
+            );
 
-            let result_ptr =
+            assert_eq!(
                 __leo3_leanfn_result_borrowed_slice_score::__ffi_result_borrowed_slice_score(
                     result_slice_values.into_ptr(),
-                );
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 12);
+                ),
+                12
+            );
 
-            let result_ptr =
+            assert_eq!(
                 __leo3_leanfn_result_borrowed_slice_score::__ffi_result_borrowed_slice_score(
                     result_slice_error_values.into_ptr(),
-                );
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 30);
+                ),
+                30
+            );
 
-            let result_ptr =
+            assert_eq!(
                 __leo3_leanfn_tuple_borrowed_slice_score::__ffi_tuple_borrowed_slice_score(
                     tuple_slices.into_ptr(),
-                );
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 33);
+                ),
+                33
+            );
         }
 
         Ok(())
@@ -859,19 +819,10 @@ fn mono_add<T: std::ops::Add<Output = T>>(a: T, b: T) -> T {
 fn test_leanfn_concrete_u64_instance() {
     leo3::prepare_freethreaded_lean();
 
-    leo3::with_lean(|lean| -> Result<(), Box<dyn std::error::Error>> {
-        let a = LeanUInt64::mk(lean, 10)?;
-        let b = LeanUInt64::mk(lean, 32)?;
-
-        unsafe {
-            let result_ptr = mono_add_u64(a.into_ptr(), b.into_ptr());
-            let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanUInt64::to_u64(&result), 42);
-        }
-
-        Ok(())
-    })
-    .unwrap();
+    unsafe {
+        // Both concrete instances use the unboxed scalar ABI.
+        assert_eq!(mono_add_u64(10, 32), 42);
+    }
 }
 
 #[test]
@@ -879,17 +830,7 @@ fn test_leanfn_concrete_u64_instance() {
 fn test_leanfn_concrete_i64_instance() {
     leo3::prepare_freethreaded_lean();
 
-    leo3::with_lean(|lean| -> Result<(), Box<dyn std::error::Error>> {
-        let a = LeanInt64::mk(lean, -10)?;
-        let b = LeanInt64::mk(lean, 52)?;
-
-        unsafe {
-            let result_ptr = mono_add_i64(a.into_ptr(), b.into_ptr());
-            let result: LeanBound<LeanInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-            assert_eq!(LeanInt64::to_i64(&result), 42);
-        }
-
-        Ok(())
-    })
-    .unwrap();
+    unsafe {
+        assert_eq!(mono_add_i64(-10, 52), 42);
+    }
 }

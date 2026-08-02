@@ -110,7 +110,13 @@ fn codegen_generates_module_and_class_lean_files() {
     );
     let class_content = std::fs::read_to_string(&class_file).unwrap();
     assert!(class_content.contains("-- Class: FixtureCounter"));
-    assert!(class_content.contains("opaque FixtureCounter : Type"));
+    // The class type is introduced through `NonemptyType` so the `opaque`
+    // method declarations returning it can elaborate (see `class_opaque_decl`).
+    assert!(class_content.contains("opaque FixtureCounter.ffi : NonemptyType"));
+    assert!(class_content.contains("def FixtureCounter : Type := FixtureCounter.ffi.val"));
+    assert!(
+        class_content.contains("instance : Nonempty FixtureCounter := FixtureCounter.ffi.property")
+    );
     assert!(class_content.contains("@[extern \"__lean_ffi_FixtureCounter_new\"] opaque FixtureCounter.new : Int32 → FixtureCounter"));
     assert!(class_content.contains("@[extern \"__lean_ffi_FixtureCounter_get\"] opaque FixtureCounter.get : FixtureCounter → Int32"));
     assert!(class_content.contains("@[extern \"__lean_ffi_FixtureCounter_increment\"] opaque FixtureCounter.increment : FixtureCounter → FixtureCounter"));

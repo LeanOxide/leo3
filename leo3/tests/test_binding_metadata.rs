@@ -74,7 +74,12 @@ fn function_and_module_metadata_are_structured() {
 
 #[test]
 fn leanclass_metadata_captures_receiver_semantics() {
-    assert_eq!(SCHEMACOUNTER_LEAN_CLASS_DECL, "opaque SchemaCounter : Type");
+    assert_eq!(
+        SCHEMACOUNTER_LEAN_CLASS_DECL,
+        "opaque SchemaCounter.ffi : NonemptyType\n\
+         def SchemaCounter : Type := SchemaCounter.ffi.val\n\
+         instance : Nonempty SchemaCounter := SchemaCounter.ffi.property"
+    );
     assert!(SCHEMACOUNTER_LEAN_METHODS_DECL.contains("SchemaCounter.bump"));
 
     let class = __leo3_class_metadata_SchemaCounter();

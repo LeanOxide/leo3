@@ -2,7 +2,6 @@
 
 #![cfg(all(feature = "macros", feature = "runtime-tests"))]
 
-use leo3::conversion::IntoLean;
 use leo3::external::LeanExternal;
 use leo3::prelude::*;
 
@@ -42,11 +41,8 @@ fn test_getter_returns_field_value() {
         let config = Config { level: 7 };
         let external = LeanExternal::new(lean, config).unwrap();
 
-        let result_ptr = unsafe { __lean_ffi_Config_level(external.into_ptr()) };
-
-        let result_obj =
-            unsafe { leo3::LeanBound::<leo3::types::LeanInt32>::from_owned_ptr(lean, result_ptr) };
-        let value = <i32 as leo3::conversion::FromLean>::from_lean(&result_obj).unwrap();
+        // The getter's `i32` result crosses the boundary unboxed.
+        let value = unsafe { __lean_ffi_Config_level(external.into_ptr()) };
         assert_eq!(value, 7);
 
         Ok::<_, LeanError>(())
@@ -65,10 +61,8 @@ fn test_setter_exclusive_mutates_in_place() {
 
         assert!(unsafe { leo3::ffi::object::lean_is_exclusive(ptr) });
 
-        let result_ptr = unsafe {
-            let new_level = 42i32.into_lean(lean).unwrap();
-            __lean_ffi_Config_set_level(ptr, new_level.into_ptr())
-        };
+        // The setter's `i32` argument crosses the boundary unboxed.
+        let result_ptr = unsafe { __lean_ffi_Config_set_level(ptr, 42) };
 
         assert_eq!(
             ptr, result_ptr,
@@ -94,10 +88,7 @@ fn test_setter_shared_uses_copy_on_write() {
 
         unsafe { leo3::ffi::object::lean_inc_ref(ptr) };
 
-        let new_ptr = unsafe {
-            let new_level = 99i32.into_lean(lean).unwrap();
-            __lean_ffi_Config_set_level(ptr, new_level.into_ptr())
-        };
+        let new_ptr = unsafe { __lean_ffi_Config_set_level(ptr, 99) };
 
         assert_ne!(
             ptr, new_ptr,

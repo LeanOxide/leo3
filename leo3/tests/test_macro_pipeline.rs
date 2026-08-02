@@ -49,7 +49,9 @@ fn test_macro_pipeline_rust_and_metadata_surface() {
     );
     assert_eq!(
         PIPELINECOUNTER_LEAN_CLASS_DECL,
-        "opaque PipelineCounter : Type"
+        "opaque PipelineCounter.ffi : NonemptyType\n\
+         def PipelineCounter : Type := PipelineCounter.ffi.val\n\
+         instance : Nonempty PipelineCounter := PipelineCounter.ffi.property"
     );
     assert!(PIPELINECOUNTER_LEAN_METHODS_DECL.contains("__lean_ffi_PipelineCounter_new"));
     assert!(PIPELINECOUNTER_LEAN_METHODS_DECL.contains("opaque PipelineCounter.increment"));
@@ -104,7 +106,8 @@ fn test_macro_pipeline_rust_and_metadata_surface() {
     );
     assert_eq!(class_metadata.rust_name, "PipelineCounter");
     assert_eq!(class_metadata.lean_name, "PipelineCounter");
-    assert_eq!(class_metadata.opaque_decl, "opaque PipelineCounter : Type");
+    assert_eq!(class_metadata.opaque_decl, PIPELINECOUNTER_LEAN_CLASS_DECL);
+    assert!(class_metadata.opaque_decl.contains("NonemptyType"));
     assert!(class_metadata
         .methods_decl
         .contains("PipelineCounter.increment"));
@@ -132,32 +135,23 @@ fn test_macro_pipeline_ffi_round_trip() {
     leo3::prepare_freethreaded_lean();
 
     leo3::with_lean(|lean| -> LeanResult<()> {
-        let sum = unsafe {
-            let a = LeanUInt64::mk(lean, 20)?;
-            let b = LeanUInt64::mk(lean, 22)?;
-            let ptr = macro_pipeline::macro_pipeline_add(a.into_ptr(), b.into_ptr());
-            let sum = LeanBound::<LeanUInt64>::from_owned_ptr(lean, ptr);
-            LeanUInt64::to_u64(&sum)
-        };
+        // Scalar-only exports use the unboxed extern ABI end to end.
+        let sum = unsafe { macro_pipeline::macro_pipeline_add(20, 22) };
         assert_eq!(sum, 42);
 
         let message = unsafe {
             let name = LeanString::mk(lean, "counter")?;
-            let count = LeanInt32::mk(lean, 8)?;
-            let ptr = macro_pipeline::macro_pipeline_banner(name.into_ptr(), count.into_ptr());
+            // `String` crosses boxed, `i32` crosses unboxed.
+            let ptr = macro_pipeline::macro_pipeline_banner(name.into_ptr(), 8);
             let message = LeanBound::<LeanString>::from_owned_ptr(lean, ptr);
             LeanString::cstr(&message)?.to_owned()
         };
         assert_eq!(message, "counter has 8 ticks");
 
         let value = unsafe {
-            let initial = LeanInt32::mk(lean, 5)?;
-            let counter_ptr = __lean_ffi_PipelineCounter_new(initial.into_ptr());
-            let delta = LeanInt32::mk(lean, 3)?;
-            let counter_ptr = __lean_ffi_PipelineCounter_increment(counter_ptr, delta.into_ptr());
-            let value_ptr = __lean_ffi_PipelineCounter_get(counter_ptr);
-            let value = LeanBound::<LeanInt32>::from_owned_ptr(lean, value_ptr);
-            LeanInt32::to_i32(&value)
+            let counter_ptr = __lean_ffi_PipelineCounter_new(5);
+            let counter_ptr = __lean_ffi_PipelineCounter_increment(counter_ptr, 3);
+            __lean_ffi_PipelineCounter_get(counter_ptr)
         };
         assert_eq!(value, 8);
 

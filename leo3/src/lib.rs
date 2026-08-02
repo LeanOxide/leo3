@@ -514,6 +514,20 @@ pub mod __private {
     where
         F: FnOnce() -> crate::LeanResult<u64>,
     {
+        scalar_ffi_panic_boundary(symbol, f)
+    }
+
+    /// Execute a scalar-returning FFI body behind a panic boundary.
+    ///
+    /// Lean extern signatures returning an unboxed scalar (`UInt64`, `Int32`,
+    /// `Bool`, `Char`, ...) cannot encode a Lean panic object, so the only
+    /// sound failure behavior is to terminate explicitly after reporting the
+    /// boundary error. Generated `#[leanfn]` / `#[leanclass]` wrappers use
+    /// this for every scalar-returning entry point.
+    pub fn scalar_ffi_panic_boundary<T, F>(symbol: &str, f: F) -> T
+    where
+        F: FnOnce() -> crate::LeanResult<T>,
+    {
         match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(f)) {
             Ok(Ok(value)) => value,
             Ok(Err(err)) => {

@@ -237,12 +237,20 @@ pub struct LeanFunction<'lib> {
 impl<'lib> LeanFunction<'lib> {
     /// Look up an exported function by name
     ///
+    /// Macro-generated exports provide two entry points: `{name}` follows
+    /// Lean's mixed unboxed/boxed extern ABI (what Lean itself calls), while
+    /// `{name}_boxed` is the all-boxed companion matching the `callN`
+    /// convention below. The companion is preferred when present; raw
+    /// hand-written extern libraries only provide the plain symbol.
+    ///
     /// # Safety
     /// - The function must exist and have the correct signature
     /// - The arity must match the actual function signature
     unsafe fn lookup(library: &'lib Library, name: &str, arity: usize) -> LeanResult<Self> {
+        let boxed_name = format!("{name}_boxed");
         let symbol: Symbol<unsafe extern "C" fn() -> *mut ffi::lean_object> = library
-            .get(name.as_bytes())
+            .get(boxed_name.as_bytes())
+            .or_else(|_| library.get(name.as_bytes()))
             .map_err(|e| LeanError::symbol_lookup(name, e.to_string()))?;
 
         Ok(Self {
