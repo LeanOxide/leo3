@@ -1,0 +1,31 @@
+name: Lean Release Watch
+
+# Sentinel for new leanprover/lean4 releases. When a stable or beta/RC
+# release is published, dispatch the full CI matrix on main immediately
+# instead of waiting for the next daily 03:17 UTC sweep. See
+# .github/scripts/lean-release-watch.js and TESTING.md.
+
+on:
+  schedule:
+    - cron: '32 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    name: Watch leanprover/lean4 releases
+    runs-on: ubuntu-latest
+    if: github.repository == 'LeanOxide/leo3'
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check for new Lean releases and dispatch the CI matrix
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const script = require('./.github/scripts/lean-release-watch.js')
+            await script({github, context, core})

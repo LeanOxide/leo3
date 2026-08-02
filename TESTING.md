@@ -17,6 +17,33 @@ For the higher-level maintenance workflow, pair this guide with
 
 The scheduled compatibility sweep runs daily at **03:17 UTC**.
 
+## Automated Version-Drift Tracking
+
+Lean/Rust version drift is tracked proactively by two CI mechanisms so a new
+Lean beta or nightly break is surfaced on release day instead of waiting for a
+user report:
+
+- **Compat failure issues** — after every `main` push, scheduled sweep, or
+  `workflow_dispatch` run, the `CI / Compat Failure Reporter` job
+  (`.github/scripts/compat-watch.js`) inspects the run's jobs. When a
+  `Compat / Full Matrix` leg on the `beta` or `nightly` Lean channel, or any
+  Heavy-tier job (Careful, AddressSanitizer, Coverage, Bench), fails, it opens
+  a tracking issue labeled `ci-compat-failure` with the job name, Lean
+  channel, run/job links, commit, and captured failure annotations. Each
+  tracked leg maps to exactly one open issue via a hidden marker in the issue
+  body: repeated failures append a comment instead of opening duplicates, and
+  when the leg goes green on `main` again the issue is closed automatically
+  with a recovery note. Pull-request runs and feature branches never file
+  issues, and cancelled runs are ignored.
+- **Lean release sentinel** — the `Lean Release Watch` workflow
+  (`.github/workflows/lean-release-watch.yml`, daily at 04:32 UTC) checks
+  `leanprover/lean4` for newly published stable or beta/RC releases and
+  immediately dispatches the full CI matrix on `main`, so a fresh beta is
+  tested within hours of publication rather than at the next sweep.
+
+Response expectations for `ci-compat-failure` issues are documented in
+`docs/contributing.md` ("CI Version-Drift Issues").
+
 ## Required vs Optional Paths
 
 - **Required on PRs:** Smoke + Runtime + API tiers.
