@@ -52,6 +52,27 @@ For those areas, code changes should usually come with:
 - a note in `docs/remaining-work-checklist.md` if the change resolves or moves a
   tracked gap
 
+## CI Version-Drift Issues
+
+When a `Compat / Full Matrix` leg on the Lean `beta`/`nightly` channel or a
+Heavy-tier job fails on `main` (push, daily sweep, or release-sentinel
+dispatch), CI automatically opens — or comments on — a tracking issue labeled
+`ci-compat-failure`. The mechanism is described in `TESTING.md` under
+"Automated Version-Drift Tracking". When working one of these issues:
+
+- Reproduce locally with the failing channel, e.g.
+  `elan toolchain install leanprover/lean4:beta && elan override set leanprover/lean4:beta`,
+  then run the command from the issue's job name (usually
+  `cargo test --locked --all-features --workspace`).
+- Reference the tracking issue from the fix PR. Do not close it by hand:
+  once the leg is green on `main`, CI closes it automatically with a recovery
+  note.
+- Never edit or remove the hidden `<!-- leo3-compat-watch: ... -->` marker
+  line in the issue body — the reporter uses it for deduplication and
+  auto-close. Without it a duplicate issue will be filed.
+- If the failure was runner/infrastructure flake rather than a real
+  compatibility break, close the issue manually with a short note.
+
 ## CHANGELOG Maintenance
 
 Every PR that changes public behavior must update `CHANGELOG.md` in the same
