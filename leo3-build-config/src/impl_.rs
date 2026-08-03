@@ -887,6 +887,29 @@ pub fn print_rerun_if_env_changed() {
 }
 
 /// Emit `cargo:rustc-link-*` directives for linking against Lean.
+/// Allow unresolved Lean runtime symbols in `LEO3_NO_LEAN=1` cdylib builds on
+/// Apple targets.
+///
+/// Such cdylibs intentionally leave Lean symbols (`lean_mk_string`,
+/// `lean_dec_ref_cold`, ...) undefined: the host Lean executable provides
+/// them at load time. ELF linkers accept unresolved dylib symbols by default,
+/// but Apple's linker rejects them at link time unless
+/// `-undefined dynamic_lookup` is passed, so every macOS cdylib build for the
+/// lake-integration workflow failed to link.
+pub fn emit_no_lean_dynamic_lookup_link_arg() {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "macos" {
+        return;
+    }
+    let crate_type = env::var("CARGO_CRATE_TYPE").unwrap_or_default();
+    let is_dynamic = crate_type
+        .split(',')
+        .any(|value| matches!(value.trim(), "cdylib" | "dylib"));
+    if is_dynamic {
+        println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
+    }
+}
+
 pub fn emit_link_config(config: &LeanConfig) {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 

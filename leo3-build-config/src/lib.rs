@@ -60,6 +60,7 @@ pub fn use_leo3_cfgs() {
     if env::var("LEO3_NO_LEAN").is_ok() {
         cargo_warn!("LEO3_NO_LEAN set: skipping Lean4 detection and linking");
         cargo_warn!("Tests requiring Lean4 runtime will not run");
+        impl_::emit_no_lean_dynamic_lookup_link_arg();
         return;
     }
 
@@ -86,6 +87,7 @@ pub fn use_upstream_leo3_cfgs() {
 
     if env::var("LEO3_NO_LEAN").is_ok() {
         cargo_warn!("LEO3_NO_LEAN set: skipping Lean4 configuration");
+        impl_::emit_no_lean_dynamic_lookup_link_arg();
         return;
     }
 
