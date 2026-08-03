@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on Linux and macOS
 - `leo3::__private::scalar_ffi_panic_boundary`: generic panic boundary for
   scalar-returning FFI entry points (used by generated code)
+- `docs/codegen.md`: standalone `leo3-codegen` guide — installation from
+  crates.io, the full cdylib → codegen → Lake project walkthrough (verified on
+  Linux), cross-platform metadata extraction (ELF symbols / Mach-O section /
+  PE exports), and the current scalar-ABI and class-elaboration limitations
+  tracked in #159
 
 ### Changed
 

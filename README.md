@@ -336,7 +336,8 @@ with hand-written Lean declarations) and
 
 See `TESTING.md` for the full tiered CI map, the
 [current contract notes](docs/contracts.md), [architecture notes](docs/architecture.md),
-the [PyO3 alignment notes](docs/pyo3-alignment.md), and the
+the [PyO3 alignment notes](docs/pyo3-alignment.md), the
+[`leo3-codegen` guide](docs/codegen.md), and the
 [contributor guide](docs/contributing.md). Common local commands:
 
 ```bash

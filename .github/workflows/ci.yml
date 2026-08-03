@@ -7,6 +7,9 @@ on:
     branches: [main]
   schedule:
     - cron: '17 3 * * *'
+  # Dispatched manually or by the lean-release-watch sentinel when a new
+  # leanprover/lean4 stable/beta release is published.
+  workflow_dispatch:
 
 concurrency:
   group: "${{ github.workflow }}-${{ github.ref }}"
@@ -417,6 +420,40 @@ jobs:
         env "$LIBPATH_VAR=$PWD/../native/target/release" .lake/build/bin/app
         cd ../../..
         echo "::endgroup::"
+
+  compat-failure-report:
+    name: CI / Compat Failure Reporter
+    # Track version drift only for real mainline runs: pushes to main, the
+    # daily scheduled sweep, and workflow_dispatch (incl. the release
+    # sentinel). Never for pull_request events or feature branches.
+    if: >-
+      always()
+      && github.event_name != 'pull_request'
+      && github.ref == 'refs/heads/main'
+    needs:
+      - compat-runtime-matrix
+      - heavy-careful
+      - heavy-asan
+      - coverage
+      - bench
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Report beta/nightly and Heavy failures as tracked issues
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const script = require('./.github/scripts/compat-watch.js')
+            try {
+              await script({github, context, core})
+            } catch (error) {
+              // The reporter must never turn a green run red.
+              core.warning(`compat-watch reporter failed: ${error}`)
+            }
 
   conclusion:
     name: CI Conclusion
