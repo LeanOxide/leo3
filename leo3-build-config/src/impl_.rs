@@ -887,25 +887,23 @@ pub fn print_rerun_if_env_changed() {
 }
 
 /// Emit `cargo:rustc-link-*` directives for linking against Lean.
-/// Allow unresolved Lean runtime symbols in `LEO3_NO_LEAN=1` cdylib builds on
-/// Apple targets.
+/// Allow unresolved Lean runtime symbols in `LEO3_NO_LEAN=1` builds on Apple
+/// targets.
 ///
-/// Such cdylibs intentionally leave Lean symbols (`lean_mk_string`,
-/// `lean_dec_ref_cold`, ...) undefined: the host Lean executable provides
-/// them at load time. ELF linkers accept unresolved dylib symbols by default,
-/// but Apple's linker rejects them at link time unless
+/// Lake-integration cdylibs intentionally leave Lean symbols
+/// (`lean_mk_string`, `lean_dec_ref_cold`, ...) undefined: the host Lean
+/// executable provides them at load time. ELF linkers accept unresolved dylib
+/// symbols by default, but Apple's linker rejects them at link time unless
 /// `-undefined dynamic_lookup` is passed, so every macOS cdylib build for the
 /// lake-integration workflow failed to link.
+///
+/// Build scripts cannot see the crate type being built (`CARGO_CRATE_TYPE`
+/// is not set for them), so the flag is emitted for every no-lean Apple link.
+/// For non-dynamic targets it is harmless unless symbols are genuinely
+/// missing, in which case the diagnostic moves from link time to load time.
 pub fn emit_no_lean_dynamic_lookup_link_arg() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if target_os != "macos" {
-        return;
-    }
-    let crate_type = env::var("CARGO_CRATE_TYPE").unwrap_or_default();
-    let is_dynamic = crate_type
-        .split(',')
-        .any(|value| matches!(value.trim(), "cdylib" | "dylib"));
-    if is_dynamic {
+    if target_os == "macos" {
         println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
     }
 }

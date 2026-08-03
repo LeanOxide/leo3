@@ -60,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow): Apple's linker rejects the Lean runtime symbols such cdylibs
   intentionally leave undefined for load-time resolution (ELF linkers accept
   them). `leo3-build-config` now passes `-Wl,-undefined,dynamic_lookup` for
-  `cdylib`/`dylib` crate types on Apple targets in no-lean mode
+  Apple-target links in no-lean mode
 - Heap corruption when a `LEO3_NO_LEAN=1` cdylib allocates Lean objects
   (external class instances, `Prod` results from `&mut self` methods that
   also return a value, inline-allocated containers): without a detected Lean
