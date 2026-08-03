@@ -328,6 +328,12 @@ leo3/
 
 New to Leo3? Start with the [getting-started tutorial](docs/getting-started.md).
 
+End-to-end Lean↔Rust templates live in [`examples/`](examples/):
+[`lake-integration`](examples/lake-integration/) (raw `extern "C"` functions
+with hand-written Lean declarations) and
+[`class-integration`](examples/class-integration/) (`#[leanclass]` /
+`#[leanfn]` / `#[leanmodule]` with `leo3-codegen`-generated declarations).
+
 See `TESTING.md` for the full tiered CI map, the
 [current contract notes](docs/contracts.md), [architecture notes](docs/architecture.md),
 the [PyO3 alignment notes](docs/pyo3-alignment.md), the

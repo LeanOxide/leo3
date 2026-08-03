@@ -12,6 +12,7 @@ For the higher-level maintenance workflow, pair this guide with
 | --- | --- | --- | --- |
 | Smoke | Fast formatting / compile / feature-surface regressions | `rustfmt`, `clippy`, `msrv`, `no-lean`, minimal + optional feature surface, docs | Every PR and push |
 | Runtime | Focused Lean-backed integration coverage | core runtime, async/tokio, macro runtime, FFI layout check | Every PR and push |
+| Examples | End-to-end Lean↔Rust template projects build and run | `examples` (lake-integration + class-integration on Linux and macOS, Lean v4.30.0; also verifies committed codegen output is fresh) | Every PR and push |
 | API | PR-only compatibility guard | semver checks | Pull requests |
 | Compat / Heavy | Broad matrix and expensive diagnostics | feature powerset, full OS/Lean matrix, beta clippy, careful, ASan, coverage | Pushes to `main` / `develop`, daily schedule, or PRs labeled `CI-build-full` |
 
@@ -46,8 +47,8 @@ Response expectations for `ci-compat-failure` issues are documented in
 
 ## Required vs Optional Paths
 
-- **Required on PRs:** Smoke + Runtime + API tiers.
-- **Required on pushes to `main` / `develop`:** Smoke + Runtime + Compat / Heavy tiers.
+- **Required on PRs:** Smoke + Runtime + Examples + API tiers.
+- **Required on pushes to `main` / `develop`:** Smoke + Runtime + Examples + Compat / Heavy tiers.
 - **Opt into the full PR matrix:** add the `CI-build-full` label.
 - **Disable matrix fail-fast on a PR:** add the `CI-no-fail-fast` label.
 - **Allow PR cache writes:** add the `CI-save-pr-cache` label.

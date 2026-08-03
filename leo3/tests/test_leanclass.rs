@@ -256,8 +256,6 @@ fn test_cow_shared_mutation_creates_copy() {
 
 #[test]
 fn test_cow_multiple_shared_mutations_create_independent_copies() {
-    use leo3::conversion::IntoLean;
-
     leo3::prepare_freethreaded_lean();
 
     leo3::with_lean(|lean| {
@@ -281,11 +279,8 @@ fn test_cow_multiple_shared_mutations_create_independent_copies() {
         // original_ptr still has RC=2, so it's still shared.
         // inc_ref to give the FFI call a ref to consume
         unsafe { leo3::ffi::object::lean_inc_ref(original_ptr) };
-        let copy2 = unsafe {
-            // Create a proper LeanInt32 object for the i32 argument
-            let lean_val = 42i32.into_lean(lean).unwrap();
-            __lean_ffi_Counter_set(original_ptr, lean_val.into_ptr())
-        };
+        // The `i32` argument crosses the boundary unboxed.
+        let copy2 = unsafe { __lean_ffi_Counter_set(original_ptr, 42) };
 
         // All three should be different objects
         assert_ne!(original_ptr, copy1, "first COW must produce a new object");
@@ -321,10 +316,8 @@ fn test_mut_ref_non_unit_returns_updated_object_and_value() {
         let counter = Counter { value: 10 };
         let external = LeanExternal::new(lean, counter).unwrap();
 
-        let pair_ptr = unsafe {
-            let amount = LeanInt32::mk(lean, 5)?;
-            __lean_ffi_Counter_bump_and_get(external.into_ptr(), amount.into_ptr())
-        };
+        // The object crosses boxed; the `i32` delta crosses unboxed.
+        let pair_ptr = unsafe { __lean_ffi_Counter_bump_and_get(external.into_ptr(), 5) };
 
         let pair = unsafe { LeanBound::<LeanProd>::from_owned_ptr(lean, pair_ptr) };
 
@@ -357,13 +350,9 @@ fn test_move_exclusive_does_not_clone() {
         // Verify it's exclusive
         assert!(unsafe { leo3::ffi::object::lean_is_exclusive(ptr) });
 
-        // Call consume_and_return via FFI — should move the value, not clone
-        let result_ptr = unsafe { __lean_ffi_Counter_consume_and_return(ptr) };
-
-        // The result should be the Lean representation of 42
-        let result_obj =
-            unsafe { leo3::LeanBound::<leo3::types::LeanInt32>::from_owned_ptr(lean, result_ptr) };
-        let result_val = <i32 as leo3::conversion::FromLean>::from_lean(&result_obj).unwrap();
+        // Call consume_and_return via FFI — should move the value, not clone.
+        // The `i32` result crosses the boundary unboxed.
+        let result_val = unsafe { __lean_ffi_Counter_consume_and_return(ptr) };
         assert_eq!(result_val, 42);
 
         // ptr was consumed by the FFI call (ownership transferred), no cleanup needed
@@ -387,13 +376,9 @@ fn test_move_shared_clones_value() {
         unsafe { leo3::ffi::object::lean_inc_ref(ptr) };
         // ptr now has RC=2
 
-        // Call consume_and_return via FFI — should clone since shared
-        let result_ptr = unsafe { __lean_ffi_Counter_consume_and_return(ptr) };
-
-        // The result should be the Lean representation of 99
-        let result_obj =
-            unsafe { leo3::LeanBound::<leo3::types::LeanInt32>::from_owned_ptr(lean, result_ptr) };
-        let result_val = <i32 as leo3::conversion::FromLean>::from_lean(&result_obj).unwrap();
+        // Call consume_and_return via FFI — should clone since shared.
+        // The `i32` result crosses the boundary unboxed.
+        let result_val = unsafe { __lean_ffi_Counter_consume_and_return(ptr) };
         assert_eq!(result_val, 99);
 
         // Original object should still be valid (we hold one extra ref)

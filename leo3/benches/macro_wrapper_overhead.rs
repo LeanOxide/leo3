@@ -47,22 +47,13 @@ fn bench_macro_vs_direct_u64(c: &mut Criterion) {
         });
     });
 
+    // Scalar-only wrappers use Lean's unboxed extern ABI: no Lean objects
+    // are allocated on the call path.
     group.bench_function("macro_ffi_wrapper", |b| {
-        b.iter(|| {
-            leo3::with_lean(|lean| -> LeanResult<()> {
-                let a = LeanUInt64::mk(lean, black_box(21))?;
-                let b_val = LeanUInt64::mk(lean, black_box(21))?;
-                unsafe {
-                    let result_ptr = __leo3_leanfn_bench_add_u64::__ffi_bench_add_u64(
-                        a.into_ptr(),
-                        b_val.into_ptr(),
-                    );
-                    let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-                    black_box(LeanUInt64::to_u64(&result));
-                }
-                Ok(())
-            })
-            .unwrap();
+        b.iter(|| unsafe {
+            let result =
+                __leo3_leanfn_bench_add_u64::__ffi_bench_add_u64(black_box(21), black_box(21));
+            black_box(result);
         });
     });
 
@@ -87,18 +78,9 @@ fn bench_macro_identity_overhead(c: &mut Criterion) {
     let mut group = c.benchmark_group("macro_identity_overhead");
 
     group.bench_function("identity_macro_ffi", |b| {
-        b.iter(|| {
-            leo3::with_lean(|lean| -> LeanResult<()> {
-                let x = LeanUInt64::mk(lean, black_box(42))?;
-                unsafe {
-                    let result_ptr =
-                        __leo3_leanfn_bench_identity_u64::__ffi_bench_identity_u64(x.into_ptr());
-                    let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-                    black_box(LeanUInt64::to_u64(&result));
-                }
-                Ok(())
-            })
-            .unwrap();
+        b.iter(|| unsafe {
+            let result = __leo3_leanfn_bench_identity_u64::__ffi_bench_identity_u64(black_box(42));
+            black_box(result);
         });
     });
 
@@ -129,10 +111,11 @@ fn bench_macro_string_overhead(c: &mut Criterion) {
             leo3::with_lean(|lean| -> LeanResult<()> {
                 let s = LeanString::mk(lean, black_box("hello world"))?;
                 unsafe {
-                    let result_ptr =
+                    // The `String` argument crosses boxed; the `u64` length
+                    // comes back unboxed.
+                    let result =
                         __leo3_leanfn_bench_string_len::__ffi_bench_string_len(s.into_ptr());
-                    let result: LeanBound<LeanUInt64> = LeanBound::from_owned_ptr(lean, result_ptr);
-                    black_box(LeanUInt64::to_u64(&result));
+                    black_box(result);
                 }
                 Ok(())
             })

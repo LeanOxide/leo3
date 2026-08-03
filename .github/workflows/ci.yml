@@ -385,6 +385,42 @@ jobs:
       suite: Bench / Criterion Suite
       command: cargo bench --locked -p leo3 --features "macros,runtime-tests" --bench array_conversion --bench int_ops_small --bench int_ops_big --bench container_ops --bench string_conversion --bench macro_wrapper_overhead -- --quick
 
+  examples:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    uses: ./.github/workflows/test.yml
+    with:
+      os: ${{ matrix.os }}
+      lean: v4.30.0
+      save-cache: ${{ github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'CI-save-pr-cache') }}
+      suite: Examples / End-to-End
+      command: |
+        set -euo pipefail
+        if [ "$RUNNER_OS" = "macOS" ]; then LIBPATH_VAR=DYLD_LIBRARY_PATH; else LIBPATH_VAR=LD_LIBRARY_PATH; fi
+
+        echo "::group::lake-integration"
+        cd examples/lake-integration/native
+        LEO3_NO_LEAN=1 cargo build --release
+        cd ../lean
+        lake build app
+        env "$LIBPATH_VAR=$PWD/../native/target/release" .lake/build/bin/app
+        cd ../../..
+        echo "::endgroup::"
+
+        echo "::group::class-integration"
+        cd examples/class-integration
+        ./gen-lean.sh
+        # The generated declarations are committed; fail if codegen output
+        # drifted from what is checked in.
+        git diff --exit-code -- lean
+        cd lean
+        lake build app
+        env "$LIBPATH_VAR=$PWD/../native/target/release" .lake/build/bin/app
+        cd ../../..
+        echo "::endgroup::"
+
   compat-failure-report:
     name: CI / Compat Failure Reporter
     # Track version drift only for real mainline runs: pushes to main, the
@@ -436,6 +472,7 @@ jobs:
       - macro-runtime
       - ffi-check
       - bench
+      - examples
       - compat-feature-powerset
       - compat-runtime-matrix
       - heavy-careful

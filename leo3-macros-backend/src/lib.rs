@@ -13,6 +13,7 @@ pub mod derive;
 pub mod lean_instance;
 pub mod leanclass;
 pub mod leanfn;
+pub mod scalar_abi;
 pub mod surface;
 
 pub use lean_instance::{build_lean_instance, LeanInstanceOptions};

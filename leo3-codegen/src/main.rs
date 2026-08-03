@@ -94,7 +94,11 @@ fn process_library(lib_path: &Path, output_dir: &Path) -> Result<(), String> {
             let binding: ModuleBinding = serde_json::from_str(json_data)
                 .map_err(|e| format!("failed to parse module metadata for `{module_name}`: {e}"))?;
             let lean_code = generate_module_lean(&binding);
-            let file_name = format!("{}.lean", module_name.replace('.', "/"));
+            // File paths follow the real (dotted) module name so nested
+            // modules land where Lean's import resolution expects them
+            // (`A.B` -> `A/B.lean`). The symbol-derived `module_name`
+            // has dots sanitized away and would flatten the hierarchy.
+            let file_name = format!("{}.lean", binding.name.replace('.', "/"));
             let file_path = output_dir.join(&file_name);
             if let Some(parent) = file_path.parent() {
                 std::fs::create_dir_all(parent)

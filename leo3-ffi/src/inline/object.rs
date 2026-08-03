@@ -18,7 +18,6 @@ use libc::c_void;
 use libc::{c_uint, size_t};
 use std::sync::atomic::{AtomicI32, Ordering};
 
-#[cfg(any(lean_small_allocator, lean_mimalloc))]
 const LEAN_OBJECT_SIZE_DELTA: size_t = 8;
 
 #[cfg(lean_mimalloc)]
@@ -64,7 +63,6 @@ pub unsafe fn lean_ptr_other(o: *const lean_object) -> u8 {
     (*o).m_other
 }
 
-#[cfg(any(lean_small_allocator, lean_mimalloc))]
 #[inline(always)]
 unsafe fn lean_align(v: size_t, a: size_t) -> size_t {
     (v / a) * a + a * usize::from(!v.is_multiple_of(a))
@@ -602,15 +600,36 @@ pub unsafe fn lean_alloc_small_object(sz: c_uint) -> *mut lean_object {
 
     #[cfg(not(any(lean_small_allocator, lean_mimalloc)))]
     {
+        // No Lean toolchain was detected at build time (typically
+        // `LEO3_NO_LEAN=1` cdylib builds), so the host runtime's allocator
+        // is unknown. Do NOT fall back to `libc::malloc`: objects handed to
+        // Lean are deallocated by the host runtime (`lean_dec_ref_cold`),
+        // and official Lean toolchains are built with `LEAN_MIMALLOC`, so a
+        // system-malloc object freed through mimalloc corrupts the heap
+        // (segfault in `mi_free` on the first host-side deallocation).
+        //
+        // Instead, allocate through `lean_alloc_object`, the runtime's
+        // exported generic allocator (see `lean.h`). It dispatches to the
+        // host's real allocator, so every object lands on the same heap the
+        // host frees from. Linkers resolve it from the host executable:
+        // Lake/leanc link lines make the executable export the runtime
+        // symbols a native library references.
+        extern "C" {
+            fn lean_alloc_object(size: size_t) -> *mut lean_object;
+        }
+
         crate::lean_inc_heartbeat();
-        let total = std::mem::size_of::<size_t>() + sz as usize;
-        let mem = libc::malloc(total);
-        if mem.is_null() {
+        let aligned_sz = lean_align(sz as size_t, LEAN_OBJECT_SIZE_DELTA);
+        let o = lean_alloc_object(aligned_sz);
+        if o.is_null() {
             crate::object::lean_internal_panic_out_of_memory();
         }
 
-        *(mem as *mut size_t) = sz as size_t;
-        (mem as *mut size_t).add(1) as *mut lean_object
+        // Mirror the `LEAN_MIMALLOC` branch of lean.h's
+        // `lean_alloc_small_object`, which records the aligned size in the
+        // header (tooling such as `leangz` relies on it).
+        (*o).m_cs_sz = aligned_sz as u16;
+        o
     }
 }
 

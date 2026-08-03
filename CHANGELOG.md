@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `examples/class-integration/`: end-to-end Lean↔Rust template for the macro
+  pipeline — a `cdylib` built with `#[leanclass]` (methods, `#[getter]` /
+  `#[setter]`) plus `#[leanfn]` / `#[leanmodule]`, a reproducible
+  `leo3-codegen` script, and a Lake package that consumes the generated
+  declarations and verifies the results at runtime
+- CI: an `examples` job that builds and runs both example projects end to end
+  on Linux and macOS
+- `leo3::__private::scalar_ffi_panic_boundary`: generic panic boundary for
+  scalar-returning FFI entry points (used by generated code)
 - `docs/codegen.md`: standalone `leo3-codegen` guide — installation from
   crates.io, the full cdylib → codegen → Lake project walkthrough (verified on
   Linux), cross-platform metadata extraction (ELF symbols / Mach-O section /
@@ -17,10 +26,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (generated-code ABI):** `#[leanfn]` and `#[leanclass]` wrappers
+  now follow Lean's extern calling convention — fixed-width scalar parameters
+  and results (`u8`–`u64`, `i8`–`i64`, `usize`, `isize`, `f32`, `f64`, `bool`
+  as `u8`, `char` as `u32`) cross the FFI boundary unboxed, while `String`,
+  containers and class objects stay boxed `lean_object*` values. Previously
+  every parameter and result crossed boxed, which did not match the
+  declarations `leo3-codegen` emits: calling a generated `@[extern]`
+  declaration from Lean segfaulted. Rust code calling the generated wrappers
+  directly must pass/expect raw scalar values instead of boxed objects.
+  Every `#[leanfn]` export additionally gets an all-boxed `{name}_boxed`
+  companion entry point (mirroring Lean's own `_boxed` convention); dynamic
+  loading via `LeanFunction::callN` prefers the companion, so module loading
+  keeps its object-based `IntoLean` / `FromLean` calling ergonomics
+- Scalar-returning wrappers report boundary failures by aborting with a
+  diagnostic (scalar extern signatures cannot carry a Lean panic object);
+  object-returning wrappers keep the existing `lean_panic_fn` behavior
+- `*_LEAN_CLASS_DECL` constants and `leo3-codegen` class output now introduce
+  the class type through `NonemptyType` (`opaque Foo.ffi : NonemptyType` /
+  `def Foo : Type := Foo.ffi.val` / `instance : Nonempty Foo`), the same
+  pattern the Lean standard library uses for `IO.RealWorld`. The previous
+  bare `opaque Foo : Type` did not elaborate: `opaque` declarations require
+  an `Inhabited`/`Nonempty` instance, so every generated constructor or
+  updater declaration failed to type-check.
 - `release.yml`: the publish step now skips crate versions that are already
   published on crates.io, so a partially failed release can be retried (via
   job re-run or `workflow_dispatch`) without bumping the version or
   overwriting the tag
+
+### Fixed
+
+- macOS link failure for `LEO3_NO_LEAN=1` cdylib builds (the lake-integration
+  workflow): Apple's linker rejects the Lean runtime symbols such cdylibs
+  intentionally leave undefined for load-time resolution (ELF linkers accept
+  them). `leo3-build-config` now passes `-Wl,-undefined,dynamic_lookup` for
+  Apple-target links in no-lean mode
+- Heap corruption when a `LEO3_NO_LEAN=1` cdylib allocates Lean objects
+  (external class instances, `Prod` results from `&mut self` methods that
+  also return a value, inline-allocated containers): without a detected Lean
+  toolchain the inline small-object allocator fell back to `libc::malloc`
+  with a size prefix (a port of lean.h's system-allocator branch), but
+  official Lean toolchains are built with `LEAN_MIMALLOC`, so the first
+  host-side deallocation of such an object freed a malloc pointer through
+  mimalloc and segfaulted. The fallback now allocates through the runtime's
+  exported `lean_alloc_object` entry point, which dispatches to the host's
+  real allocator; linkers surface the symbol into the host executable
+  because the cdylib references it
+- `leo3-codegen`: dotted module names (`#[leanmodule(name = "A.B")]`) now
+  generate nested file paths (`A/B.lean`) matching Lean's import resolution.
+  Previously the output file name was derived from the metadata symbol, whose
+  dots are sanitized to underscores, producing `A_B.lean` that Lean could not
+  import as `A.B`
 
 ## [0.3.1] - 2026-08-03
 

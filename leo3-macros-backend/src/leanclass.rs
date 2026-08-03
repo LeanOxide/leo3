@@ -8,7 +8,7 @@
 //! `.lean` files.
 
 use leo3_binding_ir::{
-    analyze_lean_class_impl, analyze_lean_class_struct, class_binding_to_json,
+    analyze_lean_class_impl, analyze_lean_class_struct, class_binding_to_json, class_opaque_decl,
     quote_metadata_section_static, quote_runtime_class_metadata, quote_runtime_function_metadata,
     ClassImplBinding, ClassTypeBinding, FunctionBinding,
 };
@@ -16,6 +16,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::Parse;
 
+use crate::scalar_abi::ScalarAbi;
 use crate::{get_leo3_crate, CommonOptions};
 
 /// Options for the `#[leanclass]` attribute
@@ -149,7 +150,7 @@ pub fn build_lean_class_impl(
     let class_binding = ClassTypeBinding {
         rust_name: struct_name.to_string(),
         lean_name: struct_name.to_string(),
-        opaque_decl: format!("opaque {} : Type", struct_name),
+        opaque_decl: class_opaque_decl(&struct_name.to_string()),
     };
     let lean_code_gen =
         generate_lean_code_metadata_for_methods(&class_binding, &impl_binding, &leo3_crate)?;
@@ -320,6 +321,11 @@ fn generate_param_conversions_with_offset(
         .enumerate()
         .map(|(i, (name, ty))| {
             let arg_name = format_ident!("arg{}", i + offset);
+            if let Some(abi) = ScalarAbi::from_type(ty) {
+                // Unboxed scalar: Lean passes the raw C value directly, so
+                // there is no object to convert (bool/char are rebuilt).
+                return abi.param_binding(name, &arg_name, leo3_crate);
+            }
             quote! {
                 let #name = {
                     let bound = #leo3_crate::LeanBound::<_>::from_owned_ptr(lean, #arg_name);
@@ -335,17 +341,77 @@ fn generate_param_conversions_with_offset(
         .collect()
 }
 
+/// FFI parameter declarations for a method.
+///
+/// The external-object receiver (when present) always crosses as a boxed
+/// `lean_object*`; scalar parameters use Lean's unboxed extern convention.
+fn method_ffi_param_decls(
+    params: &[(syn::Ident, syn::Type)],
+    has_receiver: bool,
+    leo3_crate: &TokenStream,
+) -> Vec<TokenStream> {
+    let mut decls = Vec::with_capacity(params.len() + 1);
+    let offset = if has_receiver {
+        decls.push(quote! { arg0: #leo3_crate::ffi::object::lean_obj_arg });
+        1
+    } else {
+        0
+    };
+    for (i, (_, ty)) in params.iter().enumerate() {
+        let arg_name = format_ident!("arg{}", i + offset);
+        match ScalarAbi::from_type(ty) {
+            Some(abi) => {
+                let boundary = abi.boundary_type();
+                decls.push(quote! { #arg_name: #boundary });
+            }
+            None => decls.push(quote! { #arg_name: #leo3_crate::ffi::object::lean_obj_arg }),
+        }
+    }
+    decls
+}
+
+/// The unboxed return ABI of a method, when its Lean-visible result is a
+/// plain scalar. `&mut self` methods always return a boxed value (the
+/// updated object, or `Prod` of object and value), as do unit and `Self`
+/// returns.
+fn method_return_abi(method: &MethodInfo, struct_name: &syn::Ident) -> Option<ScalarAbi> {
+    if matches!(method.receiver, MethodReceiver::MutRef) {
+        return None;
+    }
+    if is_unit_type(&method.return_type) || is_self_return(&method.return_type, struct_name) {
+        return None;
+    }
+    ScalarAbi::from_type(&method.return_type)
+}
+
 fn generate_object_ffi_wrapper(
     ffi_name: &syn::Ident,
     try_name: &syn::Ident,
     ffi_params: &[TokenStream],
     wrapper_call_args: &[TokenStream],
+    ret_ty: &TokenStream,
+    scalar_return: bool,
     leo3_crate: &TokenStream,
 ) -> TokenStream {
-    quote! {
-        #[no_mangle]
-        pub unsafe extern "C" fn #ffi_name(#(#ffi_params),*) -> #leo3_crate::ffi::object::lean_obj_res {
-            #leo3_crate::__private::ffi_panic_boundary(|| #try_name(#(#wrapper_call_args),*))
+    if scalar_return {
+        // Scalar-returning extern signatures cannot carry a Lean panic
+        // object, so boundary failures terminate explicitly instead.
+        let symbol = ffi_name.to_string();
+        quote! {
+            #[no_mangle]
+            pub unsafe extern "C" fn #ffi_name(#(#ffi_params),*) -> #ret_ty {
+                #leo3_crate::__private::scalar_ffi_panic_boundary(
+                    #symbol,
+                    || #try_name(#(#wrapper_call_args),*),
+                )
+            }
+        }
+    } else {
+        quote! {
+            #[no_mangle]
+            pub unsafe extern "C" fn #ffi_name(#(#ffi_params),*) -> #ret_ty {
+                #leo3_crate::__private::ffi_panic_boundary(|| #try_name(#(#wrapper_call_args),*))
+            }
         }
     }
 }
@@ -363,14 +429,9 @@ fn generate_static_method_wrapper(
     let params = &method.params;
     let return_type = &method.return_type;
 
-    // Generate FFI parameters
+    // Generate FFI parameters (unboxed for scalars, boxed objects otherwise)
     let param_count = params.len();
-    let ffi_params: Vec<_> = (0..param_count)
-        .map(|i| {
-            let arg_name = format_ident!("arg{}", i);
-            quote! { #arg_name: #leo3_crate::ffi::object::lean_obj_arg }
-        })
-        .collect();
+    let ffi_params = method_ffi_param_decls(params, false, leo3_crate);
     let wrapper_call_args: Vec<_> = (0..param_count)
         .map(|i| {
             let arg_name = format_ident!("arg{}", i);
@@ -384,8 +445,17 @@ fn generate_static_method_wrapper(
     // Generate method call
     let param_names: Vec<_> = params.iter().map(|(name, _)| name).collect();
 
+    let return_abi = method_return_abi(method, struct_name);
+    let ret_ty = match return_abi {
+        Some(abi) => abi.boundary_type(),
+        None => quote! { #leo3_crate::ffi::object::lean_obj_res },
+    };
+
     // Generate result conversion
-    let result_conversion = if is_self_return(return_type, struct_name) {
+    let result_conversion = if let Some(abi) = return_abi {
+        let value = abi.result_expr(quote! { result });
+        quote! { Ok(#value) }
+    } else if is_self_return(return_type, struct_name) {
         // Returns Self - wrap in LeanExternal
         quote! {
             {
@@ -418,6 +488,8 @@ fn generate_static_method_wrapper(
         try_name,
         &ffi_params,
         &wrapper_call_args,
+        &ret_ty,
+        return_abi.is_some(),
         leo3_crate,
     );
     let metadata = quote_runtime_function_metadata(binding, leo3_crate);
@@ -426,8 +498,8 @@ fn generate_static_method_wrapper(
         #ffi_wrapper
 
         #[doc(hidden)]
-        #[allow(non_snake_case)]
-        pub(crate) unsafe fn #try_name(#(#ffi_params),*) -> #leo3_crate::LeanResult<#leo3_crate::ffi::object::lean_obj_res> {
+        #[allow(non_snake_case, unused_variables)]
+        pub(crate) unsafe fn #try_name(#(#ffi_params),*) -> #leo3_crate::LeanResult<#ret_ty> {
             let lean = #leo3_crate::Lean::assume_initialized();
 
             #(#param_conversions)*
@@ -462,12 +534,7 @@ fn generate_ref_method_wrapper(
 
     // First parameter is the external object
     let param_count = params.len() + 1;
-    let ffi_params: Vec<_> = (0..param_count)
-        .map(|i| {
-            let arg_name = format_ident!("arg{}", i);
-            quote! { #arg_name: #leo3_crate::ffi::object::lean_obj_arg }
-        })
-        .collect();
+    let ffi_params = method_ffi_param_decls(params, true, leo3_crate);
     let wrapper_call_args: Vec<_> = (0..param_count)
         .map(|i| {
             let arg_name = format_ident!("arg{}", i);
@@ -487,8 +554,17 @@ fn generate_ref_method_wrapper(
     // Generate method call
     let param_names: Vec<_> = params.iter().map(|(name, _)| name).collect();
 
+    let return_abi = method_return_abi(method, struct_name);
+    let ret_ty = match return_abi {
+        Some(abi) => abi.boundary_type(),
+        None => quote! { #leo3_crate::ffi::object::lean_obj_res },
+    };
+
     // Generate result conversion
-    let result_conversion = if is_unit_type(return_type) {
+    let result_conversion = if let Some(abi) = return_abi {
+        let value = abi.result_expr(quote! { result });
+        quote! { Ok(#value) }
+    } else if is_unit_type(return_type) {
         quote! {
             Ok(unsafe { #leo3_crate::ffi::lean_mk_unit() })
         }
@@ -509,6 +585,8 @@ fn generate_ref_method_wrapper(
         try_name,
         &ffi_params,
         &wrapper_call_args,
+        &ret_ty,
+        return_abi.is_some(),
         leo3_crate,
     );
     let metadata = quote_runtime_function_metadata(binding, leo3_crate);
@@ -518,7 +596,7 @@ fn generate_ref_method_wrapper(
 
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        pub(crate) unsafe fn #try_name(#(#ffi_params),*) -> #leo3_crate::LeanResult<#leo3_crate::ffi::object::lean_obj_res> {
+        pub(crate) unsafe fn #try_name(#(#ffi_params),*) -> #leo3_crate::LeanResult<#ret_ty> {
             let lean = #leo3_crate::Lean::assume_initialized();
 
             #self_conversion
@@ -553,14 +631,11 @@ fn generate_mut_ref_method_wrapper(
     let params = &method.params;
     let return_type = &method.return_type;
 
-    // First parameter is the external object
+    // First parameter is the external object. `&mut self` methods always
+    // return a boxed value (the updated object, or `Prod` of object and
+    // value), but scalar parameters still cross unboxed.
     let param_count = params.len() + 1;
-    let ffi_params: Vec<_> = (0..param_count)
-        .map(|i| {
-            let arg_name = format_ident!("arg{}", i);
-            quote! { #arg_name: #leo3_crate::ffi::object::lean_obj_arg }
-        })
-        .collect();
+    let ffi_params = method_ffi_param_decls(params, true, leo3_crate);
     let wrapper_call_args: Vec<_> = (0..param_count)
         .map(|i| {
             let arg_name = format_ident!("arg{}", i);
@@ -620,11 +695,14 @@ fn generate_mut_ref_method_wrapper(
             }
         }
     };
+    let ret_ty = quote! { #leo3_crate::ffi::object::lean_obj_res };
     let ffi_wrapper = generate_object_ffi_wrapper(
         ffi_name,
         try_name,
         &ffi_params,
         &wrapper_call_args,
+        &ret_ty,
+        false,
         leo3_crate,
     );
     let metadata = quote_runtime_function_metadata(binding, leo3_crate);
@@ -634,7 +712,7 @@ fn generate_mut_ref_method_wrapper(
 
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        pub(crate) unsafe fn #try_name(#(#ffi_params),*) -> #leo3_crate::LeanResult<#leo3_crate::ffi::object::lean_obj_res> {
+        pub(crate) unsafe fn #try_name(#(#ffi_params),*) -> #leo3_crate::LeanResult<#ret_ty> {
             let lean = #leo3_crate::Lean::assume_initialized();
 
             #self_conversion
@@ -670,12 +748,7 @@ fn generate_owned_method_wrapper(
 
     // First parameter is the external object
     let param_count = params.len() + 1;
-    let ffi_params: Vec<_> = (0..param_count)
-        .map(|i| {
-            let arg_name = format_ident!("arg{}", i);
-            quote! { #arg_name: #leo3_crate::ffi::object::lean_obj_arg }
-        })
-        .collect();
+    let ffi_params = method_ffi_param_decls(params, true, leo3_crate);
     let wrapper_call_args: Vec<_> = (0..param_count)
         .map(|i| {
             let arg_name = format_ident!("arg{}", i);
@@ -704,8 +777,17 @@ fn generate_owned_method_wrapper(
     // Generate method call
     let param_names: Vec<_> = params.iter().map(|(name, _)| name).collect();
 
+    let return_abi = method_return_abi(method, struct_name);
+    let ret_ty = match return_abi {
+        Some(abi) => abi.boundary_type(),
+        None => quote! { #leo3_crate::ffi::object::lean_obj_res },
+    };
+
     // Generate result conversion
-    let result_conversion = if is_unit_type(return_type) {
+    let result_conversion = if let Some(abi) = return_abi {
+        let value = abi.result_expr(quote! { result });
+        quote! { Ok(#value) }
+    } else if is_unit_type(return_type) {
         quote! {
             Ok(unsafe { #leo3_crate::ffi::lean_mk_unit() })
         }
@@ -726,6 +808,8 @@ fn generate_owned_method_wrapper(
         try_name,
         &ffi_params,
         &wrapper_call_args,
+        &ret_ty,
+        return_abi.is_some(),
         leo3_crate,
     );
     let metadata = quote_runtime_function_metadata(binding, leo3_crate);
@@ -735,7 +819,7 @@ fn generate_owned_method_wrapper(
 
         #[doc(hidden)]
         #[allow(non_snake_case)]
-        pub(crate) unsafe fn #try_name(#(#ffi_params),*) -> #leo3_crate::LeanResult<#leo3_crate::ffi::object::lean_obj_res> {
+        pub(crate) unsafe fn #try_name(#(#ffi_params),*) -> #leo3_crate::LeanResult<#ret_ty> {
             let lean = #leo3_crate::Lean::assume_initialized();
 
             #self_conversion
@@ -756,11 +840,15 @@ fn generate_owned_method_wrapper(
     })
 }
 
-/// Generate a string constant containing the Lean `opaque` type declaration for the struct.
+/// Generate a string constant containing the Lean type declarations for the struct.
 ///
-/// For a struct named `Foo`, this produces:
+/// For a struct named `Foo`, this produces the `NonemptyType`-backed
+/// declaration triple (see `class_opaque_decl`):
 /// ```ignore
-/// pub const FOO_LEAN_CLASS_DECL: &str = "opaque Foo : Type";
+/// pub const FOO_LEAN_CLASS_DECL: &str =
+///     "opaque Foo.ffi : NonemptyType\n\
+///      def Foo : Type := Foo.ffi.val\n\
+///      instance : Nonempty Foo := Foo.ffi.property";
 /// ```
 fn generate_lean_code_metadata(class_binding: &ClassTypeBinding) -> TokenStream {
     let const_name = format_ident!("{}_LEAN_CLASS_DECL", class_binding.rust_name.to_uppercase());

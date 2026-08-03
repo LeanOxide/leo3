@@ -13,6 +13,7 @@ use crate::conversion_plan::{
     is_borrowed_string, is_borrowed_u8_slice, is_borrowed_vec_u8, is_vec_u8, option_inner,
     render_return_plan, result_parts,
 };
+use crate::scalar_abi::ScalarAbi;
 use crate::{get_leo3_crate, CommonOptions};
 
 pub struct ConcreteInstance {
@@ -208,10 +209,38 @@ fn analyze_function(
     })
 }
 
-/// Generate parameter conversion code
+/// FFI parameter declarations for a function signature.
+///
+/// Scalar parameters use Lean's unboxed extern convention (raw C values);
+/// every other shape crosses as a boxed `lean_object*`.
+fn ffi_param_decls(
+    params: &[(syn::Ident, syn::Type)],
+    leo3_crate: &TokenStream,
+) -> Vec<TokenStream> {
+    params
+        .iter()
+        .enumerate()
+        .map(|(i, (_, ty))| {
+            let arg_name = format_ident!("arg{}", i);
+            match ScalarAbi::from_type(ty) {
+                Some(abi) => {
+                    let boundary = abi.boundary_type();
+                    quote! { #arg_name: #boundary }
+                }
+                None => quote! { #arg_name: #leo3_crate::ffi::object::lean_obj_arg },
+            }
+        })
+        .collect()
+}
+
+/// Generate parameter conversion code.
+///
+/// With `force_boxed`, every parameter uses the boxed object convention even
+/// when it is a scalar; this is used for the `_boxed` companion entry points.
 fn generate_param_conversions(
     params: &[(syn::Ident, syn::Type)],
     leo3_crate: &TokenStream,
+    force_boxed: bool,
 ) -> Vec<TokenStream> {
     let mut counter = 0usize;
     params
@@ -219,6 +248,13 @@ fn generate_param_conversions(
         .enumerate()
         .map(|(i, (name, ty))| {
             let arg_name = format_ident!("arg{}", i);
+            if !force_boxed {
+                if let Some(abi) = ScalarAbi::from_type(ty) {
+                    // Unboxed scalar: no Lean object is involved, so the value
+                    // crosses the boundary as-is (bool/char are reconstructed).
+                    return abi.param_binding(name, &arg_name, leo3_crate);
+                }
+            }
             let source_ty = lean_source_type(ty, leo3_crate);
             if let Some(plan) = crate::conversion_plan::build_storage_plan(ty) {
                 return crate::conversion_plan::render_storage_plan_binding(
@@ -250,7 +286,19 @@ fn generate_param_conversions(
 }
 
 /// Generate result conversion code
-fn generate_result_conversion(return_type: &syn::Type, leo3_crate: &TokenStream) -> TokenStream {
+fn generate_result_conversion(
+    return_type: &syn::Type,
+    leo3_crate: &TokenStream,
+    force_boxed: bool,
+) -> TokenStream {
+    // Unboxed scalar results are returned by value, with no Lean object.
+    // `force_boxed` keeps the `_boxed` companions on the object path.
+    if !force_boxed {
+        if let Some(abi) = ScalarAbi::from_type(return_type) {
+            let value = abi.result_expr(quote! { result });
+            return quote! { Ok(#value) };
+        }
+    }
     // Check if return type is unit ()
     if matches!(return_type, syn::Type::Tuple(t) if t.elems.is_empty()) {
         // For unit return type, return a unit Lean object (constructor 0 with 0 fields)
@@ -448,19 +496,41 @@ fn fresh_ident(prefix: &str, counter: &mut usize) -> syn::Ident {
     ident
 }
 
-/// Generate the FFI wrapper function with panic boundary
-fn generate_ffi_wrapper(info: &FunctionInfo, leo3_crate: &TokenStream) -> TokenStream {
-    let lean_name = &info.lean_name;
-    // Internal name to avoid conflicts with imported names
-    let internal_ffi_name = format_ident!("__ffi_{}", lean_name);
-
-    let param_count = info.params.len();
-    let ffi_params: Vec<_> = (0..param_count)
-        .map(|i| {
+/// All-boxed parameter declarations used by the `_boxed` companions.
+fn boxed_param_decls(
+    params: &[(syn::Ident, syn::Type)],
+    leo3_crate: &TokenStream,
+) -> Vec<TokenStream> {
+    params
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
             let arg_name = format_ident!("arg{}", i);
             quote! { #arg_name: #leo3_crate::ffi::object::lean_obj_arg }
         })
-        .collect();
+        .collect()
+}
+
+/// Generate the FFI wrapper functions with panic boundaries.
+///
+/// Two entry points are emitted per export, following Lean's own extern
+/// convention:
+///
+/// - `{lean_name}` uses the mixed unboxed/boxed ABI matching the Lean
+///   declarations `leo3-codegen` emits (this is what Lean itself calls);
+/// - `{lean_name}_boxed` is the all-boxed companion used by dynamic Rust
+///   callers (`LeanFunction::callN`), which convert through `IntoLean` /
+///   `FromLean` objects.
+fn generate_ffi_wrapper(info: &FunctionInfo, leo3_crate: &TokenStream) -> TokenStream {
+    let lean_name = &info.lean_name;
+    // Internal names to avoid conflicts with imported names
+    let internal_ffi_name = format_ident!("__ffi_{}", lean_name);
+    let internal_boxed_name = format_ident!("__ffi_{}_boxed", lean_name);
+    let boxed_export_name = format!("{lean_name}_boxed");
+
+    let param_count = info.params.len();
+    let ffi_params = ffi_param_decls(&info.params, leo3_crate);
+    let boxed_params = boxed_param_decls(&info.params, leo3_crate);
 
     let wrapper_call_args: Vec<_> = (0..param_count)
         .map(|i| {
@@ -469,15 +539,58 @@ fn generate_ffi_wrapper(info: &FunctionInfo, leo3_crate: &TokenStream) -> TokenS
         })
         .collect();
 
-    quote! {
+    let unboxed_entry = if let Some(abi) = ScalarAbi::from_type(&info.return_type) {
+        // Scalar-returning extern signatures cannot carry a Lean panic
+        // object, so boundary failures terminate explicitly instead.
+        let ret_ty = abi.boundary_type();
+        quote! {
+            #[no_mangle]
+            #[export_name = #lean_name]
+            pub unsafe extern "C" fn #internal_ffi_name(
+                #(#ffi_params),*
+            ) -> #ret_ty {
+                #leo3_crate::__private::scalar_ffi_panic_boundary(
+                    #lean_name,
+                    || __ffi_try_wrapper(#(#wrapper_call_args),*),
+                )
+            }
+        }
+    } else {
+        quote! {
+            #[no_mangle]
+            #[export_name = #lean_name]
+            pub unsafe extern "C" fn #internal_ffi_name(
+                #(#ffi_params),*
+            ) -> #leo3_crate::ffi::object::lean_obj_res {
+                // Panic safety boundary - catch any panics and convert to Lean panic
+                match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                    __ffi_try_wrapper(#(#wrapper_call_args),*)
+                })) {
+                    Ok(Ok(ptr)) => ptr,
+                    Ok(Err(err)) => {
+                        let lean = #leo3_crate::Lean::assume_initialized();
+                        #leo3_crate::__private::lean_panic_message(lean, &err.to_string())
+                    }
+                    Err(payload) => {
+                        let lean = #leo3_crate::Lean::assume_initialized();
+                        let message = #leo3_crate::__private::panic_payload_message(payload.as_ref());
+                        #leo3_crate::__private::lean_panic_message(lean, &message)
+                    }
+                }
+            }
+        }
+    };
+
+    // The boxed companion always returns an object, so it can report
+    // boundary failures as Lean panics.
+    let boxed_entry = quote! {
         #[no_mangle]
-        #[export_name = #lean_name]
-        pub unsafe extern "C" fn #internal_ffi_name(
-            #(#ffi_params),*
+        #[export_name = #boxed_export_name]
+        pub unsafe extern "C" fn #internal_boxed_name(
+            #(#boxed_params),*
         ) -> #leo3_crate::ffi::object::lean_obj_res {
-            // Panic safety boundary - catch any panics and convert to Lean panic
             match ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
-                __ffi_try_wrapper(#(#wrapper_call_args),*)
+                __ffi_try_wrapper_boxed(#(#wrapper_call_args),*)
             })) {
                 Ok(Ok(ptr)) => ptr,
                 Ok(Err(err)) => {
@@ -491,6 +604,12 @@ fn generate_ffi_wrapper(info: &FunctionInfo, leo3_crate: &TokenStream) -> TokenS
                 }
             }
         }
+    };
+
+    quote! {
+        #unboxed_entry
+
+        #boxed_entry
     }
 }
 
@@ -499,19 +618,27 @@ fn generate_conversion_wrapper(
     info: &FunctionInfo,
     leo3_crate: &TokenStream,
     turbofish: Option<&TokenStream>,
+    try_name: &syn::Ident,
+    force_boxed: bool,
 ) -> TokenStream {
     let rust_name = &info.rust_name;
-    let param_count = info.params.len();
 
-    let ffi_params: Vec<_> = (0..param_count)
-        .map(|i| {
-            let arg_name = format_ident!("arg{}", i);
-            quote! { #arg_name: #leo3_crate::ffi::object::lean_obj_arg }
-        })
-        .collect();
+    let ffi_params = if force_boxed {
+        boxed_param_decls(&info.params, leo3_crate)
+    } else {
+        ffi_param_decls(&info.params, leo3_crate)
+    };
 
-    let param_conversions = generate_param_conversions(&info.params, leo3_crate);
-    let result_conversion = generate_result_conversion(&info.return_type, leo3_crate);
+    let param_conversions = generate_param_conversions(&info.params, leo3_crate, force_boxed);
+    let result_conversion = generate_result_conversion(&info.return_type, leo3_crate, force_boxed);
+    let ret_ty = if force_boxed {
+        quote! { #leo3_crate::ffi::object::lean_obj_res }
+    } else {
+        match ScalarAbi::from_type(&info.return_type) {
+            Some(abi) => abi.boundary_type(),
+            None => quote! { #leo3_crate::ffi::object::lean_obj_res },
+        }
+    };
 
     let call_args: Vec<_> = info
         .params
@@ -538,9 +665,10 @@ fn generate_conversion_wrapper(
     };
 
     quote! {
-        pub(crate) unsafe fn __ffi_try_wrapper(
+        #[allow(unused_variables)]
+        pub(crate) unsafe fn #try_name(
             #(#ffi_params),*
-        ) -> #leo3_crate::err::LeanResult<#leo3_crate::ffi::object::lean_obj_res> {
+        ) -> #leo3_crate::err::LeanResult<#ret_ty> {
             let lean = #leo3_crate::Lean::assume_initialized();
 
             #(#param_conversions)*
@@ -609,7 +737,20 @@ fn build_lean_function_simple(
     let metadata_name = format_ident!("__leo3_metadata_{}", rust_name);
 
     let ffi_wrapper = generate_ffi_wrapper(&info, leo3_crate);
-    let conversion_wrapper = generate_conversion_wrapper(&info, leo3_crate, None);
+    let conversion_wrapper = generate_conversion_wrapper(
+        &info,
+        leo3_crate,
+        None,
+        &format_ident!("__ffi_try_wrapper"),
+        false,
+    );
+    let boxed_conversion_wrapper = generate_conversion_wrapper(
+        &info,
+        leo3_crate,
+        None,
+        &format_ident!("__ffi_try_wrapper_boxed"),
+        true,
+    );
     let metadata = generate_metadata(&binding, leo3_crate);
 
     let internal_ffi_name = format_ident!("__ffi_{}", &info.lean_name);
@@ -634,6 +775,8 @@ fn build_lean_function_simple(
             #ffi_wrapper
 
             #conversion_wrapper
+
+            #boxed_conversion_wrapper
 
             #metadata
         }
@@ -700,7 +843,20 @@ fn build_lean_function_concrete(
         let turbofish = quote! { <#(#turbofish_types),*> };
 
         let ffi_wrapper = generate_ffi_wrapper(&info, leo3_crate);
-        let conversion_wrapper = generate_conversion_wrapper(&info, leo3_crate, Some(&turbofish));
+        let conversion_wrapper = generate_conversion_wrapper(
+            &info,
+            leo3_crate,
+            Some(&turbofish),
+            &format_ident!("__ffi_try_wrapper"),
+            false,
+        );
+        let boxed_conversion_wrapper = generate_conversion_wrapper(
+            &info,
+            leo3_crate,
+            Some(&turbofish),
+            &format_ident!("__ffi_try_wrapper_boxed"),
+            true,
+        );
         let metadata = generate_metadata(&binding, leo3_crate);
 
         let internal_ffi_name = format_ident!("__ffi_{}", &concrete.name);
@@ -714,6 +870,8 @@ fn build_lean_function_concrete(
                 #ffi_wrapper
 
                 #conversion_wrapper
+
+                #boxed_conversion_wrapper
 
                 #metadata
             }
@@ -748,7 +906,7 @@ mod tests {
     #[test]
     fn generated_wrapper_avoids_expect_for_boundary_failures() {
         let mut func: syn::ItemFn = syn::parse_quote! {
-            fn demo(x: u64) -> u64 {
+            fn demo(x: String) -> String {
                 x
             }
         };
@@ -769,6 +927,70 @@ mod tests {
         assert!(rendered.contains("Failed to convert Rust result to Lean"));
         assert!(!rendered.contains(".expect("));
         assert!(!rendered.contains(". expect ("));
+    }
+
+    #[test]
+    fn generated_wrapper_uses_unboxed_scalar_abi() {
+        let mut func: syn::ItemFn = syn::parse_quote! {
+            fn demo(a: u64, flag: bool, letter: char, name: String) -> i32 {
+                let _ = (a, flag, letter, name);
+                0
+            }
+        };
+
+        let tokens = build_lean_function(
+            &mut func,
+            LeanFunctionOptions {
+                common: CommonOptions::default(),
+                concretes: Vec::new(),
+            },
+        )
+        .expect("leanfn expansion should succeed");
+
+        let rendered = tokens.to_string();
+        // Scalars cross the boundary unboxed: raw C types in the signature,
+        // no boxed-object conversion for them.
+        assert!(rendered.contains("arg0 : u64"));
+        assert!(rendered.contains("arg1 : u8"));
+        assert!(rendered.contains("arg2 : u32"));
+        assert!(rendered.contains(") -> i32"));
+        assert!(rendered.contains("let a = arg0 ;"));
+        assert!(rendered.contains("let flag = arg1 != 0 ;"));
+        assert!(rendered.contains("char :: from_u32 (arg2)"));
+        // Scalar-returning wrappers use the aborting boundary for the
+        // unboxed entry point.
+        assert!(rendered.contains("__private :: scalar_ffi_panic_boundary"));
+        // The non-scalar parameter still uses the boxed object convention.
+        assert!(rendered.contains("arg3 : :: leo3 :: ffi :: object :: lean_obj_arg"));
+        // Every export also gets an all-boxed `_boxed` companion for dynamic
+        // Rust callers (LeanFunction::callN).
+        assert!(rendered.contains("__ffi_demo_boxed"));
+        assert!(rendered.contains("\"demo_boxed\""));
+        assert!(rendered.contains("__ffi_try_wrapper_boxed"));
+    }
+
+    #[test]
+    fn generated_wrapper_keeps_boxed_abi_for_object_results() {
+        let mut func: syn::ItemFn = syn::parse_quote! {
+            fn demo(a: u64) -> String {
+                let _ = a;
+                String::new()
+            }
+        };
+
+        let tokens = build_lean_function(
+            &mut func,
+            LeanFunctionOptions {
+                common: CommonOptions::default(),
+                concretes: Vec::new(),
+            },
+        )
+        .expect("leanfn expansion should succeed");
+
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("arg0 : u64"));
+        assert!(rendered.contains("-> :: leo3 :: ffi :: object :: lean_obj_res"));
+        assert!(rendered.contains("__private :: lean_panic_message"));
     }
 
     #[test]
@@ -1135,7 +1357,10 @@ mod tests {
         .expect("identity concrete expansion should succeed");
 
         let rendered = tokens.to_string();
-        assert!(rendered.contains("FromLean"));
+        // `u64` is an unboxed scalar: the substituted instance passes the
+        // value through without any `FromLean` conversion.
+        assert!(rendered.contains("arg0 : u64"));
+        assert!(rendered.contains(") -> u64"));
         assert!(rendered.contains("identity :: < u64 >"));
     }
 }

@@ -412,6 +412,29 @@ pub fn analyze_lean_function(
     })
 }
 
+/// Lean declarations introducing an external class type.
+///
+/// A bare `opaque Foo : Type` cannot be used: `opaque` declarations require
+/// an `Inhabited` or `Nonempty` instance for their type, and every method
+/// returning the class (constructors, `&mut self` updaters) would fail to
+/// elaborate. The standard library solves the same problem for `IO.RealWorld`
+/// by going through `NonemptyType` (a `Subtype` bundling a type with a
+/// `Nonempty` proof, whose doc string names exactly this use case), so the
+/// generated declarations do the same:
+///
+/// ```lean
+/// opaque Foo.ffi : NonemptyType
+/// def Foo : Type := Foo.ffi.val
+/// instance : Nonempty Foo := Foo.ffi.property
+/// ```
+pub fn class_opaque_decl(lean_name: &str) -> String {
+    format!(
+        "opaque {lean_name}.ffi : NonemptyType\n\
+         def {lean_name} : Type := {lean_name}.ffi.val\n\
+         instance : Nonempty {lean_name} := {lean_name}.ffi.property"
+    )
+}
+
 pub fn analyze_lean_class_struct(item: &syn::ItemStruct) -> syn::Result<ClassTypeBinding> {
     if !item.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -424,7 +447,7 @@ pub fn analyze_lean_class_struct(item: &syn::ItemStruct) -> syn::Result<ClassTyp
     Ok(ClassTypeBinding {
         rust_name: rust_name.clone(),
         lean_name: rust_name.clone(),
-        opaque_decl: format!("opaque {} : Type", rust_name),
+        opaque_decl: class_opaque_decl(&rust_name),
     })
 }
 

@@ -60,7 +60,12 @@ impl TypeShowcase {
 
 #[test]
 fn test_lean_class_decl_constant() {
-    assert_eq!(WIDGET_LEAN_CLASS_DECL, "opaque Widget : Type");
+    assert_eq!(
+        WIDGET_LEAN_CLASS_DECL,
+        "opaque Widget.ffi : NonemptyType\n\
+         def Widget : Type := Widget.ffi.val\n\
+         instance : Nonempty Widget := Widget.ffi.property"
+    );
 }
 
 #[test]

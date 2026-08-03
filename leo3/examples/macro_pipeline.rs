@@ -65,30 +65,22 @@ fn main() -> LeanResult<()> {
         let rust_sum = counter_demo::add(20, 22);
         println!("Rust call: add(20, 22) = {}", rust_sum);
 
-        let sum = unsafe {
-            let a = LeanUInt64::mk(lean, 20)?;
-            let b = LeanUInt64::mk(lean, 22)?;
-            let ptr = counter_demo::counter_demo_add(a.into_ptr(), b.into_ptr());
-            let sum = LeanBound::<LeanUInt64>::from_owned_ptr(lean, ptr);
-            LeanUInt64::to_u64(&sum)
-        };
+        // Scalar-only exports use Lean's unboxed extern ABI: the generated
+        // wrapper takes raw `u64` values and returns a raw `u64`.
+        let sum = unsafe { counter_demo::counter_demo_add(20, 22) };
         println!("FFI call: add(20, 22) = {}", sum);
 
+        // Class methods mix conventions: scalar parameters cross unboxed,
+        // while the external object itself crosses as a boxed pointer.
         let counter_value = unsafe {
-            let initial = LeanInt32::mk(lean, 5)?;
-            let counter_ptr = __lean_ffi_Counter_new(initial.into_ptr());
-            let delta = LeanInt32::mk(lean, 3)?;
-            let counter_ptr = __lean_ffi_Counter_increment(counter_ptr, delta.into_ptr());
-            let value_ptr = __lean_ffi_Counter_get(counter_ptr);
-            let value = LeanBound::<LeanInt32>::from_owned_ptr(lean, value_ptr);
-            LeanInt32::to_i32(&value)
+            let counter_ptr = __lean_ffi_Counter_new(5);
+            let counter_ptr = __lean_ffi_Counter_increment(counter_ptr, 3);
+            __lean_ffi_Counter_get(counter_ptr)
         };
 
         let pair_value = unsafe {
-            let initial = LeanInt32::mk(lean, 10)?;
-            let counter_ptr = __lean_ffi_Counter_new(initial.into_ptr());
-            let delta = LeanInt32::mk(lean, 7)?;
-            let pair_ptr = __lean_ffi_Counter_increment_and_get(counter_ptr, delta.into_ptr());
+            let counter_ptr = __lean_ffi_Counter_new(10);
+            let pair_ptr = __lean_ffi_Counter_increment_and_get(counter_ptr, 7);
             let pair = LeanBound::<LeanProd>::from_owned_ptr(lean, pair_ptr);
             let updated_counter_any = LeanProd::fst(&pair);
             let updated_counter: LeanBound<'_, leo3::external::LeanExternalType<Counter>> =
@@ -110,8 +102,8 @@ fn main() -> LeanResult<()> {
 
         let ffi_banner = unsafe {
             let name = LeanString::mk(lean, "counter")?;
-            let count = LeanInt32::mk(lean, counter_value)?;
-            let ptr = counter_demo::counter_demo_banner(name.into_ptr(), count.into_ptr());
+            // `String` stays boxed; the `i32` count crosses unboxed.
+            let ptr = counter_demo::counter_demo_banner(name.into_ptr(), counter_value);
             let message = LeanBound::<LeanString>::from_owned_ptr(lean, ptr);
             LeanString::cstr(&message)?.to_owned()
         };
