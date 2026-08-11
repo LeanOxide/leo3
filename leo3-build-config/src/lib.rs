@@ -147,6 +147,7 @@ pub fn get_lean_config_with_source() -> Result<ResolvedLeanConfig, ResolutionErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::impl_::tests as impl_tests;
 
     #[test]
     fn get_lean_config_has_typed_error() {
@@ -157,5 +158,79 @@ mod tests {
     fn test_version_parsing() {
         // This test requires Lean to be installed
         // In CI, this might need to be conditional
+    }
+
+    #[test]
+    fn test_warn_resolution_error_prints_lines() {
+        let error = ResolutionError {
+            summary: "boom".to_string(),
+            attempts: vec![ResolutionAttempt {
+                source: LeanConfigSource::Lake,
+                error: "lake not found".to_string(),
+            }],
+            hints: vec!["hint one".to_string()],
+        };
+        warn_resolution_error(&error);
+    }
+
+    /// Exercises every branch of `use_leo3_cfgs` and the cached config
+    /// accessors in one deterministic sequence:
+    /// the `LEAN_CONFIG` `OnceLock` is only ever populated by this test, and
+    /// only after the failure path has run, so the cache cannot change the
+    /// outcome of the earlier phases.
+    #[test]
+    #[allow(deprecated)]
+    fn test_config_resolution_full_flow() {
+        impl_tests::with_temp_env(|| {
+            // 1. Resolution failure: explicit config file that cannot be loaded.
+            std::env::set_var("LEO3_CONFIG_FILE", "/definitely/not/here.txt");
+            let err = get().unwrap_err();
+            assert!(err
+                .summary
+                .contains("LEO3_CONFIG_FILE was set but could not be loaded"));
+
+            // 2. LEO3_NO_LEAN short-circuit.
+            std::env::set_var("LEO3_NO_LEAN", "1");
+            use_leo3_cfgs();
+            std::env::remove_var("LEO3_NO_LEAN");
+
+            // 3. Successful resolution via config file, then caching.
+            let config = impl_tests::sample_config("4.25.2");
+            let path = impl_tests::write_temp_config(&config, "lib-config");
+            std::env::set_var("LEO3_CONFIG_FILE", &path);
+            use_leo3_cfgs();
+
+            let resolved = get_lean_config_with_source().unwrap();
+            assert_eq!(resolved.source, LeanConfigSource::ConfigFile);
+            assert_eq!(resolved.config.version, config.version);
+
+            // Cached: even after the env var is removed, the same value returns.
+            std::env::remove_var("LEO3_CONFIG_FILE");
+            let cached = get_lean_config_with_source().unwrap();
+            assert_eq!(cached.config.version, config.version);
+
+            assert!(resolve_lean_config().is_ok());
+            assert!(get_lean_config().is_ok());
+            assert!(get_lean_config_string().is_ok());
+
+            std::fs::remove_file(&path).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_use_upstream_leo3_cfgs() {
+        impl_tests::with_temp_env(|| {
+            // DEP not set → error path.
+            use_upstream_leo3_cfgs();
+
+            // DEP set → success path.
+            let config = impl_tests::sample_config("4.25.2");
+            std::env::set_var("DEP_LEAN4_LEO3_CONFIG", config.to_cargo_dep_env());
+            use_upstream_leo3_cfgs();
+
+            // LEO3_NO_LEAN → short-circuit path.
+            std::env::set_var("LEO3_NO_LEAN", "1");
+            use_upstream_leo3_cfgs();
+        });
     }
 }

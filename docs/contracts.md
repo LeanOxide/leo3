@@ -186,6 +186,51 @@ The compile-fail matrix for invalid accessor definitions lives in:
 - `leo3/tests/ui/leanclass_setter_wrong_params.rs`
 - `leo3/tests/ui/leanclass_getter_and_setter.rs`
 
+### `#[leanclass]` field accessors
+
+`#[get]` / `#[set]` on named `#[leanclass]` struct fields generate accessor
+methods automatically (PyO3-aligned with `#[pyo3(get, set)]`):
+
+| Field annotation | Generated method | Lean-visible type | Recorded kind |
+| --- | --- | --- | --- |
+| `#[get]` | `fn field(&self) -> T { self.field.clone() }` | `Class -> T` | `Getter` |
+| `#[set]` | `fn set_field(&mut self, value: T)` | `Class -> T -> Class` | `Setter` |
+
+Contract:
+
+- getters are clone-based, matching the external-object extraction rule; the
+  field type must be `Clone` and representable in the generated Lean
+  declaration grammar (reference types are rejected at compile time)
+- setters follow the `&mut self -> ()` copy-on-write machinery: the updated
+  object is returned to Lean
+- `#[get]` and `#[set]` may be combined on one field to generate both
+  accessors
+- tuple-struct fields carrying `#[get]` / `#[set]` are rejected
+- field-accessor metadata is emitted under its own symbol
+  (`__leo3_class_metadata_json_<Class>_fields`) and merged with the
+  impl-block metadata by `leo3-codegen`, producing one `.lean` file per
+  class
+
+Compile-fail coverage:
+
+- `leo3/tests/ui/leanclass_field_accessor_unsupported_type.rs`
+- `leo3/tests/ui/leanclass_field_accessor_tuple_struct.rs`
+
+### `#[leanclass]` naming
+
+The Lean-visible names of classes, methods, and accessors can be overridden
+without changing the Rust identifiers or the FFI symbols:
+
+- `#[leanclass(name = "...")]` on the struct and on the impl block renames
+  the class (both must agree; the impl block's name prefixes the generated
+  method declarations)
+- `#[name = "..."]` on a method renames the Lean-visible method
+- `#[getter(name = "...")]` / `#[setter(name = "...")]` rename accessors
+
+FFI symbols always stay derived from the Rust identifiers
+(`__lean_ffi_<Struct>_<method>`), so Rust callers and the `@[extern]`
+declarations remain stable.
+
 ### Built-in conversion matrix
 
 Leo3's built-in conversion rules are:
@@ -198,8 +243,12 @@ Leo3's built-in conversion rules are:
 | `Vec<T>` | `Array` | yes | yes | allocates the container and converts elements recursively |
 | `Option<T>` | `Option` | yes | yes | recursive container conversion |
 | `Result<T, E>` | `Except E T` | yes | yes | recursive container conversion |
-| `(A, B)` | `Prod A B` | yes | yes | recursive pair conversion |
+| `(A, B)` … `(A, …, L)` | nested `Prod` | yes | yes | recursive pair conversion; tuples up to arity 12 |
 | `Vec<u8>` / `&[u8]` helper path | `ByteArray` | helper only | helper only | bulk memcpy path, exposed through helper fns and conversion macros |
+| `HashMap<K, V>` / `HashSet<K>` | `LeanHashMap` / `LeanHashSet` | yes | yes | real Lean containers; key matrix `String`, `u8`–`u64`, `i8`–`i64` (Lean >= 4.22) |
+| `BTreeMap<K, V>` | `LeanRBMap` | yes | yes | real Lean RBMap; same key matrix (Lean >= 4.22) |
+| `Cell<T: Copy>` | as `T` | yes | yes | value conversion through `T` |
+| `Cow<'_, str>` / `Cow<'_, [u8]>` | `String` / `ByteArray` | yes | yes (owned) | same cost as the plain `String` / byte-array paths |
 | `T: ExternalClass` | Lean external object | yes | yes, if `T: Clone` | stores owned Rust value in Lean; extraction clones the Rust value |
 
 Formal rules:
@@ -227,6 +276,10 @@ Formal rules:
 - `#[derive(IntoLean, FromLean)]` or manual impls can extend the Rust-side
   conversion set, but they do not automatically widen the `#[leanclass]`
   declaration grammar
+- std collection conversions cover the supported container key matrix; the
+  Lean key types must implement `LeanHashKey` / `LeanRBMapKey` (the
+  external-class bridge traits `ExternalHashKey` / `ExternalOrdKey` extend
+  the matrix to user classes via `#[lean_instance(Hashable, BEq, Ord)]`)
 
 ### `#[leanfn]` monomorphization subset
 

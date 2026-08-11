@@ -92,8 +92,12 @@ Leo3's built-in `IntoLean` / `FromLean` support matrix is intentionally small an
 | `Vec<T>` | `Array` | yes | yes | allocates the container and converts elements one by one |
 | `Option<T>` | `Option` | yes | yes | recursive container conversion |
 | `Result<T, E>` | `Except E T` | yes | yes | recursive container conversion; Lean keeps the error type first |
-| `(A, B)` | `Prod A B` | yes | yes | recursive pair conversion; only pairs are built in |
+| `(A, B)` … `(A, …, L)` | nested `Prod` | yes | yes | recursive pair conversion; tuples up to arity 12 |
 | `Vec<u8>` / `&[u8]` helpers | `ByteArray` | helper path | helper path | bulk memcpy fast path via `vec_u8_*`, `slice_u8_into_lean`, `to_lean!`, `from_lean!` |
+| `HashMap<K, V>` / `HashSet<K>` | `LeanHashMap` / `LeanHashSet` | yes | yes | real Lean containers for the supported key matrix (`String`, `u8`–`u64`, `i8`–`i64`) |
+| `BTreeMap<K, V>` | `LeanRBMap` | yes | yes | real Lean RBMap for the same key matrix |
+| `Cell<T: Copy>` | as `T` | yes | yes | value conversion through `T` |
+| `Cow<'_, str>` / `Cow<'_, [u8]>` | `String` / `ByteArray` | yes | yes (owned) | like `String` / byte-array paths |
 | `T: ExternalClass` | Lean external object | yes | yes, if `T: Clone` | Rust -> Lean stores ownership in an external object; Lean -> Rust clones the inner value |
 
 Rules behind that table:
@@ -124,6 +128,11 @@ Current status:
 - runtime tests cover duplicate inserts, replacement semantics, string-key
   support, fixed-width signed and unsigned integer key support, and
   cross-family parity for the supported paths.
+- **user-defined keys** (PyO3-aligned "any hashable key"): an external class
+  implementing `#[lean_instance(Hashable, BEq)]` (and optionally `Ord`)
+  automatically derives `ExternalHashKey` / `ExternalOrdKey` bridge
+  implementations and can be used as a `LeanHashMap` / `LeanHashSet` /
+  `LeanRBMap` key with real runtime semantics.
 
 ### Procedural Macros (`macros`)
 
@@ -232,6 +241,25 @@ cargo run --example macro_pipeline --features macros
 That example exercises a generated `initialize_*` module entry point, `#[leanfn]`
 FFI wrappers, and the Lean declaration strings emitted for `#[leanclass]`.
 
+`#[leanclass]` also supports:
+
+- **field accessors** — `#[get]` / `#[set]` on named fields generate
+  `fn field(&self) -> T` (clone-based) and `fn set_field(&mut self, value: T)`
+  (copy-on-write) methods with FFI wrappers, Lean declarations, and
+  metadata; `leo3-codegen` merges field-accessor metadata with the
+  impl-block metadata into one file per class
+- **naming** — `#[name = "..."]` on methods, `#[getter(name = "...")]` /
+  `#[setter(name = "...")]` on accessors, and `#[leanclass(name = "...")]`
+  on the struct and impl block override the Lean-visible names while FFI
+  symbols stay Rust-identifier-derived
+- **type-class instances for external classes** — `#[lean_instance(BEq)]`,
+  `#[lean_instance(Hashable)]`, `#[lean_instance(Repr)]`,
+  `#[lean_instance(ToString)]`, `#[lean_instance(Ord)]` generate the
+  matching FFI functions; the combined forms
+  `#[lean_instance(Hashable, BEq)]` and
+  `#[lean_instance(Hashable, BEq, Ord)]` additionally make the class usable
+  as a `LeanHashMap` / `LeanHashSet` / `LeanRBMap` key
+
 ### Meta-Programming (`meta`)
 
 Full access to Lean's kernel and elaborator:
@@ -245,6 +273,10 @@ Full access to Lean's kernel and elaborator:
 ### IO, Tasks, and Dynamic Loading
 
 - `io`: console, filesystem, environment variables, process, and time helpers
+  (handle operations follow the modern Lean ABI — 5-mode `FileMode` matching
+  `IO.FS.Mode`, `ByteArray` writes, `LeanByteArray` reads; `time` /
+  `process` exit-code helpers are pure-Rust implementations for Lean
+  releases that do not export the historical C primitives)
 - `task`: `LeanTask` / `LeanPromise` plus combinators (`join`, `race`, `select`, `timeout`)
 - `module-loading`: `LeanModule` for loading compiled Lean shared libraries
 - `tokio`: async bridge for Lean tasks

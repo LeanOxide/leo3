@@ -18,6 +18,36 @@ pub struct LeanHashMapType<K, V> {
 
 pub type LeanHashMap<'l, K, V> = LeanBound<'l, LeanHashMapType<K, V>>;
 
+/// Bridge trait for user-defined (external-class) hash map keys.
+///
+/// Implement this for a local type to make it usable as a `LeanHashMap` /
+/// `LeanHashSet` key. The canonical way is
+/// `#[lean_instance(Hashable, BEq)]` on the class impl block, which generates
+/// the two FFI functions and this implementation automatically. The blanket
+/// impl below then wires the generated functions into Lean's runtime
+/// `Hashable` / `BEq` instance objects.
+pub trait ExternalHashKey {
+    /// Boxed `DecidableEq`-shaped function: `fn(*mut lean_object, *mut lean_object) -> *mut lean_object`.
+    fn decidable_eq_fn() -> *mut c_void;
+    /// `Hashable`-shaped hash function: `fn(*mut lean_object) -> u64`.
+    fn hash_fn() -> *mut c_void;
+}
+
+impl<K> LeanHashKey for crate::external::LeanExternalType<K>
+where
+    K: crate::external::ExternalClass + ExternalHashKey,
+{
+    unsafe fn decidable_eq_boxed() -> *mut c_void {
+        K::decidable_eq_fn()
+    }
+
+    unsafe fn hash_closure() -> *mut ffi::lean_object {
+        // Lean erases the one-field `Hashable` structure: the instance object
+        // IS the hash closure (`hash : α -> UInt64`, scalar-returning).
+        ffi::inline::lean_alloc_closure(K::hash_fn(), 1, 0)
+    }
+}
+
 pub trait LeanHashKey {
     #[doc(hidden)]
     unsafe fn decidable_eq_boxed() -> *mut c_void;

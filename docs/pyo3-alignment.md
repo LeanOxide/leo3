@@ -90,3 +90,44 @@ This pass was checked against the local PyO3 checkout and then verified by
 Leo3's own contract tests and runtime tests, including the all-features
 workspace gate. The alignment target is PyO3's architecture and ergonomic shape,
 not feature-for-feature cloning of Python-specific behavior.
+
+## Gap Analysis (2026-08, audited against PyO3 0.28.3)
+
+A fresh feature-by-feature audit of the PyO3 0.28.3 source (marker, instance,
+conversion, err, types, pyclass, macros, build config) against Leo3's public
+surface produced the following non-intentional gaps. All listed gaps are now
+implemented, tested, and documented:
+
+| PyO3 feature | Leo3 counterpart | Status |
+| --- | --- | --- |
+| any hashable object as dict/set key | user-defined `LeanHashMap` / `LeanHashSet` / `LeanRBMap` keys via `#[lean_instance(Hashable, BEq, Ord)]` (generates `ExternalHashKey` / `ExternalOrdKey` bridge impls; the Lean `Hashable` / `Ord` instance objects are built to match Lean's runtime layout) | implemented + runtime tests (`container_user_keys.rs`) |
+| `#[pyo3(get, set)]` field accessors | `#[get]` / `#[set]` on `#[leanclass]` struct fields (getter is clone-based, setter is copy-on-write) | implemented + runtime/UI tests + `leo3-codegen` merge |
+| `#[pyo3(name = "...")]` on methods / `#[pyclass(name)]` | `#[name = "..."]` on methods, `#[getter(name)]` / `#[setter(name)]`, `#[leanclass(name = "...")]` on struct and impl | implemented + runtime/metadata tests |
+| `HashMap` / `HashSet` / `BTreeMap` conversions | `std::collections::{HashMap, HashSet, BTreeMap}` ↔ `LeanHashMap` / `LeanHashSet` / `LeanRBMap` for the supported key matrix (`String`, `u8`–`u64`, `i8`–`i64`) | implemented + runtime tests (`conversion_matrix_ext.rs`) |
+| `Cell<T: Copy>` conversions | `Cell<T: Copy>` ↔ Lean (as `T`) | implemented + tests |
+| `Cow<str>` / `Cow<[u8]>` conversions | `Cow<'_, str>` / `Cow<'_, [u8]>` ↔ `LeanString` / `LeanByteArray` | implemented + tests |
+| tuples up to arity 12 | tuples up to arity 12 (was 6) | implemented + tests |
+| macros available via prelude | `lean_instance` added to `leo3::prelude` | implemented |
+| working IO handle surface | `io::handle` (`open`/`read`/`write`/`get_line`/`flush`/`is_eof`), `io::time`, `io::process`, `LeanIO` monad, and `IOError` all rewritten against the modern Lean ABI (4.25+) and covered by runtime tests — the previous implementation referenced stale C signatures that never worked on any modern Lean release | fixed + runtime tests |
+
+### Items evaluated and intentionally not pursued
+
+- `Python::allow_threads` / `Ungil` (detach): Lean's runtime has no global
+  interpreter lock to release; caller threads attach through
+  `with_lean` / `sync::ensure_lean_thread` instead. Not applicable by design.
+- `intern!` string interning: Python's attribute-lookup hot path has no Lean
+  analogue at this layer; Lean names live in the `meta` module.
+- `Bound::cast_exact` family: Leo3's external-object `try_cast` already checks
+  the exact registered class; an unchecked exact cast would be a footgun.
+- `PyErr`-style typed exception constructors: `LeanError` variants plus
+  `KernelExceptionCode` already cover the Lean error space.
+- `#[pyfunction]` signature controls (keyword-only, defaults, `from_py_with`):
+  documented Intentional Difference — Lean's extern ABI has no equivalent.
+- `#[pymodule]` runtime `add_submodule` / import-graph wiring: documented
+  Intentional Difference — Lean uses generated init symbols and plugin loading.
+- Python-ecosystem conversions (`Path`, datetime, decimal, IP, uuid,
+  hashbrown, indexmap): documented Intentional Difference — the built-in
+  matrix is the Lean semantic core; users extend via manual impls or derives.
+- Python-style properties / class attributes / subclassing / magic-method
+  slots: documented Intentional Difference — `#[leanclass]` models Lean
+  external objects with explicit receiver rules.

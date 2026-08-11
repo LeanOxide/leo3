@@ -235,13 +235,16 @@ extern "C" {
     /// Open file for reading
     ///
     /// # Safety
-    /// - `path` must be a valid Lean string object (consumed)
-    /// - `binary` indicates binary mode (true) vs text mode (false)
+    /// - `path` must be a valid Lean string object (borrowed)
+    /// - `mode` must be a valid `IO.FS.Mode` constructor (borrowed)
     /// - Returns IO (Except IO.Error FS.Handle)
+    ///
+    /// Note: modern Lean (4.25 through 4.32+) has no `binary` parameter on
+    /// `Handle.mk` and takes the mode as a raw scalar; the C ABI is
+    /// `(path, mode: uint8, world)`.
     pub fn lean_io_prim_handle_mk(
         path: lean_obj_arg,
-        mode: lean_obj_arg,
-        binary: u8,
+        mode: u8,
         world: lean_obj_arg,
     ) -> lean_obj_res;
 
@@ -339,20 +342,23 @@ extern "C" {
     /// Get stdin handle
     ///
     /// # Safety
-    /// - Returns a borrowed handle to stdin
-    pub fn lean_get_stdin() -> lean_obj_res;
+    /// - `world` is the RealWorld token
+    /// - Returns `EStateM.Result.ok (stream, world)` with a borrowed stream
+    pub fn lean_get_stdin(world: lean_obj_arg) -> lean_obj_res;
 
     /// Get stdout handle
     ///
     /// # Safety
-    /// - Returns a borrowed handle to stdout
-    pub fn lean_get_stdout() -> lean_obj_res;
+    /// - `world` is the RealWorld token
+    /// - Returns `EStateM.Result.ok (stream, world)` with a borrowed stream
+    pub fn lean_get_stdout(world: lean_obj_arg) -> lean_obj_res;
 
     /// Get stderr handle
     ///
     /// # Safety
-    /// - Returns a borrowed handle to stderr
-    pub fn lean_get_stderr() -> lean_obj_res;
+    /// - `world` is the RealWorld token
+    /// - Returns `EStateM.Result.ok (stream, world)` with a borrowed stream
+    pub fn lean_get_stderr(world: lean_obj_arg) -> lean_obj_res;
 }
 
 // ============================================================================
@@ -392,25 +398,16 @@ extern "C" {
 // ============================================================================
 
 extern "C" {
-    /// Get process exit code
-    ///
-    /// # Safety
-    /// - Returns IO (Except IO.Error UInt32)
-    pub fn lean_io_prim_get_exit_code(world: lean_obj_arg) -> lean_obj_res;
-
-    /// Set process exit code
-    ///
-    /// # Safety
-    /// - `code` is the exit code to set
-    /// - Returns IO (Except IO.Error Unit)
-    pub fn lean_io_prim_set_exit_code(code: u32, world: lean_obj_arg) -> lean_obj_res;
-
     /// Exit process immediately
     ///
     /// # Safety
     /// - This function does not return
     /// - `code` is the exit code
-    pub fn lean_io_prim_exit(code: u32) -> !;
+    ///
+    /// Uses Lean's `lean_io_exit` export (present across supported Lean
+    /// releases; the older `lean_io_prim_exit` name is not exported by
+    /// e.g. 4.25.2).
+    pub fn lean_io_exit(code: u8) -> !;
 }
 
 // ============================================================================
@@ -443,19 +440,10 @@ extern "C" {
 // Time Operations
 // ============================================================================
 
-extern "C" {
-    /// Get current time in nanoseconds since epoch
-    ///
-    /// # Safety
-    /// - Returns IO (Except IO.Error UInt64)
-    pub fn lean_io_prim_mono_nanos(world: lean_obj_arg) -> lean_obj_res;
-
-    /// Get current real time in milliseconds since epoch
-    ///
-    /// # Safety
-    /// - Returns IO (Except IO.Error UInt64)
-    pub fn lean_io_prim_get_unix_time_millis(world: lean_obj_arg) -> lean_obj_res;
-}
+// Note: the historical `lean_io_prim_mono_nanos` /
+// `lean_io_prim_get_unix_time_millis` exports are not present in every Lean
+// release (notably 4.25.2), so `leo3::io::time` implements both operations
+// host-side in pure Rust.
 
 // ============================================================================
 // IO Error Constructors

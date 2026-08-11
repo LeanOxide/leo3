@@ -1,0 +1,5 @@
+error: reference types are not supported in generated Lean declarations; use owned types instead
+ --> tests/ui/leanclass_field_accessor_unsupported_type.rs:5:11
+  |
+5 |     name: &'static str,
+  |           ^^^^^^^^^^^^

@@ -8,9 +8,10 @@
 //! `.lean` files.
 
 use leo3_binding_ir::{
-    analyze_lean_class_impl, analyze_lean_class_struct, class_binding_to_json, class_opaque_decl,
+    analyze_lean_class_field_accessors, analyze_lean_class_impl, analyze_lean_class_struct,
+    class_binding_to_json, class_opaque_decl, field_accessor_bindings,
     quote_metadata_section_static, quote_runtime_class_metadata, quote_runtime_function_metadata,
-    ClassImplBinding, ClassTypeBinding, FunctionBinding,
+    ClassImplBinding, ClassTypeBinding, FieldAccessor, FunctionBinding,
 };
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -62,7 +63,9 @@ pub fn build_lean_class_struct(
     options: LeanClassOptions,
 ) -> syn::Result<TokenStream> {
     let leo3_crate = get_leo3_crate(options.common.krate.as_ref());
-    let class_binding = analyze_lean_class_struct(item)?;
+    let lean_name_override = options.common.name.as_ref().map(|s| s.value());
+    let class_binding = analyze_lean_class_struct(item, lean_name_override.as_deref())?;
+    let accessors = analyze_lean_class_field_accessors(item)?;
 
     let struct_info = StructInfo {
         name: item.ident.clone(),
@@ -84,6 +87,20 @@ pub fn build_lean_class_struct(
     // Generate Lean code metadata
     let lean_code_gen = generate_lean_code_metadata(&class_binding);
 
+    // Generate field accessors: synthetic methods, FFI wrappers, and their
+    // own metadata entries (separate JSON symbol so the impl-block metadata
+    // for the same class merges cleanly in leo3-codegen).
+    let struct_name = &struct_info.name;
+    let field_accessors = if accessors.is_empty() {
+        quote! {}
+    } else {
+        generate_field_accessors(&class_binding, &accessors, struct_name, &leo3_crate)?
+    };
+
+    // Strip the helper `#[get]` / `#[set]` attributes so the compiler does
+    // not reject them as unknown attributes in the emitted struct.
+    strip_field_accessor_attrs(item);
+
     // Keep original struct
     let original_struct = quote! { #item };
 
@@ -91,7 +108,161 @@ pub fn build_lean_class_struct(
         #original_struct
         #external_class_impl
         #lean_code_gen
+        #field_accessors
     })
+}
+
+/// Generate the synthetic accessor methods, FFI wrappers, and metadata for
+/// `#[get]` / `#[set]` struct fields.
+fn generate_field_accessors(
+    class_binding: &ClassTypeBinding,
+    accessors: &[FieldAccessor],
+    struct_name: &syn::Ident,
+    leo3_crate: &TokenStream,
+) -> syn::Result<TokenStream> {
+    let mut method_impls = Vec::new();
+    let mut ffi_functions = Vec::new();
+    let mut method_infos = Vec::new();
+
+    for acc in accessors {
+        let field_ident = syn::Ident::new(&acc.rust_name, proc_macro2::Span::call_site());
+        let setter_ident = syn::Ident::new(
+            &format!("set_{}", acc.rust_name),
+            proc_macro2::Span::call_site(),
+        );
+        let field_ty: syn::Type = syn::parse_str(&acc.ty.rust)
+            .map_err(|_| syn::Error::new_spanned(field_ident.clone(), "unsupported field type"))?;
+
+        if acc.getter {
+            // Getter: `fn field(&self) -> T { self.field.clone() }` — the
+            // clone mirrors the external-object extraction contract.
+            method_impls.push(quote! {
+                pub fn #field_ident(&self) -> #field_ty {
+                    self.#field_ident.clone()
+                }
+            });
+            let method_info = MethodInfo {
+                name: field_ident.clone(),
+                receiver: MethodReceiver::Ref,
+                params: Vec::new(),
+                return_type: field_ty.clone(),
+            };
+            method_infos.push((method_info, acc.getter, acc.setter));
+        }
+        if acc.setter {
+            // Setter: `fn set_field(&mut self, value: T) { self.field = value; }`
+            let value_ident = syn::Ident::new("value", proc_macro2::Span::call_site());
+            method_impls.push(quote! {
+                pub fn #setter_ident(&mut self, #value_ident: #field_ty) {
+                    self.#field_ident = #value_ident;
+                }
+            });
+            let method_info = MethodInfo {
+                name: setter_ident,
+                receiver: MethodReceiver::MutRef,
+                params: vec![(value_ident, field_ty)],
+                return_type: syn::parse_quote! { () },
+            };
+            method_infos.push((method_info, acc.getter, acc.setter));
+        }
+    }
+
+    let impl_block = quote! {
+        impl #struct_name {
+            #(#method_impls)*
+        }
+    };
+
+    // Build the FunctionBindings in the same order as the MethodInfos
+    // (getter then setter per field, matching the loop above).
+    let bindings = field_accessor_bindings(&class_binding.rust_name, accessors);
+    let binding_iter = bindings.iter();
+    for (method, binding) in method_infos.iter().zip(binding_iter) {
+        let ffi_fn = generate_method_ffi_wrapper(&method.0, binding, struct_name, leo3_crate)?;
+        ffi_functions.push(ffi_fn);
+    }
+
+    let impl_binding = ClassImplBinding {
+        class_name: class_binding.rust_name.clone(),
+        methods_decl: bindings
+            .iter()
+            .filter_map(|b| b.lean_decl.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        methods: bindings,
+    };
+
+    let metadata = generate_field_accessor_metadata(class_binding, &impl_binding, leo3_crate)?;
+
+    Ok(quote! {
+        #impl_block
+        #(#ffi_functions)*
+        #metadata
+    })
+}
+
+/// Emit the accessor metadata under distinct symbol names (suffix `_fields`)
+/// so they merge with the impl-block metadata for the same class.
+fn generate_field_accessor_metadata(
+    class_binding: &ClassTypeBinding,
+    impl_binding: &ClassImplBinding,
+    leo3_crate: &TokenStream,
+) -> syn::Result<TokenStream> {
+    let const_name = format_ident!(
+        "{}_LEAN_FIELDS_DECL",
+        class_binding.rust_name.to_uppercase()
+    );
+    let lean_code = &impl_binding.methods_decl;
+    let class_metadata = quote_runtime_class_metadata(class_binding, impl_binding, leo3_crate);
+    let class_metadata_fn =
+        format_ident!("__leo3_class_metadata_{}_fields", class_binding.rust_name);
+    let json_symbol_name_str = format!(
+        "__leo3_class_metadata_json_{}_fields",
+        class_binding.rust_name
+    );
+    let json_symbol_name = format_ident!("{}", json_symbol_name_str);
+    let json_str = class_binding_to_json(class_binding, impl_binding);
+    let json_bytes = json_str.as_bytes();
+    let json_len = json_bytes.len() + 1;
+    let byte_literals: Vec<proc_macro2::Literal> = json_bytes
+        .iter()
+        .map(|&b| proc_macro2::Literal::u8_suffixed(b))
+        .collect();
+
+    let section_static_ident = format_ident!(
+        "__leo3_class_metadata_section_{}_fields",
+        class_binding.rust_name
+    );
+    let section_static =
+        quote_metadata_section_static(&section_static_ident, &json_symbol_name_str, &json_str);
+
+    Ok(quote! {
+        pub const #const_name: &str = #lean_code;
+
+        #[doc(hidden)]
+        pub fn #class_metadata_fn() -> #leo3_crate::LeanClassMetadata {
+            #class_metadata
+        }
+
+        #[doc(hidden)]
+        #[no_mangle]
+        #[used]
+        pub static #json_symbol_name: [u8; #json_len] = [#(#byte_literals),*, 0u8];
+
+        #section_static
+    })
+}
+
+/// Remove the helper `#[get]` / `#[set]` attributes from struct fields so
+/// they are not emitted into the expanded output.
+fn strip_field_accessor_attrs(item: &mut syn::ItemStruct) {
+    if let syn::Fields::Named(named) = &mut item.fields {
+        for field in &mut named.named {
+            field
+                .attrs
+                .retain(|attr| !attr.path().is_ident("get") && !attr.path().is_ident("set"));
+        }
+    }
 }
 
 /// Build the #\[leanclass\] expansion for an impl block
@@ -100,7 +271,8 @@ pub fn build_lean_class_impl(
     options: LeanClassOptions,
 ) -> syn::Result<TokenStream> {
     let leo3_crate = get_leo3_crate(options.common.krate.as_ref());
-    let impl_binding = analyze_lean_class_impl(item)?;
+    let lean_class_name = options.common.name.as_ref().map(|s| s.value());
+    let impl_binding = analyze_lean_class_impl(item, lean_class_name.as_deref())?;
 
     // Extract the struct name from the impl
     let struct_name = match &*item.self_ty {
@@ -146,11 +318,19 @@ pub fn build_lean_class_impl(
         ffi_functions.push(ffi_fn);
     }
 
-    // Generate Lean code metadata
+    // Generate Lean code metadata (the class's Lean-visible name may be
+    // overridden with `#[leanclass(name = "...")]` on both the struct and
+    // this impl block).
+    let lean_name = options
+        .common
+        .name
+        .as_ref()
+        .map(|s| s.value())
+        .unwrap_or_else(|| struct_name.to_string());
     let class_binding = ClassTypeBinding {
         rust_name: struct_name.to_string(),
-        lean_name: struct_name.to_string(),
-        opaque_decl: class_opaque_decl(&struct_name.to_string()),
+        lean_name: lean_name.clone(),
+        opaque_decl: class_opaque_decl(&lean_name),
     };
     let lean_code_gen =
         generate_lean_code_metadata_for_methods(&class_binding, &impl_binding, &leo3_crate)?;
@@ -928,9 +1108,11 @@ fn is_unit_type(ty: &syn::Type) -> bool {
 fn strip_accessor_attrs(item: &mut syn::ItemImpl) {
     for impl_item in &mut item.items {
         if let syn::ImplItem::Fn(method) = impl_item {
-            method
-                .attrs
-                .retain(|attr| !attr.path().is_ident("getter") && !attr.path().is_ident("setter"));
+            method.attrs.retain(|attr| {
+                !attr.path().is_ident("getter")
+                    && !attr.path().is_ident("setter")
+                    && !attr.path().is_ident("name")
+            });
         }
     }
 }
@@ -980,5 +1162,307 @@ mod tests {
         assert!(rendered.contains("Failed to convert Rust result to Lean"));
         assert!(!rendered.contains(".expect("));
         assert!(!rendered.contains(". expect ("));
+    }
+
+    #[test]
+    fn struct_field_accessors_get_set_both() {
+        let mut item: syn::ItemStruct = syn::parse_quote! {
+            pub struct Demo {
+                #[get]
+                pub x: u32,
+                #[set]
+                pub y: u32,
+                #[get]
+                #[set]
+                pub z: u32,
+                pub plain: u32,
+            }
+        };
+        let tokens = build_lean_class_struct(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions::default(),
+            },
+        )
+        .expect("leanclass struct expansion should succeed");
+        let rendered = tokens.to_string();
+
+        // Synthetic accessor methods (getter, setter, and both on one field).
+        assert!(rendered.contains("pub fn x (& self) -> u32"));
+        assert!(rendered.contains("pub fn set_y (& mut self , value : u32)"));
+        assert!(rendered.contains("pub fn z (& self) -> u32"));
+        assert!(rendered.contains("pub fn set_z (& mut self , value : u32)"));
+        assert!(!rendered.contains("pub fn plain"));
+
+        // FFI wrappers for each accessor.
+        assert!(rendered.contains("__lean_ffi_Demo_x"));
+        assert!(rendered.contains("__lean_ffi_Demo_set_y"));
+        assert!(rendered.contains("__lean_ffi_Demo_set_z"));
+
+        // Accessor metadata under the `_fields` symbol names.
+        assert!(rendered.contains("DEMO_LEAN_FIELDS_DECL"));
+        assert!(rendered.contains("__leo3_class_metadata_Demo_fields"));
+        assert!(rendered.contains("__leo3_class_metadata_json_Demo_fields"));
+        assert!(rendered.contains("__leo3_class_metadata_section_Demo_fields"));
+
+        // ExternalClass impl for the struct.
+        assert!(rendered.contains(":: leo3 :: external :: ExternalClass"));
+
+        // Helper attributes stripped from the emitted struct.
+        assert!(!rendered.contains("# [get]"));
+        assert!(!rendered.contains("# [set]"));
+        assert!(rendered.contains("pub struct Demo"));
+    }
+
+    #[test]
+    fn struct_name_override_flows_into_decl() {
+        let mut item: syn::ItemStruct = syn::parse_quote! {
+            pub struct Demo {
+                pub x: u32,
+            }
+        };
+        let tokens = build_lean_class_struct(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions {
+                    name: Some(syn::parse_quote!("Renamed")),
+                    krate: None,
+                },
+            },
+        )
+        .expect("leanclass struct expansion should succeed");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("DEMO_LEAN_CLASS_DECL"));
+        assert!(rendered.contains("opaque Renamed.ffi : NonemptyType"));
+        assert!(rendered.contains("def Renamed : Type := Renamed.ffi.val"));
+        assert!(rendered.contains("instance : Nonempty Renamed := Renamed.ffi.property"));
+    }
+
+    #[test]
+    fn struct_rejects_generics() {
+        let mut item: syn::ItemStruct = syn::parse_quote! {
+            pub struct Demo<T> {
+                pub x: T,
+            }
+        };
+        let err = build_lean_class_struct(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions::default(),
+            },
+        )
+        .expect_err("generic leanclass struct must fail");
+        assert!(err
+            .to_string()
+            .contains("#[leanclass] does not support generic types yet"));
+    }
+
+    #[test]
+    fn struct_rejects_unsupported_accessor_field_types() {
+        let mut item: syn::ItemStruct = syn::parse_quote! {
+            pub struct Demo {
+                #[get]
+                pub x: &'static str,
+            }
+        };
+        let err = build_lean_class_struct(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions::default(),
+            },
+        )
+        .expect_err("reference accessor field must fail");
+        assert!(err
+            .to_string()
+            .contains("reference types are not supported"));
+
+        let mut item: syn::ItemStruct = syn::parse_quote! {
+            pub struct Demo {
+                #[get]
+                pub x: std::collections::HashMap<u8, u8>,
+            }
+        };
+        let err = build_lean_class_struct(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions::default(),
+            },
+        )
+        .expect_err("generic accessor field must fail");
+        assert!(err
+            .to_string()
+            .contains("generic type `HashMap` is not supported"));
+    }
+
+    #[test]
+    fn struct_rejects_accessor_on_tuple_field() {
+        let mut item: syn::ItemStruct = syn::parse_quote! {
+            pub struct Demo(#[get] u32);
+        };
+        let err = build_lean_class_struct(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions::default(),
+            },
+        )
+        .expect_err("tuple field accessor must fail");
+        assert!(err
+            .to_string()
+            .contains("#[get] / #[set] field accessors require named struct fields"));
+    }
+
+    #[test]
+    fn impl_block_receiver_variants() {
+        let mut item: syn::ItemImpl = syn::parse_quote! {
+            impl Demo {
+                fn stat(x: u32) -> u32 { x }
+                fn read(&self) -> u32 { self.x }
+                fn bump(&mut self, v: u32) { self.x = v; }
+                fn consume(self) -> u32 { self.x }
+            }
+        };
+        let tokens = build_lean_class_impl(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions::default(),
+            },
+        )
+        .expect("leanclass impl expansion should succeed");
+        let rendered = tokens.to_string();
+
+        // FFI wrapper names per receiver variant.
+        assert!(rendered.contains("__lean_ffi_Demo_stat"));
+        assert!(rendered.contains("__lean_ffi_Demo_read"));
+        assert!(rendered.contains("__lean_ffi_Demo_bump"));
+        assert!(rendered.contains("__lean_ffi_Demo_consume"));
+        assert!(rendered.contains("__leo3_try_Demo_bump"));
+
+        // Method call shapes per receiver.
+        assert!(rendered.contains("Demo :: stat (x)"));
+        assert!(rendered.contains("self_ref . read ()"));
+        assert!(rendered.contains("self_mut . bump (v)"));
+        assert!(rendered.contains("self_owned . consume ()"));
+
+        // Scalar-returning static/&self methods use the scalar boundary;
+        // &mut self methods always box their result.
+        assert!(rendered.contains("scalar_ffi_panic_boundary"));
+        assert!(rendered.contains("ffi_panic_boundary"));
+        assert!(rendered.contains("self_obj . into_ptr ()"));
+
+        // Impl-block metadata.
+        assert!(rendered.contains("DEMO_LEAN_METHODS_DECL"));
+        assert!(rendered.contains("__leo3_class_metadata_json_Demo"));
+    }
+
+    #[test]
+    fn impl_block_renamed_and_accessor_methods() {
+        let mut item: syn::ItemImpl = syn::parse_quote! {
+            impl Demo {
+                #[name = "getX"]
+                fn x(&self) -> u32 { self.x }
+
+                #[getter(name = "leanGetter")]
+                fn g(&self) -> u32 { self.x }
+
+                #[setter(name = "leanSetter")]
+                fn s(&mut self, v: u32) { self.x = v; }
+            }
+        };
+        let tokens = build_lean_class_impl(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions::default(),
+            },
+        )
+        .expect("leanclass impl expansion should succeed");
+        let rendered = tokens.to_string();
+
+        // Renamed Lean declarations (FFI symbols keep the Rust names).
+        assert!(rendered.contains("opaque Demo.getX : Demo → UInt32"));
+        assert!(rendered.contains("opaque Demo.leanGetter : Demo → UInt32"));
+        assert!(rendered.contains("opaque Demo.leanSetter : Demo → UInt32 → Demo"));
+        assert!(rendered.contains("__lean_ffi_Demo_x"));
+        assert!(rendered.contains("__lean_ffi_Demo_g"));
+        assert!(rendered.contains("__lean_ffi_Demo_s"));
+
+        // Helper attributes stripped from the emitted impl.
+        assert!(!rendered.contains("# [name"));
+        assert!(!rendered.contains("# [getter"));
+        assert!(!rendered.contains("# [setter"));
+    }
+
+    #[test]
+    fn impl_block_rejects_generics_and_non_path_self() {
+        let mut item: syn::ItemImpl = syn::parse_quote! {
+            impl<T> Demo<T> {
+                fn m(&self) -> u32 { 1 }
+            }
+        };
+        let err = build_lean_class_impl(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions::default(),
+            },
+        )
+        .expect_err("generic impl must fail");
+        assert!(err
+            .to_string()
+            .contains("#[leanclass] does not support generic impl blocks yet"));
+
+        let mut item: syn::ItemImpl = syn::parse_quote! {
+            impl (Demo,) {
+                fn m(&self) -> u32 { 1 }
+            }
+        };
+        let err = build_lean_class_impl(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions::default(),
+            },
+        )
+        .expect_err("non-path impl self type must fail");
+        assert!(err
+            .to_string()
+            .contains("#[leanclass] impl must be for a simple struct type"));
+    }
+
+    #[test]
+    fn impl_block_rejects_generic_methods() {
+        let mut item: syn::ItemImpl = syn::parse_quote! {
+            impl Demo {
+                fn m<T>(&self) -> u32 { 1 }
+            }
+        };
+        let err = build_lean_class_impl(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions::default(),
+            },
+        )
+        .expect_err("generic method must fail");
+        assert!(err
+            .to_string()
+            .contains("Generic methods are not supported yet"));
+    }
+
+    #[test]
+    fn impl_block_name_override_flows_into_decls() {
+        let mut item: syn::ItemImpl = syn::parse_quote! {
+            impl Demo {
+                fn m(&self) -> u32 { 1 }
+            }
+        };
+        let tokens = build_lean_class_impl(
+            &mut item,
+            LeanClassOptions {
+                common: CommonOptions {
+                    name: Some(syn::parse_quote!("Renamed")),
+                    krate: None,
+                },
+            },
+        )
+        .expect("leanclass impl expansion should succeed");
+        let rendered = tokens.to_string();
+        assert!(rendered.contains("opaque Renamed.m : Renamed → UInt32"));
     }
 }

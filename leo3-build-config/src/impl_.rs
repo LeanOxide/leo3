@@ -697,8 +697,15 @@ fn get_lean_version(lean_bin: &Path) -> errors::Result<LeanVersion> {
         &mut version_cmd,
         &format!("{} --version", lean_bin.display()),
     )?;
-    let version_output = String::from_utf8_lossy(&output.stdout);
-    // Output looks like "Lean (version 4.25.2, ...)"
+    parse_lean_version_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Parse the version out of `lean --version` output.
+///
+/// The output looks like `Lean (version 4.25.2, arm64-apple-darwin, commit
+/// abc, release)`; the version token is the first whitespace-delimited word
+/// that starts with `4` and contains a `.`.
+fn parse_lean_version_output(version_output: &str) -> errors::Result<LeanVersion> {
     let version_str = version_output
         .split_whitespace()
         .find_map(|word| {
@@ -982,12 +989,21 @@ pub fn emit_link_config(config: &LeanConfig) {
     println!("cargo:include={}", config.lean_include_dir.display());
 }
 
+/// The `lean_4_N` minors to emit for a version (`0..=minor`), or `None` for
+/// versions that are not Lean 4 (no cfgs are emitted).
+fn lean_4_cfg_minors(version: &LeanVersion) -> Option<Vec<u32>> {
+    if version.major != 4 {
+        return None;
+    }
+    Some((0..=version.minor).collect())
+}
+
 /// Emit `cargo:rustc-cfg=lean_4_N` for the detected version and all earlier minors.
 pub fn emit_version_cfgs(config: &LeanConfig) {
-    if config.version.major != 4 {
+    let Some(minors) = lean_4_cfg_minors(&config.version) else {
         return;
-    }
-    for v in 0..=config.version.minor {
+    };
+    for v in minors {
         println!("cargo:rustc-cfg=lean_4_{}", v);
     }
 }
@@ -1006,16 +1022,21 @@ pub fn emit_allocator_cfgs(config: &LeanConfig) {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::{LazyLock, Mutex};
 
-    fn env_lock() -> &'static Mutex<()> {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    /// Process-wide lock serializing all env-var manipulation in this crate's
+    /// tests (shared with the `lib.rs` test module, which also mutates the
+    /// environment).
+    pub(crate) fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+        &ENV_LOCK
     }
 
-    fn with_temp_env<T>(f: impl FnOnce() -> T) -> T {
+    /// Run `f` with a clean environment: every env var the crate reads is
+    /// removed first and restored afterwards.
+    pub(crate) fn with_temp_env<T>(f: impl FnOnce() -> T) -> T {
         let _guard = env_lock().lock().unwrap();
 
         let keys = [
@@ -1026,6 +1047,9 @@ mod tests {
             "LEAN_HOME",
             "LEAN_LIB_DIR",
             "LEAN_INCLUDE_DIR",
+            "LEO3_NO_LEAN",
+            "CARGO_CFG_TARGET_OS",
+            "PATH",
         ];
 
         let saved: Vec<_> = keys
@@ -1050,7 +1074,7 @@ mod tests {
         result
     }
 
-    fn write_temp_config(config: &LeanConfig, stem: &str) -> PathBuf {
+    pub(crate) fn write_temp_config(config: &LeanConfig, stem: &str) -> PathBuf {
         let unique = format!(
             "{}-{}-{}",
             stem,
@@ -1066,7 +1090,7 @@ mod tests {
         path
     }
 
-    fn sample_config(version: &str) -> LeanConfig {
+    pub(crate) fn sample_config(version: &str) -> LeanConfig {
         LeanConfig {
             lean_home: PathBuf::from("/opt/lean"),
             lean_lib_dir: PathBuf::from("/opt/lean/lib/lean"),
@@ -1076,6 +1100,19 @@ mod tests {
             allocator: LeanAllocator::Mimalloc,
             pointer_width: Some(64),
         }
+    }
+
+    /// Create a unique (nonexistent) temp directory path for a test.
+    fn temp_unique_dir(stem: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "leo3-{}-{}-{}",
+            stem,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
     }
 
     #[test]
@@ -1313,5 +1350,711 @@ mod tests {
         assert_eq!(lean_bin, bin_dir.join("lean.exe"));
 
         std::fs::remove_dir_all(lean_home).unwrap();
+    }
+
+    #[test]
+    fn test_lean_binary_in_home_finds_plain_lean() {
+        let lean_home = std::env::temp_dir().join(format!(
+            "leo3-lean-bin-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let bin_dir = lean_home.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join("lean"), b"").unwrap();
+
+        let lean_bin = lean_binary_in_home(&lean_home).unwrap();
+        assert_eq!(lean_bin, bin_dir.join("lean"));
+
+        std::fs::remove_dir_all(lean_home).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_user_or_detect_config_falls_through_to_host_detection() {
+        with_temp_env(|| {
+            let empty_path = temp_unique_dir("empty-path-2");
+            std::fs::create_dir_all(&empty_path).unwrap();
+            std::env::set_var("PATH", &empty_path);
+
+            // No LEO3_CONFIG_FILE: host discovery runs and fails on every step.
+            let err = resolve_user_or_detect_config().unwrap_err();
+            assert!(err.summary.contains("host discovery"));
+            assert_eq!(err.attempts.len(), 3);
+
+            std::fs::remove_dir_all(&empty_path).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_lean_allocator_display_and_parse() {
+        assert_eq!(LeanAllocator::Small.to_string(), "small");
+        assert_eq!(LeanAllocator::Mimalloc.to_string(), "mimalloc");
+        assert_eq!(LeanAllocator::System.to_string(), "system");
+        assert_eq!(
+            "small".parse::<LeanAllocator>().unwrap(),
+            LeanAllocator::Small
+        );
+        assert_eq!(
+            "mimalloc".parse::<LeanAllocator>().unwrap(),
+            LeanAllocator::Mimalloc
+        );
+        assert_eq!(
+            "system".parse::<LeanAllocator>().unwrap(),
+            LeanAllocator::System
+        );
+        let err = "bogus".parse::<LeanAllocator>().unwrap_err();
+        assert!(err.to_string().contains("invalid allocator 'bogus'"));
+    }
+
+    #[test]
+    fn test_lean_config_source_labels() {
+        assert_eq!(
+            LeanConfigSource::CargoDepEnv.label(),
+            "DEP_LEAN4_LEO3_CONFIG"
+        );
+        assert_eq!(LeanConfigSource::ConfigFile.label(), "LEO3_CONFIG_FILE");
+        assert_eq!(
+            LeanConfigSource::CrossCompileEnv.label(),
+            "LEO3_CROSS_LIB_DIR + LEO3_CROSS_LEAN_VERSION"
+        );
+        assert_eq!(LeanConfigSource::LeanHomeEnv.label(), "LEAN_HOME");
+        assert_eq!(
+            LeanConfigSource::Lake.label(),
+            "lake env printenv LEAN_HOME"
+        );
+        assert_eq!(LeanConfigSource::Elan.label(), "elan which lean");
+        assert_eq!(LeanConfigSource::Path.label(), "PATH (lean)");
+        // Display delegates to label().
+        assert_eq!(
+            LeanConfigSource::Lake.to_string(),
+            "lake env printenv LEAN_HOME"
+        );
+        assert_eq!(LeanConfigSource::Path.to_string(), "PATH (lean)");
+    }
+
+    #[test]
+    fn test_resolution_error_display_multiline() {
+        let error = ResolutionError::host_detection(vec![
+            ResolutionAttempt {
+                source: LeanConfigSource::Lake,
+                error: "lake not found".to_string(),
+            },
+            ResolutionAttempt {
+                source: LeanConfigSource::Path,
+                error: "which failed".to_string(),
+            },
+        ]);
+        let text = error.to_string();
+        assert!(text.starts_with("Failed to resolve Lean4 configuration"));
+        assert!(text.contains("lake env printenv LEAN_HOME: lake not found"));
+        assert!(text.contains("PATH (lean): which failed"));
+        assert!(text.lines().count() >= 6);
+    }
+
+    #[test]
+    fn test_cross_compile_from_env_missing() {
+        with_temp_env(|| {
+            let err = match CrossCompileConfig::from_env() {
+                Ok(_) => panic!("expected error with no env vars set"),
+                Err(err) => err,
+            };
+            assert_eq!(err.to_string(), "LEO3_CROSS_LIB_DIR not set");
+
+            std::env::set_var("LEO3_CROSS_LIB_DIR", "/tmp/foo");
+            let err = match CrossCompileConfig::from_env() {
+                Ok(_) => panic!("expected error with LEO3_CROSS_LEAN_VERSION unset"),
+                Err(err) => err,
+            };
+            assert_eq!(err.to_string(), "LEO3_CROSS_LEAN_VERSION not set");
+        });
+    }
+
+    #[test]
+    fn test_cross_compile_from_env_invalid_version() {
+        with_temp_env(|| {
+            std::env::set_var("LEO3_CROSS_LIB_DIR", "/tmp/foo");
+            std::env::set_var("LEO3_CROSS_LEAN_VERSION", "not-a-version");
+            let err = match CrossCompileConfig::from_env() {
+                Ok(_) => panic!("expected parse error"),
+                Err(err) => err,
+            };
+            assert!(err.to_string().contains("parsing LEO3_CROSS_LEAN_VERSION"));
+        });
+    }
+
+    #[test]
+    fn test_cross_compile_from_env_ok() {
+        with_temp_env(|| {
+            std::env::set_var("LEO3_CROSS_LIB_DIR", "/tmp/foo");
+            std::env::set_var("LEO3_CROSS_LEAN_VERSION", "4.25.2");
+            let config = CrossCompileConfig::from_env().unwrap();
+            assert_eq!(config.lib_dir, PathBuf::from("/tmp/foo"));
+            assert_eq!(config.version, "4.25.2".parse::<LeanVersion>().unwrap());
+        });
+    }
+
+    #[test]
+    fn test_cross_compile_into_lean_config() {
+        let root = temp_unique_dir("cross-into");
+        let lib_dir = root.join("a").join("b");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+
+        let config = CrossCompileConfig {
+            lib_dir: lib_dir.clone(),
+            version: "4.25.2".parse().unwrap(),
+        }
+        .into_lean_config()
+        .unwrap();
+        // lean_home falls back to the grandparent of the lib dir.
+        assert_eq!(config.lean_home, root);
+        assert_eq!(config.lean_include_dir, root.join("include"));
+        assert_eq!(config.lean_lib_dir, lib_dir);
+        assert_eq!(config.version, "4.25.2".parse().unwrap());
+        assert!(!config.shared);
+        assert_eq!(config.allocator, LeanAllocator::System);
+        assert_eq!(config.pointer_width, None);
+
+        let missing = root.join("missing");
+        let err = CrossCompileConfig {
+            lib_dir: missing,
+            version: "4.25.2".parse().unwrap(),
+        }
+        .into_lean_config()
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("LEO3_CROSS_LIB_DIR does not exist"));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn test_resolve_host_lean_config_cross_compile_ok() {
+        with_temp_env(|| {
+            let root = temp_unique_dir("cross-ok");
+            let lib_dir = root.join("lib").join("lean");
+            std::fs::create_dir_all(&lib_dir).unwrap();
+            std::env::set_var("LEO3_CROSS_LIB_DIR", &lib_dir);
+            std::env::set_var("LEO3_CROSS_LEAN_VERSION", "4.25.2");
+
+            let resolved = resolve_host_lean_config().unwrap();
+            assert_eq!(resolved.source, LeanConfigSource::CrossCompileEnv);
+            assert_eq!(resolved.config.version, "4.25.2".parse().unwrap());
+
+            std::fs::remove_dir_all(&root).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_resolve_host_lean_config_all_detectors_fail() {
+        with_temp_env(|| {
+            // Scrub PATH so lake / elan / which cannot be found: every
+            // detection step fails and the attempts are collected.
+            let empty_path = temp_unique_dir("empty-path");
+            std::fs::create_dir_all(&empty_path).unwrap();
+            std::env::set_var("PATH", &empty_path);
+
+            let err = resolve_host_lean_config().unwrap_err();
+            assert_eq!(err.attempts.len(), 3);
+            assert_eq!(err.attempts[0].source, LeanConfigSource::Lake);
+            assert_eq!(err.attempts[1].source, LeanConfigSource::Elan);
+            assert_eq!(err.attempts[2].source, LeanConfigSource::Path);
+            assert!(err.summary.contains("host discovery"));
+
+            std::fs::remove_dir_all(&empty_path).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_resolve_host_lean_config_missing_include_dir() {
+        with_temp_env(|| {
+            let lean_home = temp_unique_dir("lean-home-no-include");
+            std::fs::create_dir_all(&lean_home).unwrap();
+
+            std::env::set_var("LEAN_HOME", &lean_home);
+            let err = resolve_host_lean_config().unwrap_err();
+            assert_eq!(err.attempts[0].source, LeanConfigSource::LeanHomeEnv);
+            assert!(err.attempts[0]
+                .error
+                .contains("include directory not found"));
+
+            // LEAN_INCLUDE_DIR override pointing at an existing directory
+            // passes the include check and fails on the library check instead.
+            std::env::set_var("LEAN_INCLUDE_DIR", &lean_home);
+            let err = resolve_host_lean_config().unwrap_err();
+            assert!(err.attempts[0]
+                .error
+                .contains("library directory not found"));
+
+            std::fs::remove_dir_all(&lean_home).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_lean_binary_missing_error() {
+        with_temp_env(|| {
+            let lean_home = temp_unique_dir("lean-home-no-bin");
+            std::fs::create_dir_all(lean_home.join("include")).unwrap();
+            std::fs::create_dir_all(lean_home.join("lib").join("lean")).unwrap();
+
+            std::env::set_var("LEAN_HOME", &lean_home);
+            let err = resolve_host_lean_config().unwrap_err();
+            assert!(err.attempts[0].error.contains("lean binary not found"));
+
+            std::fs::remove_dir_all(&lean_home).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_resolve_lean_home_fallback_heuristic() {
+        // No executable at the path: `--print-prefix` fails and the
+        // parent-of-parent heuristic kicks in.
+        let home = resolve_lean_home(Path::new(
+            "/nonexistent/toolchains/leanprover-lean4-v4.25.2/bin/lean",
+        ))
+        .unwrap();
+        assert_eq!(
+            home,
+            PathBuf::from("/nonexistent/toolchains/leanprover-lean4-v4.25.2")
+        );
+
+        // A bare file name has no parent-of-parent: hard error. Scrub PATH
+        // first so a `lean` on PATH cannot resolve and defeat the error path.
+        with_temp_env(|| {
+            let empty_path = temp_unique_dir("empty-path");
+            std::fs::create_dir_all(&empty_path).unwrap();
+            std::env::set_var("PATH", &empty_path);
+
+            let err = resolve_lean_home(Path::new("lean")).unwrap_err();
+            assert!(err
+                .to_string()
+                .contains("could not determine LEAN_HOME from binary path"));
+        });
+    }
+
+    #[test]
+    fn test_parse_lean_version_output() {
+        assert_eq!(
+            parse_lean_version_output(
+                "Lean (version 4.25.2, x86_64-unknown-linux-gnu, commit abc, release)"
+            )
+            .unwrap(),
+            "4.25.2".parse().unwrap()
+        );
+        // Trailing comma on the bare version token.
+        assert_eq!(
+            parse_lean_version_output("Lean (version 4.12.0, ...)").unwrap(),
+            "4.12.0".parse().unwrap()
+        );
+        // Pre-release suffix survives.
+        assert_eq!(
+            parse_lean_version_output("Lean (version 4.29.0-nightly-2026-02-13-rev2, ...)")
+                .unwrap(),
+            "4.29.0".parse().unwrap()
+        );
+        // Plain version string also parses.
+        assert_eq!(
+            parse_lean_version_output("4.25.2\n").unwrap(),
+            "4.25.2".parse().unwrap()
+        );
+        // Nothing looking like a Lean 4 version.
+        assert!(parse_lean_version_output("no version here").is_err());
+        assert!(parse_lean_version_output("Lean (version 5.0.0, ...)").is_err());
+    }
+
+    #[test]
+    fn test_format_command_failure() {
+        use std::process::Output;
+
+        let output = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"some stdout".to_vec(),
+            stderr: b"some stderr".to_vec(),
+        };
+        let text = format_command_failure(&output);
+        assert!(text.contains("some stderr"));
+        assert!(text.contains("some stdout"));
+
+        let empty = Output {
+            status: std::process::ExitStatus::default(),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        let text = format_command_failure(&empty);
+        assert!(text.contains("exit status"));
+        assert!(!text.contains("stderr:"));
+    }
+
+    #[test]
+    fn test_run_command_spawn_error() {
+        let mut cmd = Command::new("leo3-test-command-that-does-not-exist-xyz");
+        let err = run_command(&mut cmd, "definitely missing").unwrap_err();
+        assert!(err.to_string().contains("failed to run definitely missing"));
+    }
+
+    #[test]
+    fn test_load_config_file() {
+        let config = sample_config("4.25.2");
+        let path = write_temp_config(&config, "load-config");
+        let loaded = load_config_file(&path).unwrap();
+        assert_eq!(loaded.version, config.version);
+
+        let bad = temp_unique_dir("load-config-bad");
+        std::fs::create_dir_all(&bad).unwrap();
+        let bad_path = bad.join("config.txt");
+        std::fs::write(&bad_path, "this is not key=value\n").unwrap();
+        let err = load_config_file(&bad_path).unwrap_err();
+        assert!(err.to_string().contains("failed to parse config file"));
+
+        let err = load_config_file(&bad.join("missing.txt")).unwrap_err();
+        assert!(err.to_string().contains("failed to open config file"));
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir_all(&bad).unwrap();
+    }
+
+    #[test]
+    fn test_from_reader_missing_keys() {
+        let base = "\
+lean_home=/opt/lean
+lean_lib_dir=/opt/lean/lib/lean
+lean_include_dir=/opt/lean/include
+version=4.25.2
+shared=true
+allocator=mimalloc
+pointer_width=64
+";
+        // Removing any of these keys is a hard error naming the key.
+        for key in [
+            "lean_home",
+            "lean_lib_dir",
+            "lean_include_dir",
+            "version",
+            "shared",
+            "pointer_width",
+        ] {
+            let content = base
+                .lines()
+                .filter(|l| !l.starts_with(key))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let err =
+                LeanConfig::from_reader(std::io::BufReader::new(content.as_bytes())).unwrap_err();
+            assert!(
+                err.to_string().contains(&format!("missing {}", key)),
+                "expected 'missing {}' in: {}",
+                key,
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_reader_invalid_content() {
+        // Line without '='
+        let err = LeanConfig::from_reader(std::io::BufReader::new("garbage line\n".as_bytes()))
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid config line"));
+
+        // Invalid version value
+        let err = LeanConfig::from_reader(std::io::BufReader::new("version=abc\n".as_bytes()))
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid version"));
+
+        // Invalid allocator value
+        let err = LeanConfig::from_reader(std::io::BufReader::new("allocator=nope\n".as_bytes()))
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid allocator"));
+
+        // Invalid pointer_width value
+        let err =
+            LeanConfig::from_reader(std::io::BufReader::new("pointer_width=wide\n".as_bytes()))
+                .unwrap_err();
+        assert!(err.to_string().contains("invalid pointer_width"));
+    }
+
+    #[test]
+    fn test_from_reader_unknown_keys_and_blank_lines() {
+        let content = "\
+lean_home=/opt/lean
+
+lean_lib_dir=/opt/lean/lib/lean
+
+unknown_key=whatever
+lean_include_dir=/opt/lean/include
+version=4.25.2
+shared=true
+allocator=mimalloc
+pointer_width=
+";
+        let config = LeanConfig::from_reader(std::io::BufReader::new(content.as_bytes())).unwrap();
+        assert_eq!(config.pointer_width, None);
+        assert_eq!(config.version, "4.25.2".parse().unwrap());
+    }
+
+    #[test]
+    fn test_from_reader_allocator_fallback_from_config_h() {
+        let root = temp_unique_dir("alloc-fallback");
+        let include = root.join("include").join("lean");
+        std::fs::create_dir_all(&include).unwrap();
+        std::fs::write(include.join("config.h"), "#define LEAN_SMALL_ALLOCATOR\n").unwrap();
+
+        let content = format!(
+            "lean_home={0}\nlean_lib_dir={0}/lib/lean\nlean_include_dir={0}/include\nversion=4.25.2\nshared=true\npointer_width=64\n",
+            root.display()
+        );
+        let config = LeanConfig::from_reader(std::io::BufReader::new(content.as_bytes())).unwrap();
+        assert_eq!(config.allocator, LeanAllocator::Small);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn test_has_shared_libs() {
+        let root = temp_unique_dir("shared-libs");
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(!has_shared_libs(&root));
+
+        for name in [
+            "libleanshared.so",
+            "libleanshared.dylib",
+            "libleanshared.dll.a",
+            "leanshared.dll",
+        ] {
+            let path = root.join(name);
+            std::fs::write(&path, b"").unwrap();
+            assert!(has_shared_libs(&root), "expected {name} to count");
+            std::fs::remove_file(&path).unwrap();
+        }
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn test_detect_allocator_from_include_dir() {
+        let root = temp_unique_dir("alloc-detect");
+        let include = root.join("include").join("lean");
+        std::fs::create_dir_all(&include).unwrap();
+        let config_h = include.join("config.h");
+
+        std::fs::write(&config_h, "#define LEAN_MIMALLOC\n").unwrap();
+        assert_eq!(
+            detect_allocator_from_include_dir(&root.join("include")).unwrap(),
+            LeanAllocator::Mimalloc
+        );
+
+        std::fs::write(
+            &config_h,
+            "#define LEAN_SMALL_ALLOCATOR\n#define LEAN_MIMALLOC\n",
+        )
+        .unwrap();
+        assert_eq!(
+            detect_allocator_from_include_dir(&root.join("include")).unwrap(),
+            LeanAllocator::Small
+        );
+
+        // Missing config.h → hard error; best-effort wrapper falls back to System.
+        std::fs::remove_file(&config_h).unwrap();
+        assert!(detect_allocator_from_include_dir(&root.join("include")).is_err());
+        assert_eq!(
+            detect_allocator_from_include_dir_best_effort(&root.join("include")),
+            LeanAllocator::System
+        );
+
+        std::fs::write(&config_h, "#define LEAN_MIMALLOC\n").unwrap();
+        assert_eq!(
+            detect_allocator_from_include_dir_best_effort(&root.join("include")),
+            LeanAllocator::Mimalloc
+        );
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn test_lean_4_cfg_minors() {
+        assert_eq!(
+            lean_4_cfg_minors(&"4.25.2".parse().unwrap()),
+            Some((0..=25).collect::<Vec<_>>())
+        );
+        assert_eq!(lean_4_cfg_minors(&"4.0.0".parse().unwrap()), Some(vec![0]));
+        assert_eq!(lean_4_cfg_minors(&"3.18.0".parse().unwrap()), None);
+        assert_eq!(lean_4_cfg_minors(&"5.0.0".parse().unwrap()), None);
+    }
+
+    #[test]
+    fn test_emit_cfg_helpers() {
+        // Non-Lean-4 versions emit nothing (early return).
+        emit_version_cfgs(&sample_config("3.18.0"));
+        // Lean 4 emits one cfg per earlier minor.
+        emit_version_cfgs(&sample_config("4.25.2"));
+
+        emit_allocator_cfgs(&LeanConfig {
+            allocator: LeanAllocator::Small,
+            ..sample_config("4.25.2")
+        });
+        emit_allocator_cfgs(&LeanConfig {
+            allocator: LeanAllocator::Mimalloc,
+            ..sample_config("4.25.2")
+        });
+        emit_allocator_cfgs(&LeanConfig {
+            allocator: LeanAllocator::System,
+            ..sample_config("4.25.2")
+        });
+
+        print_expected_cfgs();
+        print_rerun_if_env_changed();
+    }
+
+    #[test]
+    fn test_emit_no_lean_dynamic_lookup_link_arg() {
+        with_temp_env(|| {
+            std::env::set_var("CARGO_CFG_TARGET_OS", "macos");
+            emit_no_lean_dynamic_lookup_link_arg();
+            std::env::set_var("CARGO_CFG_TARGET_OS", "linux");
+            emit_no_lean_dynamic_lookup_link_arg();
+        });
+    }
+
+    fn config_with_lib_dir(lib_dir: &Path, version: &str) -> LeanConfig {
+        LeanConfig {
+            lean_home: lib_dir
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default(),
+            lean_lib_dir: lib_dir.to_path_buf(),
+            lean_include_dir: lib_dir
+                .parent()
+                .map(|p| p.join("include"))
+                .unwrap_or_default(),
+            version: version.parse().unwrap(),
+            shared: true,
+            allocator: LeanAllocator::System,
+            pointer_width: Some(64),
+        }
+    }
+
+    #[test]
+    fn test_emit_link_config_unix() {
+        with_temp_env(|| {
+            std::env::remove_var("CARGO_CFG_TARGET_OS");
+            let root = temp_unique_dir("link-unix");
+            let lib_dir = root.join("lib");
+            std::fs::create_dir_all(&lib_dir).unwrap();
+            for name in [
+                "libInit_shared.so",
+                "libleanshared_2.so",
+                "libleanshared_1.so",
+            ] {
+                std::fs::write(lib_dir.join(name), b"").unwrap();
+            }
+            emit_link_config(&config_with_lib_dir(&lib_dir, "4.25.2"));
+            std::fs::remove_dir_all(&root).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_emit_link_config_windows() {
+        with_temp_env(|| {
+            std::env::set_var("CARGO_CFG_TARGET_OS", "windows");
+            let root = temp_unique_dir("link-win");
+            let lib_dir = root.join("lib");
+            std::fs::create_dir_all(&lib_dir).unwrap();
+            for name in [
+                "libInit_shared.dll.a",
+                "libleanshared_2.dll.a",
+                "libleanshared_1.dll.a",
+            ] {
+                std::fs::write(lib_dir.join(name), b"").unwrap();
+            }
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            emit_link_config(&config_with_lib_dir(&lib_dir, "4.25.2"));
+            std::fs::remove_dir_all(&root).unwrap();
+        });
+    }
+
+    #[test]
+    fn test_resolve_user_or_detect_config_config_file_error() {
+        with_temp_env(|| {
+            std::env::set_var("LEO3_CONFIG_FILE", "/definitely/not/a/config.txt");
+            let err = resolve_user_or_detect_config().unwrap_err();
+            assert_eq!(err.attempts.len(), 1);
+            assert_eq!(err.attempts[0].source, LeanConfigSource::ConfigFile);
+            assert!(err.attempts[0].error.contains("failed to open config file"));
+        });
+    }
+
+    #[test]
+    fn test_resolve_dep_lean_config_paths() {
+        with_temp_env(|| {
+            // Not set → error with CargoDepEnv source.
+            let err = resolve_dep_lean_config().unwrap_err();
+            assert_eq!(err.attempts[0].source, LeanConfigSource::CargoDepEnv);
+            assert!(err.attempts[0].error.contains("not set"));
+
+            // Invalid hex → "present but invalid".
+            std::env::set_var("DEP_LEAN4_LEO3_CONFIG", "zz-not-hex");
+            let err = resolve_dep_lean_config().unwrap_err();
+            assert!(err.summary.contains("present but invalid"));
+
+            // Valid config → Ok.
+            let config = sample_config("4.25.2");
+            std::env::set_var("DEP_LEAN4_LEO3_CONFIG", config.to_cargo_dep_env());
+            let resolved = resolve_dep_lean_config().unwrap();
+            assert_eq!(resolved.source, LeanConfigSource::CargoDepEnv);
+            assert_eq!(resolved.config.version, config.version);
+        });
+    }
+
+    #[test]
+    fn test_resolve_lean_config_invalid_dep_env() {
+        with_temp_env(|| {
+            std::env::set_var("DEP_LEAN4_LEO3_CONFIG", "zz");
+            let err = resolve_lean_config().unwrap_err();
+            assert!(err.summary.contains("present but invalid"));
+        });
+    }
+
+    #[test]
+    fn test_emit_resolved_config_rerun_if_changed() {
+        with_temp_env(|| {
+            let config_file = temp_unique_dir("rerun").join("config.txt");
+            let resolved = ResolvedLeanConfig {
+                source: LeanConfigSource::ConfigFile,
+                config: sample_config("4.25.2"),
+            };
+            std::env::set_var("LEO3_CONFIG_FILE", &config_file);
+            emit_resolved_config_rerun_if_changed(&resolved);
+
+            let dep = ResolvedLeanConfig {
+                source: LeanConfigSource::CargoDepEnv,
+                config: sample_config("4.25.2"),
+            };
+            emit_resolved_config_rerun_if_changed(&dep);
+        });
+    }
+
+    #[test]
+    fn test_detect_lean_config() {
+        with_temp_env(|| {
+            // Ok path via cross-compile env.
+            let root = temp_unique_dir("detect-ok");
+            let lib_dir = root.join("lib").join("lean");
+            std::fs::create_dir_all(&lib_dir).unwrap();
+            std::env::set_var("LEO3_CROSS_LIB_DIR", &lib_dir);
+            std::env::set_var("LEO3_CROSS_LEAN_VERSION", "4.25.2");
+            let config = detect_lean_config().unwrap();
+            assert_eq!(config.version, "4.25.2".parse().unwrap());
+            std::fs::remove_dir_all(&root).unwrap();
+
+            // Error path maps to a plain errors::Error.
+            std::env::remove_var("LEO3_CROSS_LIB_DIR");
+            std::env::remove_var("LEO3_CROSS_LEAN_VERSION");
+            std::env::set_var("LEAN_HOME", "/definitely/not/here");
+            let err = detect_lean_config().unwrap_err();
+            assert!(err.to_string().contains("Lean home does not exist"));
+        });
     }
 }

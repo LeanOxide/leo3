@@ -193,6 +193,138 @@ What landed:
 These docs can always deepen later, but their absence is no longer a maturity
 gap.
 
+## Closed Since 0.3.0
+
+### User-defined container keys (wider key matrix)
+
+Status:
+
+- Landed: external classes can now be used as `LeanHashMap` / `LeanHashSet` /
+  `LeanRBMap` keys.
+
+What landed:
+
+- the combined `#[lean_instance(Hashable, BEq)]` and
+  `#[lean_instance(Hashable, BEq, Ord)]` forms generate
+  `ExternalHashKey` / `ExternalOrdKey` bridge implementations for the class
+  (plus the existing per-class FFI functions)
+- leo3 implements `LeanHashKey` / `LeanRBMapKey` for
+  `LeanExternalType<K>` through blanket impls that build the runtime
+  `Hashable` / `Ord` instance objects; the instance layout (erased
+  one-field structure = the hash/compare closure itself, and the boxed
+  `UInt64` hash result as `ctor(0, 0, 1)` with the value in scalar slot 0)
+  was verified against the runtime's own `l_instHashableNat` object
+- runtime tests cover HashMap insert/find/erase, HashSet insert/contains/
+  erase, and RBMap insert/find/erase with user-defined key classes,
+  including replacement semantics and cross-object equality
+
+Code evidence:
+
+- `leo3-macros-backend/src/lean_instance.rs`
+- `leo3/src/types/containers/hashmap.rs` (`ExternalHashKey`),
+  `leo3/src/types/containers/rbmap.rs` (`ExternalOrdKey`)
+- `leo3/tests/container_user_keys.rs`
+
+Remaining matrix limits (documented, intentional): `Float` / `Float32` keys
+(Lean has no `Hashable Float` instance) and non-external user keys.
+
+### `#[leanclass]` field accessors and naming
+
+Status:
+
+- Landed: `#[get]` / `#[set]` on named fields; `#[name = "..."]` on methods
+  and `#[getter(name)]` / `#[setter(name)]`; `#[leanclass(name = "...")]`
+  on the struct and impl block.
+
+What landed:
+
+- getters (`fn field(&self) -> T`, clone-based) and setters
+  (`fn set_field(&mut self, value: T)`, copy-on-write) with FFI wrappers,
+  Lean declarations, metadata, and UI rejections for unsupported field
+  types and tuple-struct accessors
+- `leo3-codegen` merges the field-accessor metadata with the impl-block
+  metadata into one `.lean` file per class
+
+Code evidence:
+
+- `leo3-binding-ir/src/analysis.rs` (`FieldAccessor`,
+  `analyze_lean_class_field_accessors`, `field_accessor_bindings`)
+- `leo3-macros-backend/src/leanclass.rs`
+- `leo3-codegen/src/main.rs` (per-class metadata merge)
+- `leo3/tests/test_leanclass_field_accessors.rs`,
+  `leo3/tests/test_leanclass_rename.rs`,
+  `leo3/tests/ui/leanclass_field_accessor_*.rs`
+
+### std collection conversions and conversion matrix extensions
+
+Status:
+
+- Landed: `HashMap` / `HashSet` / `BTreeMap` ↔ `LeanHashMap` /
+  `LeanHashSet` / `LeanRBMap` for the supported key matrix; `Cell<T: Copy>`;
+  `Cow<str>` / `Cow<[u8]>`; tuples up to arity 12.
+
+Code evidence:
+
+- `leo3/src/conversion.rs` (`std_collection_conversions`,
+  tuple arity 7–12, `Cell` / `Cow` impls)
+- `leo3/tests/conversion_matrix_ext.rs`
+
+### IO module correctness against the modern Lean ABI
+
+Status:
+
+- Landed: the `io` module was rewritten against the 4.25+ runtime ABI and
+  is now covered by runtime tests (previously the handle primitives were
+  called with a stale C signature and never worked on any modern Lean
+  release).
+
+What landed:
+
+- `handle::open` (5-mode `FileMode` mirroring `IO.FS.Mode`, no `binary`
+  parameter), `write` (ByteArray), `read` (returns
+  `LeanIO<LeanBound<LeanByteArray>>`), `get_line`, `flush`, `is_eof`
+- `LeanIO::run` and the `pure`/`then` combinators use the real
+  `EStateM.Result` layout; IO closures carry correct arity and owned fixed
+  slots
+- `IOError` maps the 4.25+ 19-constructor `IO.Error` table
+- `io::time` / `io::process` are pure-Rust implementations (the historical
+  C primitives are not exported by Lean 4.25.2); `process::exit` binds
+  `lean_io_exit`
+- `LeanString::mk` / `as_str` are length-aware (embedded NULs round-trip,
+  single-copy construction)
+
+Code evidence:
+
+- `leo3/src/io/{mod,handle,error,time,process}.rs`,
+  `leo3-ffi/src/io.rs`
+- `leo3/tests/io_handle_ops.rs`, `leo3/tests/io_ops_comprehensive.rs`
+
+## Known Latent Issues (documented, not yet fixed)
+
+These were surfaced by the 2026-08 coverage pass. They are latent (triggered
+only by specific `meta` API sequences) and require precise ABI verification
+against Lean's runtime, so they are tracked here rather than fixed blindly:
+
+- `l_Lean_ConstantInfo_*` accessors consume their argument per Lean's ABI,
+  but `leo3/src/meta/environment.rs` passes borrowed pointers; repeated
+  access is a use-after-free (tests pass `cinfo.clone()` per accessor to
+  work around it)
+- `lean_local_ctx_find_from_user_name` / `lean_local_decl_fvar_id` /
+  `lean_local_ctx_num_indices` are declared as borrowed in
+  `leo3/src/meta/context.rs` but the bound symbols consume their argument,
+  causing heap corruption; the corresponding
+  `goal_hypothesis` / `goal_latest_hypothesis` / `assumption`-success tests
+  are omitted until the declarations are fixed
+- `lean_finalize_task_manager` on Lean 4.25.2 has a runtime join race that
+  occasionally hangs the process (timing-dependent; also triggered by
+  llvm-cov instrumentation). `LeanTask::spawn` no longer depends on Lean's
+  lazy manager setup (it initializes once under a lock), but the
+  finalize/re-init cycle remains a Lean runtime boundary behavior and its
+  test is `#[ignore]`d
+- a successful `MetaMContext::checked_assign` (e.g. `exact` / `apply`
+  success) corrupts the Lean heap and crashes the next
+  `LeanEnvironment::empty`; only the failure paths are tested
+
 ## Future Expansion, Not Current Blockers
 
 - richer module-registration metadata beyond today's implicit inline
@@ -203,9 +335,9 @@ gap.
 - general `#[leanfn]` generics beyond the landed monomorphization subset
   (`concrete(Ty, name = "...")`); intentionally not feasible — see
   `docs/rfc-generics.md`
-- widening the container key matrix beyond the current narrow set
-  (`LeanNat`, `LeanInt`, `LeanString`, `LeanInt8`–`LeanInt64`,
-  `LeanUInt8`–`LeanUInt64`), for example floating-point or user-defined keys
+- widening the container key matrix beyond the current set (external-class
+  keys landed; `Float` / `Float32` keys remain infeasible because Lean has
+  no `Hashable Float` instance)
 
 ## Maintenance Rule
 

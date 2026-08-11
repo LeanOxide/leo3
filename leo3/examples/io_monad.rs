@@ -72,7 +72,7 @@ fn main() -> LeanResult<()> {
         println!("\n6. File handle operations:");
 
         // Write to a file using handles
-        let write_handle_io = handle::open(lean, "/tmp/leo3_test.txt", FileMode::Write, false)?;
+        let write_handle_io = handle::open(lean, "/tmp/leo3_test.txt", FileMode::Write)?;
         let write_handle = write_handle_io.run()?;
 
         handle::write(lean, &write_handle, "Hello from leo3!\n")?.run()?;
@@ -83,7 +83,7 @@ fn main() -> LeanResult<()> {
         println!("Wrote to /tmp/leo3_test.txt");
 
         // Read from the file using handles
-        let read_handle_io = handle::open(lean, "/tmp/leo3_test.txt", FileMode::Read, false)?;
+        let read_handle_io = handle::open(lean, "/tmp/leo3_test.txt", FileMode::Read)?;
         let read_handle = read_handle_io.run()?;
 
         let line1_io = handle::get_line(lean, &read_handle)?;
@@ -102,13 +102,7 @@ fn main() -> LeanResult<()> {
 
         // 7. Standard streams
         println!("\n7. Standard streams:");
-        let stdout = handle::stdout(lean);
-        handle::write(lean, &stdout, "Writing to stdout via handle\n")?.run()?;
-        handle::flush(lean, &stdout)?.run()?;
-
-        let stderr = handle::stderr(lean);
-        handle::write(lean, &stderr, "Writing to stderr via handle\n")?.run()?;
-        handle::flush(lean, &stderr)?.run()?;
+        leo3::io::console::put_str(lean, "Writing to stdout via console\n")?.run()?;
 
         println!("\n=== All IO operations completed successfully! ===");
 

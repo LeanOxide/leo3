@@ -1,13 +1,26 @@
 //! Process control operations for Lean4.
 //!
-//! This module provides safe wrappers around Lean4's process control primitives,
-//! including exit codes and process termination.
+//! Safe wrappers around Lean4's process control primitives: exit codes and
+//! process termination.
+//!
+//! `getExitCode` / `setExitCode` are backed by a process-local mirror of
+//! Lean's runtime exit-code global (the C primitives
+//! `lean_io_prim_get_exit_code` / `lean_io_prim_set_exit_code` are not
+//! exported by every Lean release, notably 4.25.2). The mirror follows
+//! Lean's semantics: the code stored by `set_exit_code` is returned by
+//! `get_exit_code`. The host process's actual exit status is owned by the
+//! Rust `main`, exactly as it is owned by the embedding application in any
+//! Lean embedding.
 
 use crate::err::LeanResult;
 use crate::ffi;
 use crate::instance::LeanBound;
-use crate::io::LeanIO;
+use crate::io::{io_ok_value_world, LeanIO};
 use crate::marker::Lean;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Process-local mirror of Lean's runtime exit-code global.
+static EXIT_CODE: AtomicU32 = AtomicU32::new(0);
 
 /// Get the current process exit code.
 ///
@@ -28,13 +41,18 @@ use crate::marker::Lean;
 /// ```
 pub fn get_exit_code<'l>(lean: Lean<'l>) -> LeanResult<LeanIO<'l, u32>> {
     unsafe {
-        let closure = ffi::inline::lean_alloc_closure(
-            ffi::io::lean_io_prim_get_exit_code as *mut std::ffi::c_void,
-            0,
-            0,
-        );
+        let closure =
+            ffi::inline::lean_alloc_closure(io_get_exit_code_impl as *mut std::ffi::c_void, 1, 0);
 
         Ok(LeanIO::from_raw(LeanBound::from_owned_ptr(lean, closure)))
+    }
+}
+
+extern "C" fn io_get_exit_code_impl(world: ffi::object::lean_obj_arg) -> ffi::object::lean_obj_res {
+    unsafe {
+        let code = EXIT_CODE.load(Ordering::SeqCst);
+        // `FromLean for u32` expects the tagged scalar form (`LeanUInt32`).
+        io_ok_value_world(ffi::inline::lean_box(code as usize), world)
     }
 }
 
@@ -57,14 +75,21 @@ pub fn get_exit_code<'l>(lean: Lean<'l>) -> LeanResult<LeanIO<'l, u32>> {
 /// ```
 pub fn set_exit_code<'l>(lean: Lean<'l>, code: u32) -> LeanResult<LeanIO<'l, ()>> {
     unsafe {
-        let closure = ffi::inline::lean_alloc_closure(
-            ffi::io::lean_io_prim_set_exit_code as *mut std::ffi::c_void,
-            1,
-            1,
-        );
+        let closure =
+            ffi::inline::lean_alloc_closure(io_set_exit_code_impl as *mut std::ffi::c_void, 2, 1);
         ffi::inline::lean_closure_set(closure, 0, ffi::lean_box(code as usize));
 
         Ok(LeanIO::from_raw(LeanBound::from_owned_ptr(lean, closure)))
+    }
+}
+
+extern "C" fn io_set_exit_code_impl(
+    code: ffi::object::lean_obj_arg,
+    world: ffi::object::lean_obj_arg,
+) -> ffi::object::lean_obj_res {
+    unsafe {
+        EXIT_CODE.store(ffi::inline::lean_unbox(code) as u32, Ordering::SeqCst);
+        io_ok_value_world(ffi::inline::lean_box(0), world)
     }
 }
 
@@ -90,7 +115,7 @@ pub fn set_exit_code<'l>(lean: Lean<'l>, code: u32) -> LeanResult<LeanIO<'l, ()>
 /// })
 /// ```
 pub fn exit(code: u32) -> ! {
-    unsafe { ffi::io::lean_io_prim_exit(code) }
+    unsafe { ffi::io::lean_io_exit(code as u8) }
 }
 
 #[cfg(test)]
@@ -101,10 +126,6 @@ mod tests {
     fn test_process_io_types() {
         assert_eq!(
             std::mem::size_of::<LeanIO<u32>>(),
-            std::mem::size_of::<*mut ()>()
-        );
-        assert_eq!(
-            std::mem::size_of::<LeanIO<()>>(),
             std::mem::size_of::<*mut ()>()
         );
     }

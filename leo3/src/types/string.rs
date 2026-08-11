@@ -4,7 +4,6 @@ use crate::err::{LeanError, LeanResult};
 use crate::ffi;
 use crate::instance::LeanBound;
 use crate::marker::Lean;
-use std::ffi::CStr;
 
 /// A Lean string object.
 ///
@@ -18,7 +17,8 @@ impl LeanString {
     ///
     /// # Lean4 Reference
     /// Corresponds to string literal construction in Lean4.
-    /// Uses C API `lean_mk_string`.
+    /// Uses C API `lean_mk_string_from_bytes` (length-aware single copy;
+    /// embedded NUL bytes are preserved, matching Lean's byte-array strings).
     ///
     /// # Example
     ///
@@ -36,11 +36,13 @@ impl LeanString {
     /// }
     /// ```
     pub fn mk<'l>(lean: Lean<'l>, s: &str) -> LeanResult<LeanBound<'l, Self>> {
-        let c_str = std::ffi::CString::new(s)
-            .map_err(|_| LeanError::conversion("String contains null byte"))?;
-
         unsafe {
-            let ptr = ffi::string::lean_mk_string(c_str.as_ptr());
+            // Length-aware copy: no intermediate CString allocation, no strlen
+            // on extraction, and embedded NUL bytes round-trip unchanged.
+            let ptr = ffi::string::lean_mk_string_from_bytes_unchecked(
+                s.as_ptr() as *const libc::c_char,
+                s.len(),
+            );
             Ok(LeanBound::from_owned_ptr(lean, ptr))
         }
     }
@@ -76,13 +78,47 @@ impl LeanString {
     ///     })
     /// }
     /// ```
-    pub fn cstr<'l>(obj: &LeanBound<'l, Self>) -> LeanResult<&'l str> {
+    /// Zero-copy UTF-8 view of the string's byte payload.
+    ///
+    /// The view covers the full payload (length-aware, so embedded NUL bytes
+    /// are preserved) and borrows from the Lean object.
+    ///
+    /// # Lean4 Reference
+    /// Corresponds to `String.data` in Lean4 (conceptually).
+    pub fn as_str<'l>(obj: &LeanBound<'l, Self>) -> LeanResult<&'l str> {
         unsafe {
-            let c_str = ffi::inline::lean_string_cstr(obj.as_ptr());
-            let cstr = CStr::from_ptr(c_str);
-            cstr.to_str()
+            let ptr = ffi::inline::lean_string_cstr(obj.as_ptr());
+            // `lean_string_size` counts the trailing NUL terminator.
+            let len = ffi::inline::lean_string_size(obj.as_ptr()) - 1;
+            let bytes = std::slice::from_raw_parts(ptr as *const u8, len);
+            std::str::from_utf8(bytes)
                 .map_err(|e| LeanError::conversion(&format!("Invalid UTF-8: {}", e)))
         }
+    }
+
+    /// Get the string as a C-style string pointer (null-terminated).
+    ///
+    /// # Lean4 Reference
+    /// Corresponds to `String.data` in Lean4 (conceptually).
+    /// Uses C API `lean_string_cstr`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use leo3::prelude::*;
+    ///
+    /// fn main() -> LeanResult<()> {
+    ///     leo3::prepare_freethreaded_lean();
+    ///
+    ///     leo3::with_lean(|lean| {
+    ///         let s = LeanString::mk(lean, "Hello")?;
+    ///         assert_eq!(LeanString::cstr(&s)?, "Hello");
+    ///         Ok(())
+    ///     })
+    /// }
+    /// ```
+    pub fn cstr<'l>(obj: &LeanBound<'l, Self>) -> LeanResult<&'l str> {
+        Self::as_str(obj)
     }
 
     /// Get the length of the string (number of characters).

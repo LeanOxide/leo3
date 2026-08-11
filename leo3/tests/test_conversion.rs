@@ -422,13 +422,18 @@ fn test_array_unbind_bind() {
 // =============================================================================
 
 #[test]
-fn test_string_with_null_byte_fails() {
+fn test_string_with_null_byte_roundtrips() {
     leo3::prepare_freethreaded_lean();
 
     let result: LeanResult<()> = leo3::with_lean(|lean| {
-        // Strings with null bytes should fail to create
-        let result = LeanString::mk(lean, "Hello\0World");
-        assert!(result.is_err());
+        // Lean strings are byte arrays: embedded null bytes are preserved
+        // through mk -> cstr and through the IntoLean/FromLean round-trip.
+        let s = LeanString::mk(lean, "Hello\0World")?;
+        assert_eq!(LeanString::cstr(&s)?, "Hello\0World");
+
+        let roundtrip: String = String::from_lean(&s)?;
+        assert_eq!(roundtrip, "Hello\0World");
+        assert_eq!(roundtrip.len(), 11);
 
         Ok(())
     });

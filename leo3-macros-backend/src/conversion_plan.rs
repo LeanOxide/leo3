@@ -505,7 +505,7 @@ fn render_option_borrowed_storage_binding(
             let bound: #leo3_crate::LeanBound<'_, #source_ty> =
                 #leo3_crate::LeanBound::from_owned_ptr(lean, #arg_name);
             match #leo3_crate::types::LeanOption::get(&bound) {
-                None => Ok(None),
+                None => ::std::result::Result::<Option<#storage_ty>, #leo3_crate::LeanError>::Ok(None),
                 Some(any_value) => {
                     let typed_value: #leo3_crate::LeanBound<'_, #inner_source_ty> =
                         any_value.cast();

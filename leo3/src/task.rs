@@ -73,14 +73,21 @@ use std::time::{Duration, Instant};
 // Task Manager Functions
 // ============================================================================
 
+/// Serializes the lazy task-manager initialization so concurrent first
+/// spawns cannot race Lean's internal `g_task_manager` setup.
+static TASK_MANAGER_GUARD: Mutex<()> = Mutex::new(());
+static TASK_MANAGER_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 /// Initialize the Lean task manager with the default number of workers.
 ///
 /// This must be called before spawning any tasks. It is safe to call
 /// multiple times, but only the first call has any effect.
 pub fn init_task_manager() {
+    let _guard = TASK_MANAGER_GUARD.lock().unwrap();
     unsafe {
         ffi::closure::lean_init_task_manager();
     }
+    TASK_MANAGER_INITIALIZED.store(true, Ordering::Release);
 }
 
 /// Initialize the Lean task manager with a specific number of workers.
@@ -89,8 +96,26 @@ pub fn init_task_manager() {
 ///
 /// * `num_workers` - The number of worker threads to use.
 pub fn init_task_manager_with(num_workers: u32) {
+    let _guard = TASK_MANAGER_GUARD.lock().unwrap();
     unsafe {
         ffi::closure::lean_init_task_manager_using(num_workers);
+    }
+    TASK_MANAGER_INITIALIZED.store(true, Ordering::Release);
+}
+
+/// Ensure the task manager is initialized, exactly once, under the
+/// initialization lock. `LeanTask::spawn` calls this automatically so
+/// users do not need a manual `init_task_manager()` (which remains a
+/// supported explicit form).
+pub fn ensure_task_manager_initialized() {
+    if !TASK_MANAGER_INITIALIZED.load(Ordering::Acquire) {
+        let _guard = TASK_MANAGER_GUARD.lock().unwrap();
+        if !TASK_MANAGER_INITIALIZED.load(Ordering::Acquire) {
+            unsafe {
+                ffi::closure::lean_init_task_manager();
+            }
+            TASK_MANAGER_INITIALIZED.store(true, Ordering::Release);
+        }
     }
 }
 
@@ -101,6 +126,7 @@ pub fn finalize_task_manager() {
     unsafe {
         ffi::closure::lean_finalize_task_manager();
     }
+    TASK_MANAGER_INITIALIZED.store(false, Ordering::Release);
 }
 
 /// Check if task cancellation has been requested.
@@ -312,6 +338,9 @@ impl<'l, T> LeanTask<'l, T> {
     /// Use `TaskPriority::DEDICATED` for a dedicated thread.
     pub fn spawn_with_priority(closure: LeanClosure<'l>, priority: TaskPriority) -> Self {
         let lean = closure.lean_token();
+        // Lean's task manager is created lazily; initialize it exactly once
+        // under a lock so concurrent first spawns cannot race the setup.
+        ensure_task_manager_initialized();
         unsafe {
             let ptr = ffi::inline::lean_task_spawn(closure.into_ptr(), priority.as_lean_obj());
             LeanBound::from_owned_ptr(lean, ptr)
@@ -497,6 +526,12 @@ impl<'l, T> LeanTask<'l, T> {
     /// and wakes the executor once the task completes.
     pub fn into_future(self) -> LeanTaskFuture<'l, T> {
         let task_ptr = self.as_ptr();
+        // The background watcher thread polls the raw task pointer; give it
+        // its own reference so the task object survives even if this future
+        // is dropped while the watcher is still polling.
+        unsafe {
+            ffi::lean_inc(task_ptr);
+        }
         LeanTaskFuture {
             task: Some(self),
             waker_state: Arc::new(WakerState {
@@ -618,7 +653,12 @@ impl<'l, T> Future for LeanTaskFuture<'l, T> {
                 .name("lean-task-waker".into())
                 .spawn(move || {
                     wait_for_task_completion(state.task_ptr);
-
+                    // Release the watcher's own reference (taken in
+                    // `into_future`); the future's own reference is managed
+                    // by the `LeanTask` it owns.
+                    unsafe {
+                        ffi::lean_dec(state.task_ptr);
+                    }
                     if let Some(waker) = state.waker.lock().unwrap().take() {
                         waker.wake();
                     }

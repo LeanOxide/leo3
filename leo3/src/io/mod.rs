@@ -223,7 +223,9 @@ impl<'l, T: 'l> LeanIO<'l, T> {
             let io_fn = self.inner.into_ptr();
 
             // Apply the IO function to the world token
-            // IO functions have type: RealWorld → Except IO.Error (T × RealWorld)
+            // IO functions have type: RealWorld → EStateM.Result IO.Error T
+            // whose ok constructor is `ctor(0, 2, 0)` with fields
+            // `(value, world)` — see `lean_io_result_mk_ok` in Lean's runtime.
             let result = ffi::closure::lean_apply_1(io_fn, world);
 
             // Check if result is an error
@@ -234,15 +236,9 @@ impl<'l, T: 'l> LeanIO<'l, T> {
                 return Err(error.into());
             }
 
-            // Extract the successful value
-            // The result is (T × RealWorld), we need the first component
-            let ok_ptr = io_result_get_value(result);
-            let bound: LeanBound<LeanAny> = LeanBound::from_owned_ptr(lean, ok_ptr);
-
-            // The value is a pair (T, RealWorld)
-            // Constructor tag 0 (Prod.mk) with 2 fields
-            let value_ptr = ffi::object::lean_ctor_get(bound.as_ptr(), 0);
-            let value_bound: LeanBound<LeanAny> = LeanBound::from_borrowed_ptr(lean, value_ptr);
+            // Extract the successful value: field 0 of the ok constructor.
+            let value_ptr = ffi::object::lean_ctor_get(result, 0) as *mut ffi::lean_object;
+            let value_bound: LeanBound<LeanAny> = LeanBound::from_owned_ptr(lean, value_ptr);
 
             // Convert to Rust type
             let typed: LeanBound<T::Source> = value_bound.cast();
@@ -288,9 +284,31 @@ unsafe fn io_result_get_error(res: *mut ffi::lean_object) -> *mut ffi::lean_obje
     ffi::object::lean_ctor_get(res, 0) as *mut ffi::lean_object
 }
 
-#[inline]
-unsafe fn io_result_get_value(res: *mut ffi::lean_object) -> *mut ffi::lean_object {
-    ffi::object::lean_ctor_get(res, 0) as *mut ffi::lean_object
+/// Build the ok result of an IO action: `ctor(0, 2, 0)` with fields
+/// `(value, world)` — the exact shape of `lean_io_result_mk_ok` in Lean's
+/// runtime.
+///
+/// Used by `create_io_pure` and by the pure-Rust IO implementations in
+/// `io::time` / `io::process` (which compute their values at run time instead
+/// of capturing them).
+/// Box a `u64` in the heap representation `LeanUInt64` uses (ctor tag 0,
+/// no object fields, value in scalar slot 0) — the same shape Lean's IO
+/// primitives return for `UInt64` results and the shape `FromLean for u64`
+/// (`lean_ctor_get_uint64`) expects.
+pub(crate) unsafe fn box_u64(value: u64) -> *mut ffi::lean_object {
+    let obj = ffi::lean_alloc_ctor(0, 0, 1);
+    ffi::object::lean_ctor_set_uint64(obj, 0, value);
+    obj
+}
+
+pub(crate) unsafe fn io_ok_value_world(
+    value: *mut ffi::lean_object,
+    world: ffi::object::lean_obj_arg,
+) -> ffi::object::lean_obj_res {
+    let r = ffi::lean_alloc_ctor(0, 2, 0);
+    ffi::object::lean_ctor_set(r, 0, value);
+    ffi::object::lean_ctor_set(r, 1, world);
+    r
 }
 
 // ============================================================================
@@ -318,12 +336,7 @@ extern "C" fn io_pure_impl(
     value: ffi::object::lean_obj_arg,
     world: ffi::object::lean_obj_arg,
 ) -> ffi::object::lean_obj_res {
-    unsafe {
-        // Create pair (value, world) and wrap in EStateM.Result.ok (tag 0)
-        let pair = ffi::lean_prod_mk(value, world);
-        // EStateM tag 0 = ok, same layout as Except.error
-        ffi::lean_except_error(pair)
-    }
+    unsafe { io_ok_value_world(value, world) }
 }
 
 /// Create an IO computation that sequences two IO computations.
@@ -331,7 +344,7 @@ unsafe fn create_io_seq(
     io1: *mut ffi::lean_object,
     io2: *mut ffi::lean_object,
 ) -> *mut ffi::lean_object {
-    let closure = ffi::inline::lean_alloc_closure(io_seq_impl as *mut std::ffi::c_void, 2, 2);
+    let closure = ffi::inline::lean_alloc_closure(io_seq_impl as *mut std::ffi::c_void, 3, 2);
     ffi::inline::lean_closure_set(closure, 0, io1);
     ffi::inline::lean_closure_set(closure, 1, io2);
     closure
@@ -352,12 +365,11 @@ extern "C" fn io_seq_impl(
             return result1;
         }
 
-        // Extract the new world token
-        let ok_ptr = io_result_get_value(result1);
-        let world_ptr = ffi::object::lean_ctor_get(ok_ptr, 1);
+        // Extract the new world token (field 1 of the ok constructor).
+        let world_ptr = ffi::object::lean_ctor_get(result1, 1) as *mut ffi::lean_object;
 
         // Execute second IO with the new world token
-        ffi::closure::lean_apply_1(io2, world_ptr as *mut ffi::lean_object)
+        ffi::closure::lean_apply_1(io2, world_ptr)
     }
 }
 

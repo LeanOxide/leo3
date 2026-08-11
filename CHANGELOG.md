@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-
+### Added
 - `examples/class-integration/`: end-to-end Lean↔Rust template for the macro
   pipeline — a `cdylib` built with `#[leanclass]` (methods, `#[getter]` /
   `#[setter]`) plus `#[leanfn]` / `#[leanmodule]`, a reproducible
@@ -23,6 +23,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Linux), cross-platform metadata extraction (ELF symbols / Mach-O section /
   PE exports), and the current scalar-ABI and class-elaboration limitations
   tracked in #159
+- **User-defined container keys** (PyO3-aligned "any hashable key"): the
+  combined `#[lean_instance(Hashable, BEq)]` /
+  `#[lean_instance(Hashable, BEq, Ord)]` forms generate
+  `ExternalHashKey` / `ExternalOrdKey` bridge implementations, so external
+  classes can be used as `LeanHashMap` / `LeanHashSet` / `LeanRBMap` keys
+  with real runtime semantics (the Lean `Hashable` / `Ord` instance objects
+  are built by hand and match Lean's own instance layout, verified against
+  the runtime's `l_instHashableNat` representation)
+- `#[leanclass]` **field accessors**: `#[get]` / `#[set]` on named struct
+  fields generate `fn field(&self) -> T` (clone-based) and
+  `fn set_field(&mut self, value: T)` (copy-on-write) methods with FFI
+  wrappers, Lean declarations, and metadata; `leo3-codegen` merges the
+  field-accessor metadata with the impl-block metadata into one file per
+  class
+- `#[leanclass]` **naming**: `#[name = "..."]` on methods,
+  `#[getter(name = "...")]` / `#[setter(name = "...")]` on accessors, and
+  `#[leanclass(name = "...")]` on the struct and impl block override the
+  Lean-visible names while FFI symbols stay Rust-identifier-derived
+- **std collection conversions** (PyO3-aligned): `HashMap<K, V>`,
+  `HashSet<K>`, and `BTreeMap<K, V>` round-trip through the real
+  `LeanHashMap` / `LeanHashSet` / `LeanRBMap` for the supported key matrix
+  (`String`, `u8`–`u64`, `i8`–`i64`)
+- `Cell<T: Copy>` conversions (convert as `T`, both directions) and
+  `Cow<'_, str>` / `Cow<'_, [u8]>` conversions, matching the plain
+  `String` / byte-array paths
+- Tuples now convert up to arity **12** (PyO3's limit; previously 6)
+- `leo3::prelude` now also re-exports `lean_instance`
+- `LeanByteArray` gained an identity `FromLean` implementation, and
+  `LeanString::as_str` provides a length-aware zero-copy view
+
+### Changed
+- **`io` module rewritten against the modern Lean handle ABI** (verified
+  against Lean 4.25.2's runtime and `IO.lean`):
+  - `handle::open` no longer takes a `binary` parameter (modern Lean's
+    `Handle.mk` has none; the C ABI is `(path, mode: uint8, world)`), and
+    `FileMode` now mirrors `IO.FS.Mode` exactly: `Read`, `Write`,
+    `WriteNew`, `ReadWrite`, `Append` (runtime tags 0–4)
+  - `handle::write` sends a `ByteArray` (modern `Handle.write`'s argument)
+    instead of a `String`; `handle::read` returns
+    `LeanIO<LeanBound<LeanByteArray>>` (convert with `to_vec()` /
+    `vec_u8_from_lean`)
+  - IO closures are built with correct arity/fixed-slot counts and hold
+    owned references in their fixed slots (closure deallocation releases
+    them); scalar parameters (`mode`, read size) go through small wrappers
+  - `LeanIO::run` and the `pure` / `then` combinators build and consume the
+    real `EStateM.Result` layout (`ctor(0, 2, 0)` = `(value, world)`), the
+    shape `lean_io_result_mk_ok` produces — previously the hand-built
+    closures used a pair-wrapped layout that real Lean primitives do not
+  - `IOError::from_lean_io_error` maps the 4.25+ `IO.Error` constructor
+    table (19 constructors); the message comes from the last object field
+  - `io::time` (`mono_nanos`, `unix_time_millis`) and `io::process`
+    (`get_exit_code`, `set_exit_code`) are implemented in pure Rust — the
+    historical `lean_io_prim_mono_nanos` / `lean_io_prim_get_unix_time_millis`
+    / `lean_io_prim_get_exit_code` / `lean_io_prim_set_exit_code` symbols are
+    not exported by Lean 4.25.2; `process::exit` now binds Lean's exported
+    `lean_io_exit`
+  - `io::console` is implemented over Lean's real `IO.FS.Stream` objects
+    (applying the stream structure's `putStr` / `getLine` closures), and the
+    `handle::stdin` / `handle::stdout` / `handle::stderr` functions were
+    removed — they returned stream objects masquerading as file handles,
+    which corrupted the `FILE*` read when passed to the handle primitives
+- **`LeanString::mk` is a single length-aware copy** via
+  `lean_mk_string_from_bytes` — no intermediate `CString` allocation — and
+  embedded NUL bytes now round-trip (Lean strings are byte arrays);
+  `cstr()` is length-aware (no C-string truncation)
+- `leo3-codegen` merges multiple class-metadata entries by class name
+  (impl block + field accessors) into a single `.lean` file per class
+
+### Fixed
+- **Task manager initialization race**: `LeanTask::spawn` now initializes
+  Lean's task manager exactly once under a lock (previously the manager was
+  created lazily by Lean's runtime, and concurrent first spawns could queue
+  tasks behind an unstarted worker pool, hanging every task wait).
+  `finalize_task_manager` resets the initialization state so a
+  finalize/re-init cycle works
+- `LeanTaskFuture` watcher threads hold their own reference to the task
+  object, fixing a use-after-free when a future is dropped while its
+  background watcher thread is still polling the raw task pointer
+- `#[leanfn]` codegen produced unannotated `Ok(...)` expressions when decoding
+  `&[u8]` and `Vec<u8>` parameters (and `Option` / `Result` wrappers around
+  them), which failed type inference (E0282) at the use site; the generated
+  decodes now carry explicit error types
+- `io` handle operations (`open` / `read` / `write` / `get_line` / `flush` /
+  `is_eof`) previously panicked or produced garbage against every modern
+  Lean release: IO closures were allocated with `num_fixed == arity`,
+  `Handle.mk` was called with a stale 4-argument ABI (a `binary` parameter
+  that does not exist), writes sent `String` where the runtime expects
+  `ByteArray`, and the IO result layout was misread (see the `io` rewrite
+  above). All handle paths now work end to end against Lean 4.25.2 with
+  runtime tests
+- `handle::is_eof` no longer references the Lean-level `IO.FS.Handle.isEof`
+  API (absent in 4.25.2); it binds the exported
+  `lean_io_prim_handle_is_eof` primitive directly
 
 ### Changed
 

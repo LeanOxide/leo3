@@ -1,0 +1,5 @@
+error: #[get] / #[set] field accessors require named struct fields
+ --> tests/ui/leanclass_field_accessor_tuple_struct.rs:3:17
+  |
+3 | struct BadTuple(#[get] i32);
+  |                 ^^^^^^^^^^

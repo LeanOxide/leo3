@@ -28,6 +28,30 @@ pub trait LeanRBMapKey {
     unsafe fn compare_closure() -> *mut ffi::lean_object;
 }
 
+/// Bridge trait for user-defined (external-class) `LeanRBMap` keys.
+///
+/// Implement this for a local type to make it usable as a `LeanRBMap` key.
+/// The canonical way is `#[lean_instance(Hashable, BEq, Ord)]` on the class
+/// impl block, which generates the compare FFI function and this
+/// implementation automatically. The blanket impl below then wires the
+/// generated function into Lean's runtime `Ord` instance object.
+pub trait ExternalOrdKey {
+    /// `Ord`-shaped compare function: `fn(*mut lean_object, *mut lean_object) -> *mut lean_object`
+    /// returning the boxed `Ordering` (0 = lt, 1 = eq, 2 = gt).
+    fn compare_fn() -> *mut std::ffi::c_void;
+}
+
+impl<K> LeanRBMapKey for crate::external::LeanExternalType<K>
+where
+    K: crate::external::ExternalClass + ExternalOrdKey,
+{
+    unsafe fn compare_closure() -> *mut ffi::lean_object {
+        // Lean erases the one-field `Ord` structure: the instance object IS
+        // the compare closure (`compare : α -> α -> Ordering`).
+        ffi::inline::lean_alloc_closure(K::compare_fn(), 2, 0)
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
 unsafe extern "C" {
     static mut l_instOrdNat: *mut ffi::lean_object;

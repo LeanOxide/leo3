@@ -1,5 +1,6 @@
 //! Lean byte array type wrapper.
 
+use crate::conversion::FromLean;
 use crate::err::LeanResult;
 use crate::ffi;
 use crate::instance::LeanBound;
@@ -17,6 +18,14 @@ use crate::marker::Lean;
 /// (LEAN_SCALAR_ARRAY) containing bytes.
 pub struct LeanByteArray {
     _private: (),
+}
+
+impl<'l> FromLean<'l> for LeanBound<'l, LeanByteArray> {
+    type Source = LeanByteArray;
+
+    fn from_lean(obj: &LeanBound<'l, Self::Source>) -> LeanResult<Self> {
+        Ok(obj.clone())
+    }
 }
 
 impl LeanByteArray {

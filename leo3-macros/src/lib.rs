@@ -376,17 +376,16 @@ pub fn leanmodule(attr: TokenStream, input: TokenStream) -> TokenStream {
 ///     #[leanclass]
 ///     struct Point { x: i32, y: i32 }
 ///
-///     #[lean_instance(BEq)]
-///     impl Point {
-///         fn beq(&self, other: &Self) -> bool {
-///             self.x == other.x && self.y == other.y
-///         }
-///     }
-///
-///     #[lean_instance(Hashable)]
+///     // Combined form: generates the BEq + Hashable FFI functions and
+///     // derives `LeanHashKey`, so `Point` can be used as a
+///     // `LeanHashMap` / `LeanHashSet` key.
+///     #[lean_instance(Hashable, BEq)]
 ///     impl Point {
 ///         fn hash(&self) -> u64 {
 ///             (self.x as u64) ^ (self.y as u64).wrapping_shl(32)
+///         }
+///         fn beq(&self, other: &Self) -> bool {
+///             self.x == other.x && self.y == other.y
 ///         }
 ///     }
 /// }

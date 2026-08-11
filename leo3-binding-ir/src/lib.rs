@@ -8,9 +8,10 @@ mod quoting;
 mod serialize;
 
 pub use analysis::{
-    analyze_concrete_instance, analyze_lean_class_impl, analyze_lean_class_struct,
-    analyze_lean_function, class_opaque_decl, collect_module_exports, collect_submodule_exports,
-    filter_exports, is_leanfn_attr, substitute_type, ConcreteAttr,
+    analyze_concrete_instance, analyze_lean_class_field_accessors, analyze_lean_class_impl,
+    analyze_lean_class_struct, analyze_lean_function, class_opaque_decl, collect_module_exports,
+    collect_submodule_exports, field_accessor_bindings, filter_exports, is_leanfn_attr,
+    substitute_type, ConcreteAttr, FieldAccessor,
 };
 pub use embed::{
     frame_metadata_entry, parse_metadata_entries, METADATA_ENTRY_MAGIC, METADATA_SECTION_MARKER,

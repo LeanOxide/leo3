@@ -362,11 +362,15 @@ fn generate_from_lean_expr(
     }
 
     if is_borrowed_u8_slice(ty) {
-        return quote! { Ok(unsafe { #leo3_crate::types::LeanByteArray::as_slice(&#obj_expr) }) };
+        return quote! {
+            Ok::<_, #leo3_crate::err::LeanError>(unsafe { #leo3_crate::types::LeanByteArray::as_slice(&#obj_expr) })
+        };
     }
 
     if is_vec_u8(ty) {
-        return quote! { Ok(#leo3_crate::conversion::vec_u8_from_lean(&#obj_expr)) };
+        return quote! {
+            Ok::<_, #leo3_crate::err::LeanError>(#leo3_crate::conversion::vec_u8_from_lean(&#obj_expr))
+        };
     }
 
     if let Some(inner) = option_inner(ty) {
@@ -378,11 +382,11 @@ fn generate_from_lean_expr(
             generate_from_lean_expr(inner, quote! { #typed_ident }, leo3_crate, counter);
         return quote! {
             match #leo3_crate::types::LeanOption::get(&#obj_expr) {
-                None => Ok(None),
+                None => Ok::<_, #leo3_crate::err::LeanError>(None),
                 Some(#any_ident) => {
                     let #typed_ident: #leo3_crate::LeanBound<'_, #inner_source> = #any_ident.cast();
                     let #value_ident = #inner_expr?;
-                    Ok(Some(#value_ident))
+                    Ok::<_, #leo3_crate::err::LeanError>(Some(#value_ident))
                 }
             }
         };

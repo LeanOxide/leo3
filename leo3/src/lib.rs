@@ -163,7 +163,7 @@ pub mod prelude {
     pub use crate::types::{LeanHashMap, LeanHashSet, LeanRBMap};
 
     #[cfg(feature = "macros")]
-    pub use leo3_macros::{leanclass, leanfn, leanmodule, FromLean, IntoLean};
+    pub use leo3_macros::{lean_instance, leanclass, leanfn, leanmodule, FromLean, IntoLean};
 
     // Re-export task combinators
     #[cfg(feature = "task")]

@@ -1,11 +1,52 @@
 //! Console I/O operations for Lean4.
 //!
-//! This module provides safe wrappers for console I/O,
-//! implemented using file handle operations on stdout/stdin.
+//! Implemented over Lean's `IO.FS.Stream` objects (the std streams): a
+//! `Stream` is a structure whose fields are the stream operations
+//! (`flush`, `read`, `write`, `getLine`, `putStr`, `isTty`), so console
+//! helpers apply the matching field closure to the captured argument.
 
+use crate::conversion::IntoLean;
 use crate::err::LeanResult;
-use crate::io::{handle, LeanIO};
+use crate::ffi;
+use crate::instance::{LeanAny, LeanBound};
+use crate::io::LeanIO;
 use crate::marker::Lean;
+
+/// Fetch the current stdout stream object (a borrowed process-global).
+unsafe fn stdout_stream<'l>(lean: Lean<'l>) -> LeanBound<'l, LeanAny> {
+    let world = ffi::io::lean_io_mk_world();
+    let result = ffi::io::lean_get_stdout(world);
+    let stream = ffi::object::lean_ctor_get(result, 0) as *mut ffi::lean_object;
+    LeanBound::from_borrowed_ptr(lean, stream)
+}
+
+/// Fetch the current stdin stream object (a borrowed process-global).
+unsafe fn stdin_stream<'l>(lean: Lean<'l>) -> LeanBound<'l, LeanAny> {
+    let world = ffi::io::lean_io_mk_world();
+    let result = ffi::io::lean_get_stdin(world);
+    let stream = ffi::object::lean_ctor_get(result, 0) as *mut ffi::lean_object;
+    LeanBound::from_borrowed_ptr(lean, stream)
+}
+
+/// Apply `putStr : String -> IO Unit` from the stdout stream.
+///
+/// The stream's `putStr` field is a closure; the IO wrapper calls it with
+/// the captured string and the world token.
+extern "C" fn io_stream_put_str_impl(
+    put_str_fn: ffi::object::lean_obj_arg,
+    content: ffi::object::lean_obj_arg,
+    world: ffi::object::lean_obj_arg,
+) -> ffi::object::lean_obj_res {
+    unsafe { ffi::closure::lean_apply_2(put_str_fn, content, world) }
+}
+
+/// Apply `getLine : IO String` from the stdin stream.
+extern "C" fn io_stream_get_line_impl(
+    get_line_fn: ffi::object::lean_obj_arg,
+    world: ffi::object::lean_obj_arg,
+) -> ffi::object::lean_obj_res {
+    unsafe { ffi::closure::lean_apply_1(get_line_fn, world) }
+}
 
 /// Print a string to stdout without a newline.
 ///
@@ -24,8 +65,21 @@ use crate::marker::Lean;
 /// })
 /// ```
 pub fn put_str<'l>(lean: Lean<'l>, s: &str) -> LeanResult<LeanIO<'l, ()>> {
-    let stdout = handle::stdout(lean);
-    handle::write(lean, &stdout, s)
+    unsafe {
+        let stream = stdout_stream(lean);
+        // `IO.FS.Stream.putStr` is field 4 of the stream structure.
+        let put_str_fn = ffi::object::lean_ctor_get(stream.as_ptr(), 4) as *mut ffi::lean_object;
+        let lean_s = s.into_lean(lean)?;
+
+        // The closure slots own their own references.
+        ffi::lean_inc(put_str_fn);
+        let closure =
+            ffi::inline::lean_alloc_closure(io_stream_put_str_impl as *mut std::ffi::c_void, 3, 2);
+        ffi::inline::lean_closure_set(closure, 0, put_str_fn);
+        ffi::inline::lean_closure_set(closure, 1, lean_s.into_ptr());
+
+        Ok(LeanIO::from_raw(LeanBound::from_owned_ptr(lean, closure)))
+    }
 }
 
 /// Print a string to stdout with a newline.
@@ -45,9 +99,8 @@ pub fn put_str<'l>(lean: Lean<'l>, s: &str) -> LeanResult<LeanIO<'l, ()>> {
 /// })
 /// ```
 pub fn put_str_ln<'l>(lean: Lean<'l>, s: &str) -> LeanResult<LeanIO<'l, ()>> {
-    let stdout = handle::stdout(lean);
     let s_with_newline = format!("{}\n", s);
-    handle::write(lean, &stdout, &s_with_newline)
+    put_str(lean, &s_with_newline)
 }
 
 /// Read a line from stdin.
@@ -69,8 +122,18 @@ pub fn put_str_ln<'l>(lean: Lean<'l>, s: &str) -> LeanResult<LeanIO<'l, ()>> {
 /// })
 /// ```
 pub fn get_line<'l>(lean: Lean<'l>) -> LeanResult<LeanIO<'l, String>> {
-    let stdin = handle::stdin(lean);
-    handle::get_line(lean, &stdin)
+    unsafe {
+        let stream = stdin_stream(lean);
+        // `IO.FS.Stream.getLine` is field 3 of the stream structure.
+        let get_line_fn = ffi::object::lean_ctor_get(stream.as_ptr(), 3) as *mut ffi::lean_object;
+
+        ffi::lean_inc(get_line_fn);
+        let closure =
+            ffi::inline::lean_alloc_closure(io_stream_get_line_impl as *mut std::ffi::c_void, 2, 1);
+        ffi::inline::lean_closure_set(closure, 0, get_line_fn);
+
+        Ok(LeanIO::from_raw(LeanBound::from_owned_ptr(lean, closure)))
+    }
 }
 
 #[cfg(test)]

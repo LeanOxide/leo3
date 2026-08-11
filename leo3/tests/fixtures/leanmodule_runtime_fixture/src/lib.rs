@@ -19,6 +19,8 @@ mod fixture_module {
 #[derive(Clone)]
 #[leanclass]
 pub struct FixtureCounter {
+    #[get]
+    #[set]
     value: i32,
 }
 

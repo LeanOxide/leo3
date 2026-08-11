@@ -435,7 +435,10 @@ pub fn class_opaque_decl(lean_name: &str) -> String {
     )
 }
 
-pub fn analyze_lean_class_struct(item: &syn::ItemStruct) -> syn::Result<ClassTypeBinding> {
+pub fn analyze_lean_class_struct(
+    item: &syn::ItemStruct,
+    lean_name_override: Option<&str>,
+) -> syn::Result<ClassTypeBinding> {
     if !item.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &item.generics,
@@ -444,15 +447,146 @@ pub fn analyze_lean_class_struct(item: &syn::ItemStruct) -> syn::Result<ClassTyp
     }
 
     let rust_name = item.ident.to_string();
+    let lean_name = lean_name_override.unwrap_or(&rust_name).to_string();
     Ok(ClassTypeBinding {
-        rust_name: rust_name.clone(),
-        lean_name: rust_name.clone(),
-        opaque_decl: class_opaque_decl(&rust_name),
+        rust_name,
+        lean_name: lean_name.clone(),
+        opaque_decl: class_opaque_decl(&lean_name),
     })
 }
 
-pub fn analyze_lean_class_impl(item: &syn::ItemImpl) -> syn::Result<ClassImplBinding> {
+/// A `#[get]` / `#[set]` field accessor declared on a `#[leanclass]` struct.
+#[derive(Clone, Debug)]
+pub struct FieldAccessor {
+    pub rust_name: String,
+    pub getter: bool,
+    pub setter: bool,
+    pub ty: TypeBinding,
+}
+
+/// Analyze `#[get]` / `#[set]` attributes on a `#[leanclass]` struct's named
+/// fields. Field types must be representable in the generated Lean
+/// declaration grammar (see `analyze_leanclass_type`).
+pub fn analyze_lean_class_field_accessors(
+    item: &syn::ItemStruct,
+) -> syn::Result<Vec<FieldAccessor>> {
+    let class_name = item.ident.to_string();
+    let fields = match &item.fields {
+        syn::Fields::Named(named) => &named.named,
+        syn::Fields::Unit => return Ok(Vec::new()),
+        syn::Fields::Unnamed(unnamed) => {
+            for field in &unnamed.unnamed {
+                if field
+                    .attrs
+                    .iter()
+                    .any(|a| a.path().is_ident("get") || a.path().is_ident("set"))
+                {
+                    return Err(syn::Error::new_spanned(
+                        field,
+                        "#[get] / #[set] field accessors require named struct fields",
+                    ));
+                }
+            }
+            return Ok(Vec::new());
+        }
+    };
+
+    let mut accessors = Vec::new();
+    for field in fields {
+        let getter = field.attrs.iter().any(|a| a.path().is_ident("get"));
+        let setter = field.attrs.iter().any(|a| a.path().is_ident("set"));
+        if !getter && !setter {
+            continue;
+        }
+        let rust_name = field
+            .ident
+            .as_ref()
+            .ok_or_else(|| syn::Error::new_spanned(field, "#[get] / #[set] require a named field"))?
+            .to_string();
+        let ty = analyze_leanclass_type(&field.ty, &class_name)?;
+        accessors.push(FieldAccessor {
+            rust_name,
+            getter,
+            setter,
+            ty,
+        });
+    }
+    Ok(accessors)
+}
+
+/// Build `FunctionBinding`s for `#[get]` / `#[set]` field accessors, matching
+/// the declaration and metadata shapes the impl-block analyzer produces:
+///
+/// - getter: `fn field(&self) -> T` — `Class -> T`, kind `Getter`
+/// - setter: `fn set_field(&mut self, value: T)` — `Class -> T -> Class`,
+///   kind `Setter` (copy-on-write, like `&mut self -> ()` methods)
+pub fn field_accessor_bindings(
+    class_name: &str,
+    accessors: &[FieldAccessor],
+) -> Vec<FunctionBinding> {
+    let mut bindings = Vec::new();
+    for acc in accessors {
+        if acc.getter {
+            let ffi_symbol = format!("__lean_ffi_{}_{}", class_name, acc.rust_name);
+            let lean_name = format!("{}.{}", class_name, acc.rust_name);
+            let lean_ty = acc.ty.lean.clone().unwrap_or_else(|| acc.ty.rust.clone());
+            let lean_decl = format!(
+                "@[extern \"{}\"] opaque {} : {} → {}",
+                ffi_symbol, lean_name, class_name, lean_ty
+            );
+            bindings.push(FunctionBinding {
+                rust_name: acc.rust_name.clone(),
+                lean_name,
+                owner: Some(class_name.to_string()),
+                ffi_symbol,
+                receiver: ReceiverStyle::Ref,
+                params: Vec::new(),
+                return_type: acc.ty.clone(),
+                semantics: BindingSemantics::Value,
+                kind: BindingKind::Getter,
+                lean_decl: Some(lean_decl),
+            });
+        }
+        if acc.setter {
+            let setter_name = format!("set_{}", acc.rust_name);
+            let ffi_symbol = format!("__lean_ffi_{}_{}", class_name, setter_name);
+            let lean_name = format!("{}.{}", class_name, setter_name);
+            let lean_ty = acc.ty.lean.clone().unwrap_or_else(|| acc.ty.rust.clone());
+            let lean_decl = format!(
+                "@[extern \"{}\"] opaque {} : {} → {} → {}",
+                ffi_symbol, lean_name, class_name, lean_ty, class_name
+            );
+            bindings.push(FunctionBinding {
+                rust_name: setter_name,
+                lean_name,
+                owner: Some(class_name.to_string()),
+                ffi_symbol,
+                receiver: ReceiverStyle::MutRef,
+                params: vec![ParameterBinding {
+                    name: "value".to_string(),
+                    ty: acc.ty.clone(),
+                    passing: PassingStyle::Owned,
+                }],
+                return_type: TypeBinding {
+                    rust: class_name.to_string(),
+                    lean: Some(class_name.to_string()),
+                    shape: TypeShape::Named,
+                },
+                semantics: BindingSemantics::MutatesSelf,
+                kind: BindingKind::Setter,
+                lean_decl: Some(lean_decl),
+            });
+        }
+    }
+    bindings
+}
+
+pub fn analyze_lean_class_impl(
+    item: &syn::ItemImpl,
+    lean_class_name: Option<&str>,
+) -> syn::Result<ClassImplBinding> {
     let class_name = class_name_from_self_ty(&item.self_ty)?;
+    let lean_class_name = lean_class_name.unwrap_or(&class_name);
 
     if !item.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -464,7 +598,11 @@ pub fn analyze_lean_class_impl(item: &syn::ItemImpl) -> syn::Result<ClassImplBin
     let mut methods = Vec::new();
     for impl_item in &item.items {
         if let syn::ImplItem::Fn(method) = impl_item {
-            methods.push(analyze_lean_class_method(method, &class_name)?);
+            methods.push(analyze_lean_class_method(
+                method,
+                &class_name,
+                lean_class_name,
+            )?);
         }
     }
 
@@ -484,6 +622,7 @@ pub fn analyze_lean_class_impl(item: &syn::ItemImpl) -> syn::Result<ClassImplBin
 fn analyze_lean_class_method(
     method: &syn::ImplItemFn,
     class_name: &str,
+    lean_class_name: &str,
 ) -> syn::Result<FunctionBinding> {
     let method_name = method.sig.ident.to_string();
 
@@ -558,12 +697,17 @@ fn analyze_lean_class_method(
         _ => BindingSemantics::Value,
     };
 
-    let lean_name = format!("{}.{}", class_name, method_name);
+    // `#[name = "..."]` (or `#[getter(name = "...")]` / `#[setter(name = "...")]`)
+    // overrides the Lean-visible method name; the FFI symbol keeps the Rust
+    // identifier.
+    let lean_method_name =
+        attr_name_value(&method.attrs, "name").unwrap_or_else(|| method_name.clone());
+    let lean_name = format!("{}.{}", lean_class_name, lean_method_name);
     let ffi_symbol = format!("__lean_ffi_{}_{}", class_name, method_name);
     let mut type_parts = Vec::new();
     match receiver {
         ReceiverStyle::Ref | ReceiverStyle::MutRef | ReceiverStyle::Owned => {
-            type_parts.push(class_name.to_string())
+            type_parts.push(lean_class_name.to_string())
         }
         ReceiverStyle::None => {}
     }
@@ -605,6 +749,41 @@ fn analyze_lean_class_method(
 
 fn has_attr(method: &syn::ImplItemFn, name: &str) -> bool {
     method.attrs.iter().any(|attr| attr.path().is_ident(name))
+}
+
+/// Extract a `name = "..."` value from a helper attribute, either directly
+/// (`#[name = "foo"]`) or nested inside another helper
+/// (`#[getter(name = "foo")]`, `#[setter(name = "foo")]`).
+fn attr_name_value(attrs: &[syn::Attribute], attr_name: &str) -> Option<String> {
+    for attr in attrs {
+        if attr.path().is_ident(attr_name) {
+            if let syn::Meta::NameValue(nv) = &attr.meta {
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                }) = &nv.value
+                {
+                    return Some(s.value());
+                }
+            }
+        }
+        // Nested helper form: `#[getter(name = "foo")]` etc. The nested
+        // name-value may be carried by any helper attribute.
+        if let syn::Meta::List(meta_list) = &attr.meta {
+            if let Ok(name_value) = meta_list.parse_args::<syn::MetaNameValue>() {
+                if name_value.path.is_ident("name") {
+                    if let syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) = &name_value.value
+                    {
+                        return Some(s.value());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn detect_binding_kind(
@@ -1069,4 +1248,750 @@ fn path_is_simple_ident(type_path: &syn::TypePath, ident: &str) -> bool {
             .segments
             .first()
             .is_some_and(|segment| segment.ident == ident)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn method_at(item: &syn::ItemImpl, idx: usize) -> &syn::ImplItemFn {
+        match &item.items[idx] {
+            syn::ImplItem::Fn(method) => method,
+            _ => panic!("expected impl item {idx} to be a method"),
+        }
+    }
+
+    // ---- analyze_lean_class_struct / class_opaque_decl ----
+
+    #[test]
+    fn class_struct_defaults_to_rust_name() {
+        let item: syn::ItemStruct = syn::parse_quote! {
+            pub struct Foo {
+                pub x: u32,
+            }
+        };
+        let binding = analyze_lean_class_struct(&item, None).expect("struct analysis");
+        assert_eq!(binding.rust_name, "Foo");
+        assert_eq!(binding.lean_name, "Foo");
+        assert_eq!(
+            binding.opaque_decl,
+            "opaque Foo.ffi : NonemptyType\n\
+             def Foo : Type := Foo.ffi.val\n\
+             instance : Nonempty Foo := Foo.ffi.property"
+        );
+    }
+
+    #[test]
+    fn class_struct_respects_lean_name_override() {
+        let item: syn::ItemStruct = syn::parse_quote! {
+            pub struct Foo {
+                pub x: u32,
+            }
+        };
+        let binding = analyze_lean_class_struct(&item, Some("Renamed")).expect("struct analysis");
+        assert_eq!(binding.rust_name, "Foo");
+        assert_eq!(binding.lean_name, "Renamed");
+        assert!(binding
+            .opaque_decl
+            .starts_with("opaque Renamed.ffi : NonemptyType"));
+        assert!(binding
+            .opaque_decl
+            .contains("def Renamed : Type := Renamed.ffi.val"));
+        assert!(binding
+            .opaque_decl
+            .contains("instance : Nonempty Renamed := Renamed.ffi.property"));
+    }
+
+    #[test]
+    fn class_struct_rejects_generics() {
+        let item: syn::ItemStruct = syn::parse_quote! {
+            pub struct Foo<T> {
+                pub x: T,
+            }
+        };
+        let err = analyze_lean_class_struct(&item, None).expect_err("generic struct must fail");
+        assert!(err
+            .to_string()
+            .contains("#[leanclass] does not support generic types yet"));
+    }
+
+    #[test]
+    fn class_opaque_decl_emits_nonempty_type_triple() {
+        assert_eq!(
+            class_opaque_decl("Foo"),
+            "opaque Foo.ffi : NonemptyType\n\
+             def Foo : Type := Foo.ffi.val\n\
+             instance : Nonempty Foo := Foo.ffi.property"
+        );
+    }
+
+    // ---- analyze_lean_class_field_accessors ----
+
+    #[test]
+    fn field_accessors_get_set_both_and_none() {
+        let item: syn::ItemStruct = syn::parse_quote! {
+            struct Foo {
+                #[get]
+                x: u32,
+                #[set]
+                y: u32,
+                #[get]
+                #[set]
+                z: u32,
+                plain: u32,
+            }
+        };
+        let accessors = analyze_lean_class_field_accessors(&item).expect("accessors");
+        assert_eq!(accessors.len(), 3);
+        assert_eq!((accessors[0].getter, accessors[0].setter), (true, false));
+        assert_eq!((accessors[1].getter, accessors[1].setter), (false, true));
+        assert_eq!((accessors[2].getter, accessors[2].setter), (true, true));
+        assert_eq!(accessors[0].rust_name, "x");
+        assert_eq!(accessors[0].ty.lean.as_deref(), Some("UInt32"));
+
+        // No accessor attributes -> empty.
+        let item: syn::ItemStruct = syn::parse_quote! { struct Bar { a: u32 } };
+        assert!(analyze_lean_class_field_accessors(&item)
+            .expect("accessors")
+            .is_empty());
+
+        // Unit struct -> empty.
+        let item: syn::ItemStruct = syn::parse_quote! { struct Baz; };
+        assert!(analyze_lean_class_field_accessors(&item)
+            .expect("accessors")
+            .is_empty());
+    }
+
+    #[test]
+    fn field_accessors_reject_unsupported_types() {
+        let item: syn::ItemStruct = syn::parse_quote! {
+            struct Foo {
+                #[get]
+                x: &'static str,
+            }
+        };
+        let err = analyze_lean_class_field_accessors(&item).expect_err("reference field must fail");
+        assert!(err
+            .to_string()
+            .contains("reference types are not supported"));
+
+        let item: syn::ItemStruct = syn::parse_quote! {
+            struct Foo {
+                #[get]
+                x: std::collections::HashMap<u8, u8>,
+            }
+        };
+        let err = analyze_lean_class_field_accessors(&item).expect_err("generic field must fail");
+        assert!(err
+            .to_string()
+            .contains("generic type `HashMap` is not supported"));
+    }
+
+    #[test]
+    fn field_accessors_require_named_fields() {
+        let item: syn::ItemStruct = syn::parse_quote! { struct Foo(#[get] u32); };
+        let err =
+            analyze_lean_class_field_accessors(&item).expect_err("tuple field accessor must fail");
+        assert!(err
+            .to_string()
+            .contains("#[get] / #[set] field accessors require named struct fields"));
+    }
+
+    // ---- field_accessor_bindings ----
+
+    #[test]
+    fn field_accessor_bindings_build_decls() {
+        let item: syn::ItemStruct = syn::parse_quote! {
+            struct Foo {
+                #[get]
+                x: u32,
+                #[set]
+                y: u32,
+            }
+        };
+        let accessors = analyze_lean_class_field_accessors(&item).expect("accessors");
+        let bindings = field_accessor_bindings("Foo", &accessors);
+        assert_eq!(bindings.len(), 2);
+
+        let getter = &bindings[0];
+        assert_eq!(getter.rust_name, "x");
+        assert_eq!(getter.lean_name, "Foo.x");
+        assert_eq!(getter.owner.as_deref(), Some("Foo"));
+        assert_eq!(getter.ffi_symbol, "__lean_ffi_Foo_x");
+        assert_eq!(getter.receiver, ReceiverStyle::Ref);
+        assert_eq!(getter.kind, BindingKind::Getter);
+        assert_eq!(getter.semantics, BindingSemantics::Value);
+        assert!(getter.params.is_empty());
+        assert_eq!(
+            getter.lean_decl.as_deref(),
+            Some("@[extern \"__lean_ffi_Foo_x\"] opaque Foo.x : Foo → UInt32")
+        );
+
+        let setter = &bindings[1];
+        assert_eq!(setter.rust_name, "set_y");
+        assert_eq!(setter.lean_name, "Foo.set_y");
+        assert_eq!(setter.ffi_symbol, "__lean_ffi_Foo_set_y");
+        assert_eq!(setter.receiver, ReceiverStyle::MutRef);
+        assert_eq!(setter.kind, BindingKind::Setter);
+        assert_eq!(setter.semantics, BindingSemantics::MutatesSelf);
+        assert_eq!(setter.params.len(), 1);
+        assert_eq!(setter.params[0].name, "value");
+        assert_eq!(setter.params[0].passing, PassingStyle::Owned);
+        assert_eq!(setter.return_type.lean.as_deref(), Some("Foo"));
+        assert_eq!(
+            setter.lean_decl.as_deref(),
+            Some("@[extern \"__lean_ffi_Foo_set_y\"] opaque Foo.set_y : Foo → UInt32 → Foo")
+        );
+    }
+
+    // ---- analyze_lean_class_impl ----
+
+    #[test]
+    fn class_impl_analyzes_receivers() {
+        let item: syn::ItemImpl = syn::parse_quote! {
+            impl Foo {
+                fn stat(x: u32) -> u32 { x }
+                fn get(&self) -> u32 { self.x }
+                fn bump(&mut self, v: u32) { self.x = v; }
+                fn take(self) -> u32 { self.x }
+            }
+        };
+        let binding = analyze_lean_class_impl(&item, None).expect("impl analysis");
+        assert_eq!(binding.class_name, "Foo");
+        assert_eq!(binding.methods.len(), 4);
+        let receivers: Vec<ReceiverStyle> = binding.methods.iter().map(|m| m.receiver).collect();
+        assert_eq!(
+            receivers,
+            vec![
+                ReceiverStyle::None,
+                ReceiverStyle::Ref,
+                ReceiverStyle::MutRef,
+                ReceiverStyle::Owned
+            ]
+        );
+
+        let stat = &binding.methods[0];
+        assert_eq!(stat.lean_name, "Foo.stat");
+        assert_eq!(stat.owner.as_deref(), Some("Foo"));
+        assert_eq!(stat.ffi_symbol, "__lean_ffi_Foo_stat");
+        assert!(stat
+            .lean_decl
+            .as_deref()
+            .unwrap()
+            .contains("opaque Foo.stat : UInt32 → UInt32"));
+
+        let bump = &binding.methods[2];
+        assert_eq!(bump.semantics, BindingSemantics::MutatesSelf);
+        assert_eq!(bump.return_type.lean.as_deref(), Some("Foo"));
+        assert!(bump
+            .lean_decl
+            .as_deref()
+            .unwrap()
+            .contains("opaque Foo.bump : Foo → UInt32 → Foo"));
+
+        let take = &binding.methods[3];
+        assert_eq!(take.semantics, BindingSemantics::Value);
+        assert!(take
+            .lean_decl
+            .as_deref()
+            .unwrap()
+            .contains("opaque Foo.take : Foo → UInt32"));
+
+        assert!(binding
+            .methods_decl
+            .contains("opaque Foo.get : Foo → UInt32"));
+    }
+
+    #[test]
+    fn class_impl_lean_name_override() {
+        let item: syn::ItemImpl = syn::parse_quote! {
+            impl Foo {
+                fn get(&self) -> u32 { self.x }
+            }
+        };
+        let binding = analyze_lean_class_impl(&item, Some("Renamed")).expect("impl analysis");
+        assert_eq!(binding.class_name, "Foo");
+        assert_eq!(binding.methods[0].lean_name, "Renamed.get");
+        assert!(binding.methods[0]
+            .lean_decl
+            .as_deref()
+            .unwrap()
+            .contains("opaque Renamed.get : Renamed → UInt32"));
+        assert!(binding.methods_decl.contains("opaque Renamed.get"));
+    }
+
+    #[test]
+    fn class_impl_rejects_generics_and_non_path_self() {
+        let item: syn::ItemImpl = syn::parse_quote! { impl<T> Foo<T> { fn m(&self) {} } };
+        let err = analyze_lean_class_impl(&item, None).expect_err("generic impl must fail");
+        assert!(err
+            .to_string()
+            .contains("#[leanclass] does not support generic impl blocks yet"));
+
+        let item: syn::ItemImpl = syn::parse_quote! { impl (Foo,) { fn m(&self) {} } };
+        let err = analyze_lean_class_impl(&item, None).expect_err("tuple self type must fail");
+        assert!(err
+            .to_string()
+            .contains("#[leanclass] impl must be for a simple struct type"));
+    }
+
+    // ---- analyze_lean_class_method ----
+
+    #[test]
+    fn class_method_name_attr_and_kinds() {
+        let item: syn::ItemImpl = syn::parse_quote! {
+            impl Foo {
+                #[name = "renamed"]
+                fn m(&self) -> u32 { 1 }
+
+                #[getter(name = "g")]
+                fn g(&self) -> u32 { 1 }
+
+                #[setter(name = "s")]
+                fn s(&mut self, v: u32) { }
+            }
+        };
+        let m =
+            analyze_lean_class_method(method_at(&item, 0), "Foo", "Foo").expect("method analysis");
+        assert_eq!(m.rust_name, "m");
+        assert_eq!(m.lean_name, "Foo.renamed");
+        assert_eq!(m.ffi_symbol, "__lean_ffi_Foo_m");
+        assert_eq!(m.kind, BindingKind::Method);
+        assert!(m
+            .lean_decl
+            .as_deref()
+            .unwrap()
+            .contains("opaque Foo.renamed : Foo → UInt32"));
+
+        let g =
+            analyze_lean_class_method(method_at(&item, 1), "Foo", "Foo").expect("getter analysis");
+        assert_eq!(g.lean_name, "Foo.g");
+        assert_eq!(g.kind, BindingKind::Getter);
+        assert_eq!(g.receiver, ReceiverStyle::Ref);
+
+        let s =
+            analyze_lean_class_method(method_at(&item, 2), "Foo", "Foo").expect("setter analysis");
+        assert_eq!(s.lean_name, "Foo.s");
+        assert_eq!(s.kind, BindingKind::Setter);
+        assert_eq!(s.receiver, ReceiverStyle::MutRef);
+        assert_eq!(s.semantics, BindingSemantics::MutatesSelf);
+        assert_eq!(s.return_type.lean.as_deref(), Some("Foo"));
+    }
+
+    #[test]
+    fn class_method_kind_errors() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "#[getter]\n#[setter]\nfn m(&self) -> u32 { 1 }",
+                "#[getter] and #[setter] are mutually exclusive",
+            ),
+            (
+                "#[getter]\nfn m(&mut self) -> u32 { 1 }",
+                "#[getter] methods must take &self",
+            ),
+            (
+                "#[getter]\nfn m(&self, x: u32) -> u32 { 1 }",
+                "#[getter] methods must not take additional parameters",
+            ),
+            (
+                "#[getter]\nfn m(&self) { }",
+                "#[getter] methods must return a non-unit value",
+            ),
+            (
+                "#[setter]\nfn m(&self, v: u32) { }",
+                "#[setter] methods must take &mut self",
+            ),
+            (
+                "#[setter]\nfn m(&mut self, a: u32, b: u32) { }",
+                "#[setter] methods must take exactly one parameter",
+            ),
+            (
+                "#[setter]\nfn m(&mut self, v: u32) -> u32 { 1 }",
+                "#[setter] methods must return `()` (the updated object is returned to Lean)",
+            ),
+        ];
+        for (method_src, expected) in cases {
+            let item: syn::ItemImpl =
+                syn::parse_str(&format!("impl Foo {{ {method_src} }}")).expect("parse impl");
+            let err = analyze_lean_class_method(method_at(&item, 0), "Foo", "Foo")
+                .expect_err("kind validation must fail");
+            assert!(
+                err.to_string().contains(expected),
+                "expected {expected:?} in error {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn class_method_rejects_generics() {
+        let item: syn::ItemImpl = syn::parse_quote! { impl Foo { fn m<T>(&self) {} } };
+        let err = analyze_lean_class_method(method_at(&item, 0), "Foo", "Foo")
+            .expect_err("generic method must fail");
+        assert!(err
+            .to_string()
+            .contains("Generic methods are not supported yet"));
+    }
+
+    // ---- analyze_lean_function ----
+
+    #[test]
+    fn leanfn_borrowed_params_and_name_override() {
+        let func: syn::ItemFn = syn::parse_quote! {
+            fn greet(name: &str, bytes: &[u8], nums: &[u32], fixed: &[u8; 4]) -> u64 { 0 }
+        };
+        let binding = analyze_lean_function(
+            &func,
+            FunctionOptions {
+                lean_name: Some("greetLean".to_string()),
+            },
+        )
+        .expect("leanfn analysis");
+        assert_eq!(binding.rust_name, "greet");
+        assert_eq!(binding.lean_name, "greetLean");
+        assert_eq!(binding.ffi_symbol, "greetLean");
+        assert_eq!(binding.receiver, ReceiverStyle::None);
+        assert_eq!(binding.kind, BindingKind::Method);
+        assert_eq!(binding.semantics, BindingSemantics::Value);
+        assert_eq!(binding.params.len(), 4);
+        assert_eq!(binding.params[0].name, "name");
+        assert_eq!(binding.params[0].passing, PassingStyle::Borrowed);
+        assert_eq!(binding.params[0].ty.lean.as_deref(), Some("String"));
+        assert_eq!(binding.params[0].ty.shape, TypeShape::String);
+        assert_eq!(binding.params[1].ty.lean.as_deref(), Some("ByteArray"));
+        assert_eq!(binding.params[1].ty.shape, TypeShape::ByteArray);
+        assert_eq!(binding.params[2].ty.lean.as_deref(), Some("Array UInt32"));
+        assert_eq!(binding.params[2].ty.shape, TypeShape::Array);
+        assert_eq!(binding.params[3].ty.lean.as_deref(), Some("Array UInt8"));
+        assert_eq!(binding.return_type.lean.as_deref(), Some("UInt64"));
+        assert_eq!(binding.return_type.shape, TypeShape::Scalar);
+    }
+
+    #[test]
+    fn leanfn_default_name_and_unit_return() {
+        let func: syn::ItemFn = syn::parse_quote! { fn noop() {} };
+        let binding =
+            analyze_lean_function(&func, FunctionOptions::default()).expect("leanfn analysis");
+        assert_eq!(binding.rust_name, "noop");
+        assert_eq!(binding.lean_name, "noop");
+        assert!(binding.params.is_empty());
+        assert_eq!(binding.return_type.rust, "()");
+        assert_eq!(binding.return_type.lean.as_deref(), Some("Unit"));
+        assert_eq!(binding.return_type.shape, TypeShape::Unit);
+    }
+
+    #[test]
+    fn leanfn_rejects_generics_self_and_complex_patterns() {
+        let func: syn::ItemFn = syn::parse_quote! { fn generic<T>(x: T) {} };
+        let err = analyze_lean_function(&func, FunctionOptions::default())
+            .expect_err("generics must fail");
+        assert!(err
+            .to_string()
+            .contains("Generic functions are not supported yet"));
+
+        let func: syn::ItemFn = syn::parse_quote! { fn method(&self) {} };
+        let err =
+            analyze_lean_function(&func, FunctionOptions::default()).expect_err("self must fail");
+        assert!(err
+            .to_string()
+            .contains("Methods with `self` are not supported."));
+
+        let func: syn::ItemFn = syn::parse_quote! { fn pat((a, b): (u32, u32)) {} };
+        let err = analyze_lean_function(&func, FunctionOptions::default())
+            .expect_err("complex pattern must fail");
+        assert!(err
+            .to_string()
+            .contains("Only simple parameter patterns are supported"));
+    }
+
+    // ---- analyze_concrete_instance ----
+
+    #[test]
+    fn concrete_instance_monomorphizes_generic_function() {
+        let func: syn::ItemFn = syn::parse_quote! {
+            fn wrap<T>(value: T, extra: u8) -> T { value }
+        };
+        let concrete = ConcreteAttr {
+            types: vec![syn::parse_quote!(u32)],
+            name: "wrapU32".to_string(),
+        };
+        let binding = analyze_concrete_instance(&func, &concrete).expect("concrete instance");
+        assert_eq!(binding.rust_name, "wrap");
+        assert_eq!(binding.lean_name, "wrapU32");
+        assert_eq!(binding.ffi_symbol, "wrapU32");
+        assert_eq!(binding.receiver, ReceiverStyle::None);
+        assert_eq!(binding.semantics, BindingSemantics::Value);
+        assert_eq!(binding.params.len(), 2);
+        assert_eq!(binding.params[0].name, "value");
+        assert_eq!(binding.params[0].ty.lean.as_deref(), Some("UInt32"));
+        assert_eq!(binding.params[0].passing, PassingStyle::Owned);
+        assert_eq!(binding.params[1].ty.lean.as_deref(), Some("UInt8"));
+        assert_eq!(binding.return_type.lean.as_deref(), Some("UInt32"));
+    }
+
+    #[test]
+    fn concrete_instance_error_cases() {
+        let func: syn::ItemFn = syn::parse_quote! { fn one<T>(x: T) {} };
+        let concrete = ConcreteAttr {
+            types: vec![syn::parse_quote!(u32), syn::parse_quote!(u64)],
+            name: "n".to_string(),
+        };
+        let err = analyze_concrete_instance(&func, &concrete).expect_err("wrong arity must fail");
+        assert!(err
+            .to_string()
+            .contains("expected 1 concrete type(s) for 1 generic parameter(s), got 2"));
+
+        let func: syn::ItemFn = syn::parse_quote! { fn lt<'a>(x: &'a str) {} };
+        let concrete = ConcreteAttr {
+            types: vec![syn::parse_quote!(u32)],
+            name: "n".to_string(),
+        };
+        let err = analyze_concrete_instance(&func, &concrete).expect_err("lifetime must fail");
+        assert!(err
+            .to_string()
+            .contains("lifetime parameters are not supported with `concrete`"));
+
+        let func: syn::ItemFn = syn::parse_quote! { fn cn<const N: usize>(x: [u8; N]) {} };
+        let concrete = ConcreteAttr {
+            types: vec![syn::parse_quote!(u32)],
+            name: "n".to_string(),
+        };
+        let err = analyze_concrete_instance(&func, &concrete).expect_err("const param must fail");
+        assert!(err
+            .to_string()
+            .contains("const parameters are not supported with `concrete`"));
+
+        let func: syn::ItemFn = syn::parse_quote! { fn selfy<T>(&self, x: T) {} };
+        let concrete = ConcreteAttr {
+            types: vec![syn::parse_quote!(u32)],
+            name: "n".to_string(),
+        };
+        let err = analyze_concrete_instance(&func, &concrete).expect_err("self must fail");
+        assert!(err
+            .to_string()
+            .contains("Methods with `self` are not supported."));
+
+        let func: syn::ItemFn = syn::parse_quote! { fn pat<T>((a, b): (T, T)) {} };
+        let concrete = ConcreteAttr {
+            types: vec![syn::parse_quote!(u32)],
+            name: "n".to_string(),
+        };
+        let err =
+            analyze_concrete_instance(&func, &concrete).expect_err("complex pattern must fail");
+        assert!(err
+            .to_string()
+            .contains("Only simple parameter patterns are supported"));
+    }
+
+    // ---- collect_module_exports ----
+
+    #[test]
+    fn collect_module_exports_plain_named_crate_and_concrete() {
+        let file: syn::File = syn::parse_quote! {
+            #[leanfn()]
+            fn alpha() {}
+
+            #[leanfn(name = "beta_lean")]
+            fn beta() {}
+
+            #[leanfn(concrete(u32, name = "fooU32"), crate = "leo3")]
+            fn foo<T>(x: T) -> T { x }
+
+            fn plain() {}
+
+            struct NotAFunction;
+        };
+        let exports = collect_module_exports(&file.items).expect("module exports");
+        assert_eq!(exports.len(), 3);
+        assert_eq!(exports[0].rust_name, "alpha");
+        assert_eq!(exports[0].lean_name, "alpha");
+        assert_eq!(exports[0].ffi_symbol, "alpha");
+        assert_eq!(exports[1].rust_name, "beta");
+        assert_eq!(exports[1].lean_name, "beta_lean");
+        assert_eq!(exports[1].ffi_symbol, "beta_lean");
+        assert_eq!(exports[2].rust_name, "foo");
+        assert_eq!(exports[2].lean_name, "fooU32");
+        assert_eq!(exports[2].ffi_symbol, "fooU32");
+        assert_eq!(exports[2].params[0].ty.lean.as_deref(), Some("UInt32"));
+        assert_eq!(exports[2].return_type.lean.as_deref(), Some("UInt32"));
+    }
+
+    #[test]
+    fn leanfn_option_parse_errors() {
+        let file: syn::File = syn::parse_quote! {
+            #[leanfn(unknown = "x")]
+            fn foo() {}
+        };
+        let err = collect_module_exports(&file.items).expect_err("unknown meta must fail");
+        assert!(err
+            .to_string()
+            .contains("Expected name-value attribute like `name = \"...\"`"));
+
+        let file: syn::File = syn::parse_quote! {
+            #[leanfn(concrete(u32))]
+            fn foo<T>(x: T) -> T { x }
+        };
+        let err = collect_module_exports(&file.items).expect_err("missing concrete name must fail");
+        assert!(err
+            .to_string()
+            .contains("`concrete` requires `name = \"...\"`"));
+
+        let file: syn::File = syn::parse_quote! {
+            #[leanfn(concrete(name = "x"))]
+            fn foo<T>(x: T) -> T { x }
+        };
+        let err = collect_module_exports(&file.items).expect_err("empty concrete types must fail");
+        assert!(err
+            .to_string()
+            .contains("`concrete` requires at least one type argument"));
+
+        let file: syn::File = syn::parse_quote! {
+            #[leanfn(concrete(other = "x"))]
+            fn foo<T>(x: T) -> T { x }
+        };
+        let err = collect_module_exports(&file.items).expect_err("unknown concrete key must fail");
+        assert!(err.to_string().contains("expected `name`"));
+    }
+
+    // ---- collect_submodule_exports ----
+
+    #[test]
+    fn collect_submodule_exports_nested_and_prefixed() {
+        let file: syn::File = syn::parse_quote! {
+            mod outer {
+                #[leanfn(name = "a_lean")]
+                fn a() {}
+
+                mod inner {
+                    #[leanfn()]
+                    fn b() {}
+
+                    mod deepest {
+                        #[leanfn(name = "z_lean")]
+                        fn z() {}
+                    }
+                }
+            }
+        };
+        let subs = collect_submodule_exports(&file.items, "").expect("submodule exports");
+        let paths: Vec<&str> = subs.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(paths, vec!["outer", "outer.inner", "outer.inner.deepest"]);
+        assert_eq!(subs[0].exports.len(), 1);
+        assert_eq!(subs[0].exports[0].lean_name, "a_lean");
+        assert_eq!(subs[1].exports[0].rust_name, "b");
+        assert_eq!(subs[2].exports[0].lean_name, "z_lean");
+
+        let subs = collect_submodule_exports(&file.items, "base").expect("prefixed exports");
+        let paths: Vec<&str> = subs.iter().map(|s| s.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["base.outer", "base.outer.inner", "base.outer.inner.deepest"]
+        );
+    }
+
+    #[test]
+    fn collect_submodule_exports_skips_empty_and_out_of_line_mods() {
+        let file: syn::File = syn::parse_quote! {
+            mod empty {}
+            mod external;
+        };
+        let subs = collect_submodule_exports(&file.items, "").expect("submodule exports");
+        assert!(subs.is_empty());
+    }
+
+    // ---- filter_exports ----
+
+    #[test]
+    fn filter_exports_restricts_and_orders() {
+        let file: syn::File = syn::parse_quote! {
+            #[leanfn()]
+            fn alpha() {}
+
+            #[leanfn(name = "beta_lean")]
+            fn beta() {}
+        };
+        let exports = collect_module_exports(&file.items).expect("module exports");
+        let filtered = filter_exports(
+            exports.clone(),
+            &["beta_lean".to_string(), "alpha".to_string()],
+        )
+        .expect("filter exports");
+        assert_eq!(filtered.len(), 2);
+        // Order follows the `allowed` list, and both Lean and Rust names match.
+        assert_eq!(filtered[0].rust_name, "beta");
+        assert_eq!(filtered[1].rust_name, "alpha");
+    }
+
+    #[test]
+    fn filter_exports_missing_name_errors() {
+        let file: syn::File = syn::parse_quote! {
+            #[leanfn()]
+            fn alpha() {}
+        };
+        let exports = collect_module_exports(&file.items).expect("module exports");
+        let err = filter_exports(exports, &["missing".to_string()])
+            .expect_err("unknown export must fail");
+        assert!(err
+            .to_string()
+            .contains("export `missing` not found in module"));
+    }
+
+    // ---- is_leanfn_attr ----
+
+    #[test]
+    fn is_leanfn_attr_matches_last_path_segment() {
+        let cases: &[(&str, bool)] = &[
+            ("#[leanfn]", true),
+            ("#[leanfn(name = \"x\")]", true),
+            ("#[leo3::leanfn]", true),
+            ("#[leanfn::nested]", false),
+            ("#[leanfnx]", false),
+            ("#[cfg(test)]", false),
+        ];
+        for (src, expected) in cases {
+            let item: syn::ItemFn =
+                syn::parse_str(&format!("{src}\nfn f() {{}}")).expect("parse fn");
+            let attr = &item.attrs[0];
+            assert_eq!(is_leanfn_attr(attr), *expected, "for {src}");
+        }
+    }
+
+    // ---- substitute_type ----
+
+    #[test]
+    fn substitute_type_replaces_generic_params() {
+        let mut mapping = std::collections::HashMap::new();
+        mapping.insert("T".to_string(), syn::parse_quote!(u32));
+
+        let check = |input: proc_macro2::TokenStream, expected: &str| {
+            let ty: syn::Type = syn::parse2(input).expect("parse type");
+            assert_eq!(render_type(&substitute_type(&ty, &mapping)), expected);
+        };
+
+        check(syn::parse_quote!(T), "u32");
+        check(syn::parse_quote!(Vec<T>), "Vec < u32 >");
+        check(syn::parse_quote!(&T), "& u32");
+        check(syn::parse_quote!((T, u32)), "(u32 , u32)");
+        check(syn::parse_quote!([T; 4]), "[u32 ; 4]");
+        check(syn::parse_quote!(&[T]), "& [u32]");
+        check(syn::parse_quote!((T)), "(u32)");
+        check(
+            syn::parse_quote!(std::collections::HashMap<T, u8>),
+            "std :: collections :: HashMap < u32 , u8 >",
+        );
+    }
+
+    #[test]
+    fn substitute_type_leaves_unmapped_types_untouched() {
+        let mapping = std::collections::HashMap::new();
+        let check = |input: proc_macro2::TokenStream, expected: &str| {
+            let ty: syn::Type = syn::parse2(input).expect("parse type");
+            assert_eq!(render_type(&substitute_type(&ty, &mapping)), expected);
+        };
+
+        check(syn::parse_quote!(String), "String");
+        check(syn::parse_quote!(*const T), "* const T");
+        check(syn::parse_quote!(&mut str), "& mut str");
+        check(syn::parse_quote!(Vec<u8>), "Vec < u8 >");
+        check(syn::parse_quote!(u64), "u64");
+    }
 }

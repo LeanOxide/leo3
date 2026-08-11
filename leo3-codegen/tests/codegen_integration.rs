@@ -120,6 +120,10 @@ fn codegen_generates_module_and_class_lean_files() {
     assert!(class_content.contains("@[extern \"__lean_ffi_FixtureCounter_new\"] opaque FixtureCounter.new : Int32 → FixtureCounter"));
     assert!(class_content.contains("@[extern \"__lean_ffi_FixtureCounter_get\"] opaque FixtureCounter.get : FixtureCounter → Int32"));
     assert!(class_content.contains("@[extern \"__lean_ffi_FixtureCounter_increment\"] opaque FixtureCounter.increment : FixtureCounter → FixtureCounter"));
+    // `#[get]` / `#[set]` field accessors: emitted as a separate metadata
+    // entry and merged into this class's single file by leo3-codegen.
+    assert!(class_content.contains("@[extern \"__lean_ffi_FixtureCounter_value\"] opaque FixtureCounter.value : FixtureCounter → Int32"));
+    assert!(class_content.contains("@[extern \"__lean_ffi_FixtureCounter_set_value\"] opaque FixtureCounter.set_value : FixtureCounter → Int32 → FixtureCounter"));
 
     let _ = std::fs::remove_dir_all(&output_dir);
 }
@@ -171,4 +175,51 @@ fn metadata_is_recoverable_from_dedicated_section() {
                 serde_json::from_str(json).expect("class metadata JSON should parse");
         }
     }
+}
+
+#[test]
+fn cli_reports_usage_and_errors() {
+    let bin = codegen_bin();
+
+    // No arguments → usage on stderr, exit failure.
+    let output = Command::new(&bin)
+        .output()
+        .expect("leo3-codegen should execute");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("USAGE:"), "expected usage, got: {stderr}");
+
+    // --help → usage on stderr, exit success.
+    let output = Command::new(&bin)
+        .arg("--help")
+        .output()
+        .expect("leo3-codegen should execute");
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("USAGE:"));
+
+    // -o without a value → explicit error.
+    let output = Command::new(&bin)
+        .arg("-o")
+        .output()
+        .expect("leo3-codegen should execute");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--output requires a path argument"));
+
+    // No library paths → explicit error.
+    let output = Command::new(&bin)
+        .arg("-o")
+        .arg(".")
+        .output()
+        .expect("leo3-codegen should execute");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no library path specified"));
+
+    // Nonexistent library file → error naming the read failure.
+    let missing = std::env::temp_dir().join(format!("leo3-codegen-missing-{}", std::process::id()));
+    let output = Command::new(&bin)
+        .arg(&missing)
+        .output()
+        .expect("leo3-codegen should execute");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("failed to read file"));
 }

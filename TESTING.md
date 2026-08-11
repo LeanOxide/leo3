@@ -210,6 +210,31 @@ Use `LEO3_NO_LEAN=1` whenever you want a compile-only path that should not depen
   including borrowed string/vector/slice aliases and their supported
   `Option`/`Result`/tuple wrapper forms, plus `concrete(Ty, name = "...")`
   monomorphization instances.
+- `leo3/tests/container_user_keys.rs`: user-defined external classes as
+  `LeanHashMap` / `LeanHashSet` / `LeanRBMap` keys via
+  `#[lean_instance(Hashable, BEq, Ord)]`.
+- `leo3/tests/test_leanclass_field_accessors.rs`: `#[get]` / `#[set]` field
+  accessors (Rust methods, FFI wrappers, metadata, copy-on-write setters).
+- `leo3/tests/test_leanclass_rename.rs`: `#[name = "..."]` and
+  `#[leanclass(name = "...")]` Lean-visible naming.
+- `leo3/tests/conversion_matrix_ext.rs`: std `HashMap` / `HashSet` /
+  `BTreeMap` <-> Lean containers, `Cell<T>`, `Cow<str>` / `Cow<[u8]>`, and
+  tuples up to arity 12.
+- `leo3/tests/io_handle_ops.rs`: file handle open/read/write/get_line/
+  flush/is_eof end to end, including error paths (missing file).
+- `leo3/tests/io_ops_comprehensive.rs`: IO monad, fs/env helpers, `IOError`
+  mapping, and console std-stream writes.
+- `leo3/tests/io_time_process_console.rs`: pure-Rust `io::time` /
+  `io::process` helpers (monotonic clock, wall clock, exit-code mirror) and
+  `io::console` stream output.
+- `leo3/tests/io_handle_ops.rs`-style comprehensive coverage for the type
+  wrappers: `bitvec_ops.rs`, `fin_ops.rs`, `range_ops.rs`,
+  `sum_sigma_subtype_ops.rs`, `char_ops.rs`, `option_ops_comprehensive.rs`,
+  `thunk_ops_comprehensive.rs`, `list_ops_comprehensive.rs`,
+  `array_ops_comprehensive.rs`, `closure_ops_comprehensive.rs`,
+  `string_ops_comprehensive.rs`, `uint_sint_ops_comprehensive.rs`,
+  `task_ops_comprehensive.rs`, `meta_context_comprehensive.rs`,
+  `module_error_paths.rs`.
 - `leo3` doctests: runtime initialization, README quick start, string/nat conversion, and task/tokio docs.
 - `leo3-macros` doctests: compile-check macro usage snippets such as `#[leanfn]`, `#[leanclass]`, and derives.
 - `leo3/tests/basic.rs`, `nat_ops.rs`, `string_ops.rs`, `array_ops.rs`, `test_conversion.rs`, `test_gc.rs`: core runtime path.
