@@ -426,8 +426,8 @@ jobs:
         env "$LIBPATH_VAR=$PWD/../native/target/release" .lake/build/bin/app
         APP_EXIT=$?
         if [ "$RUNNER_OS" = "macOS" ] && [ $APP_EXIT -ne 0 ]; then
-          echo "app exited with $APP_EXIT, capturing lldb backtrace"
-          env "$LIBPATH_VAR=$PWD/../native/target/release" lldb -b -o "run" -o "bt 25" -- .lake/build/bin/app 2>&1 | grep -vE '^\(lldb\) (process|error:)' | tail -35 || true
+          echo "app exited with $APP_EXIT, capturing dyld bind trace"
+          DYLD_PRINT_LIBRARIES=1 DYLD_PRINT_BINDINGS=1 env "$LIBPATH_VAR=$PWD/../native/target/release" .lake/build/bin/app 2>&1 | tail -40 || true
           echo "main after app"; echo "::endgroup::"
         elif [ "$RUNNER_OS" = "macOS" ]; then
           echo "main after app"; echo "::endgroup::"
