@@ -14,17 +14,27 @@ use crate::marker::Lean;
 
 /// Fetch the current stdout stream object (a borrowed process-global).
 unsafe fn stdout_stream<'l>(lean: Lean<'l>) -> LeanBound<'l, LeanAny> {
-    let world = ffi::io::lean_io_mk_world();
-    let result = ffi::io::lean_get_stdout(world);
-    let stream = ffi::object::lean_ctor_get(result, 0) as *mut ffi::lean_object;
+    #[cfg(not(lean_4_26))]
+    let stream = {
+        let world = ffi::io::lean_io_mk_world();
+        let result = ffi::io::lean_get_stdout(world);
+        ffi::object::lean_ctor_get(result, 0) as *mut ffi::lean_object
+    };
+    #[cfg(lean_4_26)]
+    let stream = ffi::io::lean_get_stdout();
     LeanBound::from_borrowed_ptr(lean, stream)
 }
 
 /// Fetch the current stdin stream object (a borrowed process-global).
 unsafe fn stdin_stream<'l>(lean: Lean<'l>) -> LeanBound<'l, LeanAny> {
-    let world = ffi::io::lean_io_mk_world();
-    let result = ffi::io::lean_get_stdin(world);
-    let stream = ffi::object::lean_ctor_get(result, 0) as *mut ffi::lean_object;
+    #[cfg(not(lean_4_26))]
+    let stream = {
+        let world = ffi::io::lean_io_mk_world();
+        let result = ffi::io::lean_get_stdin(world);
+        ffi::object::lean_ctor_get(result, 0) as *mut ffi::lean_object
+    };
+    #[cfg(lean_4_26)]
+    let stream = ffi::io::lean_get_stdin();
     LeanBound::from_borrowed_ptr(lean, stream)
 }
 

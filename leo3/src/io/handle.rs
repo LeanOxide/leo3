@@ -159,7 +159,15 @@ unsafe extern "C" fn io_handle_mk_wrapper(
     world: ffi::object::lean_obj_arg,
 ) -> ffi::object::lean_obj_res {
     let mode_u8 = ffi::inline::lean_unbox(mode) as u8;
-    ffi::io::lean_io_prim_handle_mk(path, mode_u8, world)
+    #[cfg(not(lean_4_26))]
+    {
+        ffi::io::lean_io_prim_handle_mk(path, mode_u8, world)
+    }
+    #[cfg(lean_4_26)]
+    {
+        let _ = world;
+        ffi::io::lean_io_prim_handle_mk(path, mode_u8)
+    }
 }
 
 /// Close a file handle.
@@ -254,7 +262,15 @@ unsafe extern "C" fn io_handle_read_wrapper(
     world: ffi::object::lean_obj_arg,
 ) -> ffi::object::lean_obj_res {
     let nbytes = ffi::inline::lean_unbox(size);
-    ffi::io::lean_io_prim_handle_read(handle, nbytes, world)
+    #[cfg(not(lean_4_26))]
+    {
+        ffi::io::lean_io_prim_handle_read(handle, nbytes, world)
+    }
+    #[cfg(lean_4_26)]
+    {
+        let _ = world;
+        ffi::io::lean_io_prim_handle_read(handle, nbytes)
+    }
 }
 
 /// Read a line from a file handle.
@@ -374,15 +390,28 @@ pub fn flush<'l>(lean: Lean<'l>, handle: &LeanHandle<'l>) -> LeanResult<LeanIO<'
 pub fn is_eof<'l>(lean: Lean<'l>, handle: &LeanHandle<'l>) -> LeanResult<LeanIO<'l, bool>> {
     unsafe {
         ffi::lean_inc(handle.as_ptr());
-        let closure = ffi::inline::lean_alloc_closure(
-            ffi::io::lean_io_prim_handle_is_eof as *mut std::ffi::c_void,
-            2,
-            1,
-        );
+        // Lean 4.26+ routes through a wrapper that packages the primitive's
+        // raw uint8_t result into the IO result shape.
+        #[cfg(lean_4_26)]
+        let is_eof_fn = io_handle_is_eof_wrapper as *mut std::ffi::c_void;
+        #[cfg(not(lean_4_26))]
+        let is_eof_fn = ffi::io::lean_io_prim_handle_is_eof as *mut std::ffi::c_void;
+        let closure = ffi::inline::lean_alloc_closure(is_eof_fn, 2, 1);
         ffi::inline::lean_closure_set(closure, 0, handle.as_ptr());
 
         Ok(LeanIO::from_raw(LeanBound::from_owned_ptr(lean, closure)))
     }
+}
+
+/// Lean 4.26+ wrapper: the primitive returns the raw `uint8_t` EOF flag;
+/// package it into the IO result shape the rest of the pipeline consumes.
+#[cfg(lean_4_26)]
+unsafe extern "C" fn io_handle_is_eof_wrapper(
+    handle: ffi::object::lean_obj_arg,
+    world: ffi::object::lean_obj_arg,
+) -> ffi::object::lean_obj_res {
+    let eof = ffi::io::lean_io_prim_handle_is_eof(handle);
+    crate::io::io_ok_value_world(ffi::inline::lean_box(eof as usize), world)
 }
 
 #[cfg(test)]

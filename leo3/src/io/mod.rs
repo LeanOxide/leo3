@@ -305,10 +305,22 @@ pub(crate) unsafe fn io_ok_value_world(
     value: *mut ffi::lean_object,
     world: ffi::object::lean_obj_arg,
 ) -> ffi::object::lean_obj_res {
-    let r = ffi::lean_alloc_ctor(0, 2, 0);
-    ffi::object::lean_ctor_set(r, 0, value);
-    ffi::object::lean_ctor_set(r, 1, world);
-    r
+    #[cfg(not(lean_4_26))]
+    {
+        let r = ffi::lean_alloc_ctor(0, 2, 0);
+        ffi::object::lean_ctor_set(r, 0, value);
+        ffi::object::lean_ctor_set(r, 1, world);
+        r
+    }
+    #[cfg(lean_4_26)]
+    {
+        // Lean 4.26+ erased the world from `EStateM.Result`: the ok
+        // constructor carries only the value.
+        let _ = world;
+        let r = ffi::lean_alloc_ctor(0, 1, 0);
+        ffi::object::lean_ctor_set(r, 0, value);
+        r
+    }
 }
 
 // ============================================================================
@@ -365,11 +377,19 @@ extern "C" fn io_seq_impl(
             return result1;
         }
 
-        // Extract the new world token (field 1 of the ok constructor).
-        let world_ptr = ffi::object::lean_ctor_get(result1, 1) as *mut ffi::lean_object;
-
-        // Execute second IO with the new world token
-        ffi::closure::lean_apply_1(io2, world_ptr)
+        // Execute the second IO with the (possibly threaded) world token.
+        #[cfg(not(lean_4_26))]
+        {
+            // The ok constructor carries the world in field 1.
+            let world_ptr = ffi::object::lean_ctor_get(result1, 1) as *mut ffi::lean_object;
+            ffi::closure::lean_apply_1(io2, world_ptr)
+        }
+        #[cfg(lean_4_26)]
+        {
+            // 4.26+ erased the world from results; reuse the caller's token.
+            let _ = result1;
+            ffi::closure::lean_apply_1(io2, world)
+        }
     }
 }
 

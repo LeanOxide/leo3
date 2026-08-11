@@ -239,14 +239,18 @@ extern "C" {
     /// - `mode` must be a valid `IO.FS.Mode` constructor (borrowed)
     /// - Returns IO (Except IO.Error FS.Handle)
     ///
-    /// Note: modern Lean (4.25 through 4.32+) has no `binary` parameter on
-    /// `Handle.mk` and takes the mode as a raw scalar; the C ABI is
-    /// `(path, mode: uint8, world)`.
+    /// Note: Lean 4.26+ removed the `world` parameter from the IO
+    /// primitives (the `IO` wrapper moved entirely to the Lean side) and
+    /// `Handle.mk` takes the mode as a raw scalar; the C ABI is
+    /// `(path, mode: uint8)` on 4.26+ and `(path, mode: uint8, world)` before.
+    #[cfg(not(lean_4_26))]
     pub fn lean_io_prim_handle_mk(
         path: lean_obj_arg,
         mode: u8,
         world: lean_obj_arg,
     ) -> lean_obj_res;
+    #[cfg(lean_4_26)]
+    pub fn lean_io_prim_handle_mk(path: lean_obj_arg, mode: u8) -> lean_obj_res;
 
     /// Close file handle
     ///
@@ -256,7 +260,7 @@ extern "C" {
     ///
     /// Note: This function is only available in Lean 4.26+
     #[cfg(lean_4_26)]
-    pub fn lean_io_prim_handle_close(handle: lean_obj_arg, world: lean_obj_arg) -> lean_obj_res;
+    pub fn lean_io_prim_handle_close(handle: lean_obj_arg) -> lean_obj_res;
 
     /// Read from file handle
     ///
@@ -264,21 +268,27 @@ extern "C" {
     /// - `handle` must be a valid file handle object (borrowed)
     /// - `size` is the number of bytes to read
     /// - Returns IO (Except IO.Error ByteArray)
+    #[cfg(not(lean_4_26))]
     pub fn lean_io_prim_handle_read(
         handle: b_lean_obj_arg,
         size: usize,
         world: lean_obj_arg,
     ) -> lean_obj_res;
+    #[cfg(lean_4_26)]
+    pub fn lean_io_prim_handle_read(handle: b_lean_obj_arg, size: usize) -> lean_obj_res;
 
     /// Read line from file handle
     ///
     /// # Safety
     /// - `handle` must be a valid file handle object (borrowed)
     /// - Returns IO (Except IO.Error String)
+    #[cfg(not(lean_4_26))]
     pub fn lean_io_prim_handle_get_line(
         handle: b_lean_obj_arg,
         world: lean_obj_arg,
     ) -> lean_obj_res;
+    #[cfg(lean_4_26)]
+    pub fn lean_io_prim_handle_get_line(handle: b_lean_obj_arg) -> lean_obj_res;
 
     /// Write to file handle
     ///
@@ -286,25 +296,37 @@ extern "C" {
     /// - `handle` must be a valid file handle object (borrowed)
     /// - `content` must be a valid Lean string object (consumed)
     /// - Returns IO (Except IO.Error Unit)
+    #[cfg(not(lean_4_26))]
     pub fn lean_io_prim_handle_write(
         handle: b_lean_obj_arg,
         content: lean_obj_arg,
         world: lean_obj_arg,
     ) -> lean_obj_res;
+    #[cfg(lean_4_26)]
+    pub fn lean_io_prim_handle_write(handle: b_lean_obj_arg, content: lean_obj_arg)
+        -> lean_obj_res;
 
     /// Flush file handle buffers
     ///
     /// # Safety
     /// - `handle` must be a valid file handle object (borrowed)
     /// - Returns IO (Except IO.Error Unit)
+    #[cfg(not(lean_4_26))]
     pub fn lean_io_prim_handle_flush(handle: b_lean_obj_arg, world: lean_obj_arg) -> lean_obj_res;
+    #[cfg(lean_4_26)]
+    pub fn lean_io_prim_handle_flush(handle: b_lean_obj_arg) -> lean_obj_res;
 
     /// Check if at end of file
     ///
     /// # Safety
     /// - `handle` must be a valid file handle object (borrowed)
-    /// - Returns IO (Except IO.Error Bool)
+    ///
+    /// Note: on Lean 4.26+ the primitive returns the raw `uint8_t` result
+    /// directly (no IO wrapper).
+    #[cfg(not(lean_4_26))]
     pub fn lean_io_prim_handle_is_eof(handle: b_lean_obj_arg, world: lean_obj_arg) -> lean_obj_res;
+    #[cfg(lean_4_26)]
+    pub fn lean_io_prim_handle_is_eof(handle: b_lean_obj_arg) -> u8;
 }
 
 // ============================================================================
@@ -344,21 +366,39 @@ extern "C" {
     /// # Safety
     /// - `world` is the RealWorld token
     /// - Returns `EStateM.Result.ok (stream, world)` with a borrowed stream
+    #[cfg(not(lean_4_26))]
     pub fn lean_get_stdin(world: lean_obj_arg) -> lean_obj_res;
+
+    /// Get stdin handle (Lean 4.26+: no world token; the stream object is
+    /// returned directly).
+    #[cfg(lean_4_26)]
+    pub fn lean_get_stdin() -> lean_obj_res;
 
     /// Get stdout handle
     ///
     /// # Safety
     /// - `world` is the RealWorld token
     /// - Returns `EStateM.Result.ok (stream, world)` with a borrowed stream
+    #[cfg(not(lean_4_26))]
     pub fn lean_get_stdout(world: lean_obj_arg) -> lean_obj_res;
+
+    /// Get stdout handle (Lean 4.26+: no world token; the stream object is
+    /// returned directly).
+    #[cfg(lean_4_26)]
+    pub fn lean_get_stdout() -> lean_obj_res;
 
     /// Get stderr handle
     ///
     /// # Safety
     /// - `world` is the RealWorld token
     /// - Returns `EStateM.Result.ok (stream, world)` with a borrowed stream
+    #[cfg(not(lean_4_26))]
     pub fn lean_get_stderr(world: lean_obj_arg) -> lean_obj_res;
+
+    /// Get stderr handle (Lean 4.26+: no world token; the stream object is
+    /// returned directly).
+    #[cfg(lean_4_26)]
+    pub fn lean_get_stderr() -> lean_obj_res;
 }
 
 // ============================================================================
