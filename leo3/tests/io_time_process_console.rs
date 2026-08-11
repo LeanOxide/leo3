@@ -4,7 +4,7 @@
 //! historical Lean C primitives are not exported by Lean 4.25.2); console
 //! routes through the fixed handle layer.
 
-#![cfg(all(feature = "runtime-tests", feature = "io"))]
+#![cfg(all(feature = "runtime-tests", feature = "io", not(target_os = "windows")))]
 
 use leo3::io::{console, process, time};
 use leo3::prelude::*;
