@@ -8,7 +8,7 @@
 //! - `Cow<str>` / `Cow<[u8]>` convert like their owned counterparts.
 //! - tuples up to arity 12 (PyO3's limit).
 
-#![cfg(feature = "runtime-tests")]
+#![cfg(all(feature = "runtime-tests", lean_4_22))]
 
 use leo3::conversion::FromLean;
 use leo3::prelude::*;

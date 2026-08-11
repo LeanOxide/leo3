@@ -209,12 +209,6 @@ extern "C" fn io_unit_impl(
 /// * `handle` - The file handle to read from
 /// * `size` - Number of bytes to read
 ///
-/// # Example
-///
-/// ```rust,ignore
-/// use leo3::prelude::*;
-/// Read up to `size` bytes from a file handle.
-///
 /// Returns a `LeanByteArray`; convert with `to_vec()` or
 /// `leo3::conversion::vec_u8_from_lean`.
 ///

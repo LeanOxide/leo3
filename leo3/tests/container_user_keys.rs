@@ -6,7 +6,7 @@
 //! `LeanRBMapKey`, so it can be used as a `LeanHashMap`, `LeanHashSet`, or
 //! `LeanRBMap` key.
 
-#![cfg(all(feature = "macros", feature = "runtime-tests"))]
+#![cfg(all(feature = "macros", feature = "runtime-tests", lean_4_22))]
 
 use leo3::external::{LeanExternal, LeanExternalType};
 use leo3::prelude::*;
