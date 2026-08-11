@@ -320,6 +320,10 @@ impl LeanConstantInfo {
     pub fn name<'l>(cinfo: &LeanBound<'l, Self>) -> LeanResult<LeanBound<'l, LeanName>> {
         unsafe {
             let lean = cinfo.lean_token();
+            // The bound `l_Lean_ConstantInfo_*` symbols consume their
+            // `ConstantInfo` argument (verified against the 4.25.2 runtime
+            // disassembly), so hand over an owned reference.
+            ffi::lean_inc(cinfo.as_ptr());
             let ptr = ffi::environment::lean_constant_info_name(cinfo.as_ptr());
             Ok(LeanBound::from_owned_ptr(lean, ptr))
         }
@@ -337,6 +341,10 @@ impl LeanConstantInfo {
     ) -> LeanResult<LeanBound<'l, super::expr::LeanExpr>> {
         unsafe {
             let lean = cinfo.lean_token();
+            // The bound `l_Lean_ConstantInfo_*` symbols consume their
+            // `ConstantInfo` argument (verified against the 4.25.2 runtime
+            // disassembly), so hand over an owned reference.
+            ffi::lean_inc(cinfo.as_ptr());
             let ptr = ffi::environment::lean_constant_info_type(cinfo.as_ptr());
             Ok(LeanBound::from_owned_ptr(lean, ptr))
         }
@@ -352,6 +360,10 @@ impl LeanConstantInfo {
     pub fn level_params<'l>(cinfo: &LeanBound<'l, Self>) -> LeanResult<LeanBound<'l, LeanList>> {
         unsafe {
             let lean = cinfo.lean_token();
+            // The bound `l_Lean_ConstantInfo_*` symbols consume their
+            // `ConstantInfo` argument (verified against the 4.25.2 runtime
+            // disassembly), so hand over an owned reference.
+            ffi::lean_inc(cinfo.as_ptr());
             let ptr = ffi::environment::lean_constant_info_level_params(cinfo.as_ptr());
             Ok(LeanBound::from_owned_ptr(lean, ptr))
         }
@@ -408,6 +420,10 @@ impl LeanConstantInfo {
 
         unsafe {
             let lean = cinfo.lean_token();
+            // The bound `l_Lean_ConstantInfo_*` symbols consume their
+            // `ConstantInfo` argument (verified against the 4.25.2 runtime
+            // disassembly), so hand over an owned reference.
+            ffi::lean_inc(cinfo.as_ptr());
             let ptr = ffi::environment::lean_constant_info_value(cinfo.as_ptr());
             Ok(Some(LeanBound::from_owned_ptr(lean, ptr)))
         }

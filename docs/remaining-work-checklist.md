@@ -316,18 +316,40 @@ Code evidence:
 
 These were surfaced by the 2026-08 coverage pass. They are latent (triggered
 only by specific `meta` API sequences) and require precise ABI verification
-against Lean's runtime, so they are tracked here rather than fixed blindly:
+against Lean's runtime, so they are tracked here rather than fixed blindly.
 
-- `l_Lean_ConstantInfo_*` accessors consume their argument per Lean's ABI,
-  but `leo3/src/meta/environment.rs` passes borrowed pointers; repeated
-  access is a use-after-free (tests pass `cinfo.clone()` per accessor to
-  work around it)
-- `lean_local_ctx_find_from_user_name` / `lean_local_decl_fvar_id` /
-  `lean_local_ctx_num_indices` are declared as borrowed in
-  `leo3/src/meta/context.rs` but the bound symbols consume their argument,
-  causing heap corruption; the corresponding
-  `goal_hypothesis` / `goal_latest_hypothesis` / `assumption`-success tests
-  are omitted until the declarations are fixed
+Fixed in the 2026-08 audit (each verified against the 4.25.2 runtime
+disassembly, tested on 4.25.2 and 4.32.2):
+
+- `l_Lean_ConstantInfo_name/type/levelParams/value_x21` **do** consume their
+  `ConstantInfo` argument (the disassembly decrements it); the accessors now
+  hand over an owned reference via `lean_inc`. `hasValue` is genuinely
+  borrowed and unchanged. `l_Lean_LocalDecl_fvarId/userName/type` are
+  borrowed-parameter, owned-return getters and were already correct.
+- `lean_local_ctx_num_indices` and `lean_local_ctx_get_at` **do** consume
+  the local context (disassembly shows the inline decrement); the
+  `goal_latest_hypothesis` path now passes owned references. Their
+  `Option LocalDecl` results wrap a context-owned declaration, so the
+  results are unpacked by taking an owned reference to the wrapped decl and
+  dropping the fresh wrapper (`unpack_option_local_decl`) instead of
+  double-freeing the declaration.
+- `lean_local_ctx_find_from_user_name` is genuinely borrowed on the
+  parameter side (no decrement in the disassembly); the wrapper-unpacking
+  fix above applies to its result too.
+
+Remaining:
+
+- **`MetaM.run` (run_persistent) corrupts the Lean heap when the computation
+  assigns a metavariable** (`exact`/`apply` success paths; reproduced on
+  4.25.2 and 4.32.2, confirmed by ASan: the runtime mutates the Meta.State
+  object in place and double-drops the returned state). The value and state
+  unpacking of the returned `(α, Meta.State)` pair is verified correct
+  (field 0/1 of the EIO ok value); attempts to compensate with extra
+  `lean_inc`s or by leaking the pair do not help, so the corruption happens
+  inside the runtime's own state threading. `checked_assign` keeps using
+  `run_persistent` (the `MetaM.run'` variant returns the wrong result for
+  assignments), and the end-to-end success test is `#[ignore]`d
+  (`test_tactic_checked_assign_positive.rs`) until this is understood.
 - `lean_finalize_task_manager` on Lean 4.25.2 has a runtime join race that
   occasionally hangs the process (timing-dependent; also triggered by
   llvm-cov instrumentation). `LeanTask::spawn` no longer depends on Lean's

@@ -93,6 +93,26 @@ pub(crate) struct MVarDeclParts<'l> {
     pub local_instances: LeanBound<'l, LeanAny>,
 }
 
+/// Unpack an `Option LocalDecl` returned by the local-context lookups.
+///
+/// The `some` wrapper is freshly allocated (owned by the caller), but the
+/// wrapped `LocalDecl` is still owned by the local context (borrowed). Take
+/// an owned reference to the declaration and drop the wrapper, so the
+/// declaration's refcount stays balanced when the context is released.
+unsafe fn unpack_option_local_decl(
+    lean: Lean<'_>,
+    raw: *mut ffi::lean_object,
+) -> LeanBound<'_, LeanAny> {
+    if ffi::inline::lean_ctor_num_objs(raw) == 1 {
+        let inner = ffi::lean_ctor_get(raw, 0) as *mut ffi::lean_object;
+        ffi::lean_inc(inner);
+        ffi::lean_dec(raw);
+        LeanBound::<LeanAny>::from_owned_ptr(lean, inner)
+    } else {
+        LeanBound::<LeanAny>::from_owned_ptr(lean, raw)
+    }
+}
+
 impl<'l> MetaMContext<'l> {
     /// Create a new `MetaMContext` from an environment.
     ///
@@ -565,15 +585,7 @@ impl<'l> MetaMContext<'l> {
                     "goal_hypothesis: no local declaration with that user name",
                 ));
             }
-            let raw = LeanBound::<LeanAny>::from_owned_ptr(self.lean, raw);
-            let local_decl = if ffi::inline::lean_ctor_num_objs(raw.as_ptr()) == 1 {
-                LeanBound::<LeanAny>::from_borrowed_ptr(
-                    self.lean,
-                    ffi::lean_ctor_get(raw.as_ptr(), 0),
-                )
-            } else {
-                raw
-            };
+            let local_decl = unpack_option_local_decl(self.lean, raw);
             let fvar_id = ffi::meta::lean_local_decl_fvar_id(local_decl.as_ptr());
             let fvar_id = LeanBound::<LeanAny>::from_owned_ptr(self.lean, fvar_id).cast();
             LeanExpr::fvar(self.lean, fvar_id)
@@ -587,7 +599,12 @@ impl<'l> MetaMContext<'l> {
     ) -> LeanResult<LeanBound<'l, LeanExpr>> {
         let decl = self.get_mvar_decl(goal)?;
         unsafe {
-            let num = ffi::meta::lean_local_ctx_num_indices(decl.lctx.as_ptr());
+            // `lean_local_ctx_num_indices` and `lean_local_ctx_get_at` both
+            // consume the local context (verified against the 4.25.2 runtime
+            // disassembly), so hand over owned references.
+            let lctx_ptr = decl.lctx.as_ptr();
+            ffi::lean_inc(lctx_ptr);
+            let num = ffi::meta::lean_local_ctx_num_indices(lctx_ptr);
             let num = LeanBound::<LeanNat>::from_owned_ptr(self.lean, num);
             let num = LeanNat::to_usize(&num)?;
             if num == 0 {
@@ -597,7 +614,8 @@ impl<'l> MetaMContext<'l> {
             }
 
             let index = LeanNat::from_usize(self.lean, num - 1)?;
-            let raw = ffi::meta::lean_local_ctx_get_at(decl.lctx.as_ptr(), index.into_ptr());
+            ffi::lean_inc(lctx_ptr);
+            let raw = ffi::meta::lean_local_ctx_get_at(lctx_ptr, index.as_ptr());
             if ffi::inline::lean_is_scalar(raw) {
                 return Err(LeanError::other(
                     "goal_latest_hypothesis: missing declaration at last local-context index",

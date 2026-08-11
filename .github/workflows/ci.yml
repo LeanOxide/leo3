@@ -265,6 +265,10 @@ jobs:
     name: Heavy / Careful (UB detection)
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'CI-build-full')
     runs-on: ubuntu-latest
+    # The default 6h cap turns a hung runner into a full CI stall; 2h is
+    # ample for the instrumented full-suite run (observed 1-1.5h when it
+    # works) and fails fast when the runner wedges without output.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
       # Pin the toolchain: the 2026-08-10 nightly ships a broken `libstd`
@@ -297,6 +301,7 @@ jobs:
     name: Heavy / AddressSanitizer
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'CI-build-full')
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@nightly

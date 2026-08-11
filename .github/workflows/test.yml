@@ -30,6 +30,10 @@ jobs:
     test:
         name: ${{ inputs.suite }} (${{ inputs.os }}, Lean ${{ inputs.lean }})
         runs-on: ${{ inputs.os }}
+        # 2h covers cold toolchain downloads + full-suite builds; a wedged
+        # runner (observed with no output on ubuntu nightly) fails fast
+        # instead of eating the 6h default.
+        timeout-minutes: 120
         steps:
             - uses: actions/checkout@v6
 
