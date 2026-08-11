@@ -426,8 +426,10 @@ jobs:
         env "$LIBPATH_VAR=$PWD/../native/target/release" .lake/build/bin/app
         APP_EXIT=$?
         if [ "$RUNNER_OS" = "macOS" ] && [ $APP_EXIT -ne 0 ]; then
-          echo "app exited with $APP_EXIT, capturing dyld bind trace"
-          DYLD_PRINT_LIBRARIES=1 DYLD_PRINT_BINDINGS=1 env "$LIBPATH_VAR=$PWD/../native/target/release" .lake/build/bin/app 2>&1 | tail -40 || true
+          echo "app exited with $APP_EXIT, checking Lean itself"
+          lean --version
+          printf 'def main : IO Unit := IO.println "minimal-lean-ok"\n' > /tmp/min.lean
+          lean /tmp/min.lean 2>&1 | tail -5 || echo "minimal lean run failed"
           echo "main after app"; echo "::endgroup::"
         elif [ "$RUNNER_OS" = "macOS" ]; then
           echo "main after app"; echo "::endgroup::"
