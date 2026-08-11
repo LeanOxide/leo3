@@ -430,17 +430,24 @@ mod module_loading_ops {
     }
 
     fn build_fixture(target_dir: &Path, fixture: &str) -> PathBuf {
-        let status = Command::new("cargo")
+        let output = Command::new("cargo")
             .arg("build")
             .arg("--quiet")
             .arg("--manifest-path")
             .arg(fixture_manifest(fixture))
             .env("CARGO_TARGET_DIR", target_dir)
             .env("LEO3_NO_LEAN", "1")
-            .status()
+            .output()
             .expect("fixture cargo build should start");
 
-        assert!(status.success(), "fixture cargo build failed: {status}");
+        assert!(
+            output.status.success(),
+            "fixture cargo build failed: {}
+stderr:
+{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
 
         target_dir.join("debug").join(dylib_name(fixture))
     }
