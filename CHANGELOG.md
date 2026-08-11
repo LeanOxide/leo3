@@ -8,7 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-### Added
+- `io` now runs on **Lean 4.26 through 4.33** (and still 4.20/4.25): the
+  runtime split that erased the `world` token from the IO primitives and
+  from `EStateM.Result` (ctor `(0, 1)`), turned
+  `lean_io_prim_handle_is_eof` into a raw `uint8_t`, and made
+  `lean_get_stdin/stdout/stderr` parameterless is handled by `lean_4_26`
+  version gates on the FFI declarations and the wrappers
+- CI: the compat matrix now passes on Windows (the PE format forbids
+  unresolved symbols in DLLs, so the dynamic-module test fixtures link the
+  Lean runtime instead of building no-lean)
 - `examples/class-integration/`: end-to-end Lean↔Rust template for the macro
   pipeline — a `cdylib` built with `#[leanclass]` (methods, `#[getter]` /
   `#[setter]`) plus `#[leanfn]` / `#[leanmodule]`, a reproducible

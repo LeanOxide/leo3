@@ -267,7 +267,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      # Pin the toolchain: the 2026-08-10 nightly ships a broken `libstd`
+      # (cargo-careful cannot even load the test harness) and the 2026-08-11
+      # nightly hangs the job without any output. 2026-08-03 is the last
+      # nightly verified to run cargo-careful cleanly.
       - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-08-03
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'CI-save-pr-cache') }}

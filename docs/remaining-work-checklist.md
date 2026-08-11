@@ -277,6 +277,19 @@ Status:
   is now covered by runtime tests (previously the handle primitives were
   called with a stale C signature and never worked on any modern Lean
   release).
+- **Lean 4.26–4.33 support landed** (2026-08): Lean 4.26 erased the `world`
+  token from every IO primitive and from `EStateM.Result` (the ok
+  constructor carries one field instead of two), turned
+  `lean_io_prim_handle_is_eof` into a raw `uint8_t`, and made
+  `lean_get_stdin/stdout/stderr` parameterless with the stream returned
+  directly. The FFI declarations and wrappers are version-gated on
+  `lean_4_26`, so 4.20/4.25 (world-based ABI) and 4.26+ both work; verified
+  locally against 4.25.2 and 4.32.2 and by the compat matrix
+  (ubuntu/macos/windows × v4.20.0/stable/beta/nightly).
+- Windows: dynamic-module test fixtures now link the Lean runtime instead
+  of building no-lean (the PE format forbids unresolved symbols in DLLs,
+  where ELF/Mach-O resolve them lazily), fixing the LNK2019 link failures
+  in the `meta` fixture tests.
 
 What landed:
 
