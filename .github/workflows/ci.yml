@@ -417,7 +417,14 @@ jobs:
         git diff --exit-code -- lean
         cd lean
         lake build app
+        if [ "$RUNNER_OS" = "macOS" ]; then
+          echo "::group::dylib diagnostics"
+          otool -L ../native/target/release/libclass_integration.dylib
+          nm -u ../native/target/release/libclass_integration.dylib
+          echo "main before app"
+        fi
         env "$LIBPATH_VAR=$PWD/../native/target/release" .lake/build/bin/app
+        if [ "$RUNNER_OS" = "macOS" ]; then echo "main after app"; echo "::endgroup::"; fi
         cd ../../..
         echo "::endgroup::"
 
