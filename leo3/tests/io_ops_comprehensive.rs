@@ -69,7 +69,7 @@ impl Drop for TestDir {
 
 #[test]
 fn test_console_streams() {
-    let _lock = GLOBAL_LOCK.lock().unwrap();
+    let _lock = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     leo3::prepare_freethreaded_lean();
 
     let result: LeanResult<()> = leo3::with_lean(|lean| {
@@ -108,7 +108,7 @@ fn test_handle_file_mode_variants() {
 
 #[test]
 fn test_fs_string_and_bytes_roundtrips() {
-    let _lock = GLOBAL_LOCK.lock().unwrap();
+    let _lock = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     leo3::prepare_freethreaded_lean();
     let test_dir = TestDir::new("fs_roundtrip");
 
@@ -144,7 +144,7 @@ fn test_fs_string_and_bytes_roundtrips() {
 
 #[test]
 fn test_fs_error_paths() {
-    let _lock = GLOBAL_LOCK.lock().unwrap();
+    let _lock = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     leo3::prepare_freethreaded_lean();
     let test_dir = TestDir::new("fs_errors");
 
@@ -177,7 +177,7 @@ fn test_fs_error_paths() {
 
 #[test]
 fn test_fs_cwd() {
-    let _lock = GLOBAL_LOCK.lock().unwrap();
+    let _lock = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     leo3::prepare_freethreaded_lean();
 
     let result: LeanResult<()> = leo3::with_lean(|lean| {
@@ -195,12 +195,16 @@ fn test_fs_cwd() {
 
 #[test]
 fn test_env_home() {
-    let _lock = GLOBAL_LOCK.lock().unwrap();
+    let _lock = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     leo3::prepare_freethreaded_lean();
 
     let result: LeanResult<()> = leo3::with_lean(|lean| {
-        let home = env::get_env(lean, "HOME")?;
-        assert!(home.is_some(), "HOME should be set in the test environment");
+        // Windows runners use USERPROFILE instead of HOME.
+        let home = env::get_env(lean, "HOME")?.or(env::get_env(lean, "USERPROFILE")?);
+        assert!(
+            home.is_some(),
+            "HOME/USERPROFILE should be set in the test environment"
+        );
         assert!(!home.unwrap().is_empty());
         Ok::<_, LeanError>(())
     });
@@ -209,7 +213,7 @@ fn test_env_home() {
 
 #[test]
 fn test_env_set_get_unset_roundtrip() {
-    let _lock = GLOBAL_LOCK.lock().unwrap();
+    let _lock = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     leo3::prepare_freethreaded_lean();
 
     let result: LeanResult<()> = leo3::with_lean(|lean| {
@@ -308,7 +312,7 @@ fn test_leanerror_to_ioerror_conversion() {
 
 #[test]
 fn test_leanio_pure_and_run() {
-    let _lock = GLOBAL_LOCK.lock().unwrap();
+    let _lock = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     leo3::prepare_freethreaded_lean();
 
     let result: LeanResult<()> = leo3::with_lean(|lean| {
@@ -327,7 +331,7 @@ fn test_leanio_pure_and_run() {
 
 #[test]
 fn test_leanio_map() {
-    let _lock = GLOBAL_LOCK.lock().unwrap();
+    let _lock = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     leo3::prepare_freethreaded_lean();
 
     let result: LeanResult<()> = leo3::with_lean(|lean| {
@@ -351,7 +355,7 @@ fn test_leanio_map() {
 
 #[test]
 fn test_leanio_bind() {
-    let _lock = GLOBAL_LOCK.lock().unwrap();
+    let _lock = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     leo3::prepare_freethreaded_lean();
 
     let result: LeanResult<()> = leo3::with_lean(|lean| {
