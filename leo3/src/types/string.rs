@@ -39,7 +39,7 @@ impl LeanString {
         unsafe {
             // Length-aware copy: no intermediate CString allocation, no strlen
             // on extraction, and embedded NUL bytes round-trip unchanged.
-            let ptr = ffi::string::lean_mk_string_from_bytes_unchecked(
+            let ptr = ffi::string::lean_mk_string_from_bytes(
                 s.as_ptr() as *const libc::c_char,
                 s.len(),
             );
