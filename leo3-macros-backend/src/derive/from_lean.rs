@@ -14,7 +14,10 @@ pub fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
         TypeData::Enum(enum_info) => expand_enum(&type_info, enum_info),
     };
 
-    Ok(impl_tokens)
+    Ok(quote! {
+        #[allow(clippy::redundant_field_names)]
+        #impl_tokens
+    })
 }
 
 /// Generate FromLean implementation for a struct.
