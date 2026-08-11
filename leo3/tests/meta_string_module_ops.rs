@@ -436,7 +436,6 @@ mod module_loading_ops {
             .arg("--manifest-path")
             .arg(fixture_manifest(fixture))
             .env("CARGO_TARGET_DIR", target_dir)
-            .env("LEO3_NO_LEAN", "1")
             .output()
             .expect("fixture cargo build should start");
 
