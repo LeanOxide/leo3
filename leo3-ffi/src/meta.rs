@@ -485,10 +485,17 @@ extern "C" {
     #[cfg(lean_4_25)]
     pub static l_Lean_instInhabitedDeclNameGenerator: *mut lean_object;
     pub static l_Lean_instInhabitedSyntax: *mut lean_object;
+    /// `Std.HashSet.empty` specialized for `Name` — BSS static object.
+    pub static l_Lean_NameHashSet_empty: *mut lean_object;
+    /// `EmptyCollection NameSet` instance record.
+    pub static l_Lean_NameHashSet_instEmptyCollection: *mut lean_object;
     pub static l_Lean_instInhabitedFileMap: *mut lean_object;
-    // Building-block symbols for PersistentHashMap/PersistentArray/KVMap
-    pub static l_Lean_PersistentHashMap_empty: *mut lean_object;
-    pub static l_Lean_PersistentArray_empty: *mut lean_object;
+    // Building-block symbols for PersistentHashMap/PersistentArray/KVMap.
+    // `empty` for PersistentHashMap/PersistentArray are 0-arg thunks (`T`
+    // text symbols), so they are declared as functions; `KVMap.empty` is a
+    // BSS static object.
+    pub fn l_Lean_PersistentHashMap_empty() -> *mut lean_object;
+    pub fn l_Lean_PersistentArray_empty() -> *mut lean_object;
     pub static l_Lean_KVMap_empty: *mut lean_object;
 }
 
@@ -755,7 +762,8 @@ pub unsafe fn get_PersistentHashMapEmpty() -> *mut lean_object {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        l_Lean_PersistentHashMap_empty
+        // `l_Lean_PersistentHashMap_empty` is a 0-arg thunk (`T` text symbol).
+        l_Lean_PersistentHashMap_empty()
     }
     #[cfg(target_os = "windows")]
     {
@@ -803,7 +811,9 @@ pub unsafe fn get_PersistentArrayEmpty() -> *mut lean_object {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        l_Lean_PersistentArray_empty
+        // `l_Lean_PersistentArray_empty` is a 0-arg thunk (a `T` text symbol:
+        // `mov <closed>, %rax; ret`), not a static object — call it.
+        l_Lean_PersistentArray_empty()
     }
     #[cfg(target_os = "windows")]
     {
@@ -841,6 +851,19 @@ pub unsafe fn get_PersistentArrayEmpty() -> *mut lean_object {
 /// On Windows, tries `GetProcAddress` first, then returns `lean_box(0)`.
 /// KVMap.empty is a zero-field enum (tag 0).
 #[inline]
+/// Get the empty `NameSet` (`Std.HashSet Name`) singleton (BSS static).
+#[inline]
+pub unsafe fn get_NameHashSetEmpty() -> *mut lean_object {
+    #[cfg(not(target_os = "windows"))]
+    {
+        l_Lean_NameHashSet_empty
+    }
+    #[cfg(target_os = "windows")]
+    {
+        win_bss::lookup_bss_global("l_Lean_NameHashSet_empty")
+    }
+}
+
 pub unsafe fn get_KVMapEmpty() -> *mut lean_object {
     if force_manual_meta_defaults() {
         return lean_box(0);

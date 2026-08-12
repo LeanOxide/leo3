@@ -63,7 +63,7 @@ bss_accessor!(/// The `Inhabited Term.State` record (Windows-safe).
 pub unsafe fn persistent_array_empty() -> *mut lean_object {
     #[cfg(not(target_os = "windows"))]
     {
-        super::l_Lean_PersistentArray_empty
+        super::l_Lean_PersistentArray_empty()
     }
     #[cfg(target_os = "windows")]
     {
@@ -114,6 +114,24 @@ extern "C" {
         meta_state_ref: lean_obj_arg,
         core_ctx: lean_obj_arg,
         core_state_ref: lean_obj_arg,
+        world: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+// ============================================================================
+// Command elaboration (5-arg direct call)
+// ============================================================================
+
+extern "C" {
+    /// `Lean.Elab.Command.elabCommand` — direct mixed-ABI call:
+    /// `(stx, cmdCtx, cmdStateRef : IO.Ref Command.State, cmdState : Command.State,
+    ///  world) → IO Command.State` (Result.ok (state, unit)).
+    #[link_name = "l_Lean_Elab_Command_elabCommand"]
+    pub fn lean_elab_command_5(
+        stx: lean_obj_arg,
+        cmd_ctx: lean_obj_arg,
+        cmd_state_ref: lean_obj_arg,
+        cmd_state: lean_obj_arg,
         world: lean_obj_arg,
     ) -> lean_obj_res;
 }

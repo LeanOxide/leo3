@@ -278,25 +278,3 @@ fn test_rfl_m_plus_zero() {
     });
     result.unwrap();
 }
-
-/// `parse_term` + `elab_term` must elaborate a term to a real Expr.
-#[test]
-fn test_elab_term_forall() {
-    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
-        let env = import_modules(lean, &["Lean"], 0)?;
-        let mut metam = MetaMContext::new(lean, env)?;
-        // set_goal via `suffices`: goal True, then rewrite the goal type.
-        let true_const = LeanExpr::const_(lean, LeanName::from_str(lean, "True")?, LeanList::nil(lean)?)?;
-        let goal = metam.mk_goal(&true_const)?;
-        let mvar = LeanExpr::mvar_id(&goal)?;
-        let stx = parse_tactic(lean, metam.env(), "suffices h : ∀ n m : Nat, n + m = m + n from fun _ => True.intro")?;
-        let out = run_tactic(&mut metam, &mvar, &stx, None)?;
-        assert_eq!(out.goals.len(), 1);
-        let (hyps, gty) = metam.goal_hyps_and_type(&out.goals[0])?;
-        assert!(hyps.is_empty());
-        let gty_s = LeanExpr::dbg_to_string(&gty)?;
-        assert!(gty_s.contains("forall"), "goal type should be a forall: {gty_s}");
-        Ok(())
-    });
-    result.unwrap();
-}

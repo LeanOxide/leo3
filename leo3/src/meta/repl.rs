@@ -109,7 +109,7 @@ pub fn finalize_initialization() {
         }
     }
 }
-use crate::instance::LeanBound;
+use crate::instance::{LeanAny, LeanBound};
 use crate::marker::Lean;
 use crate::meta::environment::LeanEnvironment;
 use crate::meta::expr::LeanExpr;
@@ -518,6 +518,52 @@ pub fn parse_tactic<'l>(
 /// empty (its default uses the *process executable* directory), so callers
 /// must initialize it before importing modules. Idempotent: re-invoking
 /// replaces the path with the same value.
+
+/// Parse a command string using Lean's real parser (`command` category).
+pub fn parse_command<'l>(
+    lean: Lean<'l>,
+    env: &LeanBound<'l, LeanEnvironment>,
+    input: &str,
+) -> LeanResult<LeanBound<'l, LeanExpr>> {
+    crate::runtime::ensure_meta_initialized();
+    unsafe {
+        let cat = LeanName::from_str(lean, "command")?;
+        let input_obj = crate::types::LeanString::mk(lean, input)?;
+        let file = crate::types::LeanString::mk(lean, "<stdin>")?;
+
+        let result = apply_curried(
+            ffi::meta::repl::lean_parser_run_parser_category as *mut std::ffi::c_void,
+            4,
+            &[
+                {
+                    ffi::lean_inc(env.as_ptr());
+                    env.as_ptr()
+                },
+                cat.into_ptr(),
+                input_obj.into_ptr(),
+                file.into_ptr(),
+            ],
+        );
+
+        if ffi::lean_obj_tag(result) == 1 {
+            let syntax = ffi::lean_ctor_get(result, 0) as *mut ffi::lean_object;
+            ffi::lean_inc(syntax);
+            ffi::lean_dec(result);
+            Ok(LeanBound::from_owned_ptr(lean, syntax))
+        } else {
+            let err = ffi::lean_ctor_get(result, 0) as *mut ffi::lean_object;
+            let c_str = ffi::inline::lean_string_cstr(err);
+            let message = if c_str.is_null() {
+                "<unprintable>".to_string()
+            } else {
+                std::ffi::CStr::from_ptr(c_str).to_string_lossy().into_owned()
+            };
+            ffi::lean_dec(result);
+            Err(LeanError::other(format!("command parse error: {message}").as_str()))
+        }
+    }
+}
+
 pub fn init_search_path<'l>(lean: Lean<'l>, sysroot: &str) -> LeanResult<()> {
     crate::runtime::ensure_meta_initialized();
     unsafe {
@@ -835,3 +881,193 @@ pub fn run_tactic<'l>(
     }
 }
 
+
+// ============================================================================
+// Command execution (run_cmd)
+// ============================================================================
+
+/// Execute a parsed command via `Lean.Elab.Command.elabCommand` (5-arg
+/// direct: `(stx, cmdCtx, cmdStateRef, cmdState, world)`), returning the
+/// updated `Environment` from the final `Command.State`.
+pub fn run_command<'l>(
+    lean: Lean<'l>,
+    metam: &crate::meta::metam::MetaMContext<'l>,
+    stx: &LeanBound<'l, LeanExpr>,
+) -> LeanResult<LeanBound<'l, LeanEnvironment>> {
+    unsafe {
+        let cmd_ctx = mk_command_context(lean)?;
+        let env = metam.env().clone();
+
+        let stx_ptr = {
+            ffi::lean_inc(stx.as_ptr());
+            stx.as_ptr()
+        };
+        let result = crate::runtime::run_worker(move || unsafe {
+            let cmd_state_owned = mk_command_state(lean, &env)?;
+            let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, ffi::lean_box(0));
+            let cmd_state_ref = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
+            // `io_result_mk_ok` returns a 1-field ctor; the unit world is
+            // erased — thread a fresh box(0).
+            let world = ffi::lean_box(0);
+            ffi::lean_inc(cmd_state_ref);
+            ffi::lean_dec(ref_result);
+            // elabCommand consumes the initial Command.State value.
+            let result = ffi::meta::repl::lean_elab_command_5(
+                stx_ptr,
+                cmd_ctx.into_ptr(),
+                cmd_state_ref,
+                cmd_state_owned,
+                world,
+            );
+            // IO Command.State = EStateM.Result.ok (state, unit)
+            let pair = crate::meta::metam::handle_eio_result(result)?;
+            let state = ffi::lean_ctor_get(pair, 0) as *mut ffi::lean_object;
+            ffi::lean_inc(state);
+            ffi::lean_dec(pair);
+            // Command.State field 0 = Environment.
+            let env_out = ffi::lean_ctor_get(state, 0) as *mut ffi::lean_object;
+            ffi::lean_inc(env_out);
+            ffi::lean_dec(state);
+            Ok::<*mut ffi::lean_object, LeanError>(env_out)
+        })?;
+        Ok(LeanBound::from_owned_ptr(lean, result))
+    }
+}
+
+/// Build a default `Lean.Elab.Command.Context` (v4.25 layout: 10 object
+/// fields + 1 Bool scalar: suppressElabErrors).
+unsafe fn mk_command_context<'l>(lean: Lean<'l>) -> LeanResult<LeanBound<'l, LeanAny>> {
+    let ctx = ffi::lean_alloc_ctor(0, 10, 1);
+    // 0: fileName
+    let file_name = crate::types::LeanString::mk(lean, "<stdin>")?;
+    ffi::lean_ctor_set(ctx, 0, file_name.into_ptr());
+    // 1: fileMap (BSS static, no inc — dec is a no-op)
+    let file_map = ffi::meta::get_instInhabitedFileMap();
+    if file_map.is_null() {
+        return Err(LeanError::other("instInhabitedFileMap unavailable"));
+    }
+    ffi::lean_ctor_set(ctx, 1, file_map);
+    // 2: currRecDepth = 0
+    ffi::lean_ctor_set(ctx, 2, ffi::lean_box(0));
+    // 3: cmdPos = 0
+    ffi::lean_ctor_set(ctx, 3, ffi::lean_box(0));
+    // 4: macroStack = []
+    ffi::lean_ctor_set(ctx, 4, ffi::lean_box(0));
+    // 5: quotContext? = none
+    ffi::lean_ctor_set(ctx, 5, ffi::lean_box(0));
+    // 6: currMacroScope = firstFrontendMacroScope = 1
+    ffi::lean_ctor_set(ctx, 6, ffi::lean_box(1));
+    // 7: ref = Syntax.missing (BSS static)
+    let syntax = ffi::meta::get_instInhabitedSyntax();
+    if syntax.is_null() {
+        return Err(LeanError::other("instInhabitedSyntax unavailable"));
+    }
+    ffi::lean_ctor_set(ctx, 7, syntax);
+    // 8: snap? = none
+    ffi::lean_ctor_set(ctx, 8, ffi::lean_box(0));
+    // 9: cancelTk? = none
+    ffi::lean_ctor_set(ctx, 9, ffi::lean_box(0));
+    // scalar 0: suppressElabErrors = false
+    ffi::inline::lean_ctor_set_uint8(ctx, 10 * 8, 0);
+    Ok(LeanBound::from_owned_ptr(lean, ctx))
+}
+
+/// Build a `Lean.Elab.Command.State` (v4.25 layout, 8 object fields) from an
+/// environment.
+unsafe fn mk_command_state<'l>(
+    lean: Lean<'l>,
+    env: &LeanBound<'l, LeanEnvironment>,
+) -> LeanResult<*mut ffi::lean_object> {
+    // Command.State has 11 object fields on v4.25:
+    // env, messages, scopes, usedQuotCtxts, nextMacroScope, maxRecDepth,
+    // ngen, auxDeclNGen, infoState, traceState, snapshotTasks.
+    let state = ffi::lean_alloc_ctor(0, 11, 0);
+    // 0: env
+    let env_ptr = env.as_ptr();
+    ffi::lean_inc(env_ptr);
+    ffi::lean_ctor_set(state, 0, env_ptr);
+    // 1: messages = MessageLog { reported := ∅, unreported := ∅ }
+    let pa = ffi::meta::get_PersistentArrayEmpty();
+    if pa.is_null() {
+        return Err(LeanError::other("PersistentArray.empty unavailable"));
+    }
+    let msg_log = ffi::lean_alloc_ctor(0, 2, 0);
+    ffi::lean_ctor_set(msg_log, 0, pa);
+    ffi::lean_ctor_set(msg_log, 1, pa);
+    ffi::lean_ctor_set(state, 1, msg_log);
+    // 2: scopes = [ base Scope ] — Scope has 10 object fields + 4 Bool
+    // scalars: header, opts, currNamespace, openDecls, levelNames,
+    // varDecls, varUIds, includedVars, omittedVars, attrs, isNoncomputable,
+    // isPublic, isMeta.
+    let empty_str = ffi::string::lean_mk_string_from_bytes(b"".as_ptr() as *const _, 0);
+    let scope = ffi::lean_alloc_ctor(0, 10, 4);
+    ffi::lean_ctor_set(scope, 0, empty_str);                    // header
+    let opts = ffi::meta::get_KVMapEmpty();                     // opts (empty)
+    ffi::lean_ctor_set(scope, 1, opts);
+    ffi::lean_ctor_set(scope, 2, ffi::lean_box(0));             // currNamespace (anon)
+    ffi::lean_ctor_set(scope, 3, ffi::lean_box(0));             // openDecls []
+    ffi::lean_ctor_set(scope, 4, ffi::lean_box(0));             // levelNames []
+    let empty_arr = ffi::array::lean_mk_empty_array();          // varDecls
+    ffi::lean_ctor_set(scope, 5, empty_arr);
+    let empty_arr2 = ffi::array::lean_mk_empty_array();         // varUIds
+    ffi::lean_ctor_set(scope, 6, empty_arr2);
+    ffi::lean_ctor_set(scope, 7, ffi::lean_box(0));             // includedVars []
+    ffi::lean_ctor_set(scope, 8, ffi::lean_box(0));             // omittedVars []
+    ffi::lean_ctor_set(scope, 9, ffi::lean_box(0));             // attrs []
+    let sb = 10 * 8;
+    ffi::inline::lean_ctor_set_uint8(scope, sb, 0);             // isNoncomputable
+    ffi::inline::lean_ctor_set_uint8(scope, sb + 1, 0);         // isPublic
+    ffi::inline::lean_ctor_set_uint8(scope, sb + 2, 0);         // isMeta
+    ffi::inline::lean_ctor_set_uint8(scope, sb + 3, 0);         // (4th Bool scalar)
+    let scopes = ffi::lean_alloc_ctor(1, 2, 0); // List.cons
+    ffi::lean_ctor_set(scopes, 0, scope);
+    ffi::lean_ctor_set(scopes, 1, ffi::lean_box(0)); // List.nil
+    ffi::lean_ctor_set(state, 2, scopes);
+    // 3: usedQuotCtxts = ∅ — the BSS static `NameHashSet.empty`
+    // (`usedQuotCtxts : NameSet := {}` compiles to this static; rc 0 so
+    // dec is a no-op).
+    let hs = ffi::meta::get_NameHashSetEmpty();
+    if hs.is_null() {
+        return Err(LeanError::other("NameHashSet.empty unavailable"));
+    }
+    ffi::lean_ctor_set(state, 3, hs);
+    // 4: nextMacroScope = firstFrontendMacroScope + 1 = 2
+    ffi::lean_ctor_set(state, 4, ffi::lean_box(2));
+    // 5: maxRecDepth = 1000
+    ffi::lean_ctor_set(state, 5, ffi::lean_box(1000));
+    // 6: ngen (BSS static NameGenerator)
+    let ngen = ffi::meta::get_instInhabitedNameGenerator();
+    if ngen.is_null() {
+        return Err(LeanError::other("instInhabitedNameGenerator unavailable"));
+    }
+    ffi::lean_ctor_set(state, 6, ngen);
+    // 7: auxDeclNGen (BSS static DeclNameGenerator)
+    let aux = ffi::meta::get_instInhabitedDeclNameGenerator();
+    if aux.is_null() {
+        return Err(LeanError::other("instInhabitedDeclNameGenerator unavailable"));
+    }
+    ffi::lean_ctor_set(state, 7, aux);
+    // 8: infoState = InfoState { enabled := true, assignment := ∅,
+    //    lazyAssignment := ∅, trees := ∅ } — 4 fields: 3 objects + 1 Bool
+    //    scalar (enabled).
+    let phm = ffi::meta::get_PersistentHashMapEmpty();
+    if phm.is_null() {
+        return Err(LeanError::other("PersistentHashMap.empty unavailable"));
+    }
+    let info_state = ffi::lean_alloc_ctor(0, 3, 1);
+    ffi::lean_ctor_set(info_state, 0, phm);
+    ffi::lean_ctor_set(info_state, 1, phm);
+    ffi::lean_ctor_set(info_state, 2, pa);
+    ffi::inline::lean_ctor_set_uint8(info_state, 3 * 8, 1); // enabled := true
+    ffi::lean_ctor_set(state, 8, info_state);
+    // 9: traceState = TraceState { tid := 0, traces := ∅ } — 1 object +
+    //    1 UInt64 scalar (tid).
+    let trace_state = ffi::lean_alloc_ctor(0, 1, 1);
+    ffi::lean_ctor_set(trace_state, 0, pa);
+    ffi::lean_ctor_set_uint64(trace_state, 1 * 8, 0);
+    ffi::lean_ctor_set(state, 9, trace_state);
+    // 10: snapshotTasks = #[] (empty Array)
+    let empty_arr = ffi::array::lean_mk_empty_array();
+    ffi::lean_ctor_set(state, 10, empty_arr);
+    Ok(state)
+}
