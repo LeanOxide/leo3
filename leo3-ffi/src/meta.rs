@@ -51,7 +51,21 @@ extern "C" {
     ) -> lean_obj_res;
 }
 
-#[cfg(not(lean_4_26))]
+#[cfg(not(lean_4_22))]
+extern "C" {
+    /// Run a MetaM computation via `MetaM.toIO`, returning
+    /// `IO (α × Core.State × State)` (Lean < 4.22 uses the `_rarg` symbol).
+    pub fn l_Lean_Meta_MetaM_toIO___rarg(
+        x: lean_obj_arg,
+        core_ctx: lean_obj_arg,
+        core_state: lean_obj_arg,
+        ctx: lean_obj_arg,
+        state: lean_obj_arg,
+        world: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+#[cfg(all(lean_4_22, not(lean_4_26)))]
 extern "C" {
     /// Run a MetaM computation via `MetaM.toIO`, returning
     /// `IO (α × Core.State × State)`.
@@ -93,7 +107,11 @@ pub unsafe fn lean_meta_metam_to_io(
     state: lean_obj_arg,
     world: lean_obj_arg,
 ) -> lean_obj_res {
-    #[cfg(not(lean_4_26))]
+    #[cfg(not(lean_4_22))]
+    {
+        l_Lean_Meta_MetaM_toIO___rarg(x, core_ctx, core_state, ctx, state, world)
+    }
+    #[cfg(all(lean_4_22, not(lean_4_26)))]
     {
         l_Lean_Meta_MetaM_toIO___redArg(x, core_ctx, core_state, ctx, state, world)
     }
