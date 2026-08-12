@@ -222,6 +222,26 @@ extern "C" {
     #[link_name = "_ZN4lean25initialize_library_moduleEv"]
     pub fn initialize_library_module();
 
+    /// Initialize the library constructions C++ module
+    #[link_name = "_ZN4lean31initialize_constructions_moduleEv"]
+    pub fn initialize_constructions_module();
+
+    /// Official full-initialization entry (mirrors `lean::lean_initialize`):
+    /// initializes the entire `Init`, `Std`, and `Lean` module trees
+    /// (including Parser/Elab/Meta), plus kernel/library C++ modules.
+    /// Returns the IO result (world on success).
+    #[link_name = "initialize_Init"]
+    pub fn initialize_Init(builtin: u8, w: *mut std::ffi::c_void) -> *mut lean_object;
+
+    /// `initialize_Std` — part of the official `lean_initialize` sequence.
+    #[link_name = "initialize_Std"]
+    pub fn initialize_Std(builtin: u8, w: *mut std::ffi::c_void) -> *mut lean_object;
+
+    /// `initialize_Lean` — initializes every module in the `Lean` tree
+    /// (Expr, Environment, Options, Parser, Elab, Meta, ...).
+    #[link_name = "initialize_Lean"]
+    pub fn initialize_Lean(builtin: u8, w: *mut std::ffi::c_void) -> *mut lean_object;
+
     /// Lean's private importing flag used by `Lean.initializing`.
     ///
     /// This is not part of Lean's public C API, but it is the runtime flag used
@@ -359,6 +379,13 @@ extern "C" {
     ///
     /// Called after program initialization is complete
     pub fn lean_io_mark_end_initialization();
+
+    /// `lean_enable_initializer_execution : IO Unit` — enables executing
+    /// initializers when loading `.olean` files (`importModules (loadExts
+    /// := true)` requires it). Must be called after `init_search_path` and
+    /// before `lean_io_mark_end_initialization` (the lean CLI order).
+    #[link_name = "lean_enable_initializer_execution"]
+    pub fn lean_enable_initializer_execution(w: *mut std::ffi::c_void) -> *mut lean_object;
 
     /// Create a user-defined IO error
     ///

@@ -136,6 +136,8 @@ pub mod tokio_bridge;
 // Re-export key types
 pub use err::{KernelExceptionCode, LeanError, LeanResult};
 pub use instance::{LeanBorrowed, LeanBound, LeanRef};
+pub use instance::LeanAny;
+pub use runtime::run_worker;
 pub use marker::Lean;
 pub use unbound::LeanUnbound;
 

@@ -124,6 +124,7 @@ pub mod level;
 pub mod literal;
 pub mod metam;
 pub mod name;
+pub mod repl;
 pub mod tactic;
 
 // Re-export main types
@@ -136,3 +137,9 @@ pub use literal::LeanLiteral;
 pub use metam::MetaMContext;
 pub use name::{LeanName, NameKind};
 pub use tactic::{apply, assumption, exact, goal_type, intro, rfl, TacticResult, TacticState};
+
+pub use repl::{
+    default_term_context, default_term_state, ensure_search_path, import_modules,
+    import_modules_with_exts, init_search_path, parse_tactic, parse_term, run_tactic,
+    RunTacticOutcome,
+};

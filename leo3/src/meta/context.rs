@@ -190,7 +190,8 @@ impl CoreContext {
             if !force_manual_meta_defaults() {
                 let filemap = ffi::meta::get_instInhabitedFileMap();
                 if !filemap.is_null() {
-                    ffi::lean_inc(filemap);
+                    // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(filemap);
                     return Ok(LeanBound::from_owned_ptr(lean, filemap));
                 }
             }
@@ -219,7 +220,8 @@ impl CoreContext {
             if !force_manual_meta_defaults() {
                 let options = ffi::meta::lean_inhabited_options();
                 if !options.is_null() {
-                    ffi::lean_inc(options);
+                    // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(options);
                     return Ok(LeanBound::from_owned_ptr(lean, options));
                 }
             }
@@ -247,7 +249,8 @@ impl CoreContext {
             if !force_manual_meta_defaults() {
                 let syntax = ffi::meta::get_instInhabitedSyntax();
                 if !syntax.is_null() {
-                    ffi::lean_inc(syntax);
+                    // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(syntax);
                     return Ok(LeanBound::from_owned_ptr(lean, syntax));
                 }
             }
@@ -328,9 +331,9 @@ impl CoreState {
             ffi::lean_inc(env_ptr);
             ffi::lean_ctor_set(state, 0, env_ptr);
 
-            // Field 1: nextMacroScope (MacroScope) - use firstFrontendMacroScope + 1
-            // firstFrontendMacroScope is 0, so we use 1
-            let next_macro_scope = ffi::lean_box(1);
+            // Field 1: nextMacroScope (MacroScope) - firstFrontendMacroScope + 1
+            // (reservedMacroScope = 0, firstFrontendMacroScope = 1 on 4.25)
+            let next_macro_scope = ffi::lean_box(2);
             ffi::lean_ctor_set(state, 1, next_macro_scope);
 
             // Field 2: ngen (NameGenerator) - create new
@@ -387,7 +390,8 @@ impl CoreState {
             if !force_manual_meta_defaults() {
                 let ngen = ffi::meta::get_instInhabitedNameGenerator();
                 if !ngen.is_null() {
-                    ffi::lean_inc(ngen);
+                    // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(ngen);
                     return Ok(LeanBound::from_owned_ptr(lean, ngen));
                 }
             }
@@ -417,7 +421,8 @@ impl CoreState {
         unsafe {
             let decl_ngen = ffi::meta::get_instInhabitedDeclNameGenerator();
             if !decl_ngen.is_null() {
-                ffi::lean_inc(decl_ngen);
+                // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(decl_ngen);
                 return Ok(LeanBound::from_owned_ptr(lean, decl_ngen));
             }
             // Manual construction: DeclNameGenerator { ngen: default, auxNGen: default }
@@ -443,14 +448,16 @@ impl CoreState {
             if !force_manual_meta_defaults() {
                 let trace_state = ffi::meta::get_instInhabitedTraceState();
                 if !trace_state.is_null() {
-                    ffi::lean_inc(trace_state);
+                    // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(trace_state);
                     return Ok(LeanBound::from_owned_ptr(lean, trace_state));
                 }
             }
             // Lean 4.20 TraceState = { tid : UInt64 := 0, traces := #[] }.
             let ts = ffi::lean_alloc_ctor(0, 1, 8);
             let pa_empty = ffi::meta::get_PersistentArrayEmpty();
-            ffi::lean_inc(pa_empty);
+            // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(pa_empty);
             ffi::lean_ctor_set(ts, 0, pa_empty);
             ffi::lean_ctor_set_uint64(ts, ctor_scalar_offset(1, 0), 0);
             Ok(LeanBound::from_owned_ptr(lean, ts))
@@ -469,7 +476,8 @@ impl CoreState {
             if !force_manual_meta_defaults() {
                 let cache = ffi::meta::get_CoreInstInhabitedCache();
                 if !cache.is_null() {
-                    ffi::lean_inc(cache);
+                    // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(cache);
                     return Ok(LeanBound::from_owned_ptr(lean, cache));
                 }
             }
@@ -477,7 +485,8 @@ impl CoreState {
             let c = ffi::lean_alloc_ctor(0, 2, 0);
             let phm_empty = ffi::meta::get_PersistentHashMapEmpty();
             for i in 0..2u32 {
-                ffi::lean_inc(phm_empty);
+                // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(phm_empty);
                 ffi::lean_ctor_set(c, i, phm_empty);
             }
             Ok(LeanBound::from_owned_ptr(lean, c))
@@ -496,16 +505,19 @@ impl CoreState {
             if !force_manual_meta_defaults() {
                 let msg_log = ffi::meta::get_instInhabitedMessageLog();
                 if !msg_log.is_null() {
-                    ffi::lean_inc(msg_log);
+                    // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(msg_log);
                     return Ok(LeanBound::from_owned_ptr(lean, msg_log));
                 }
             }
             // Lean 4.20 MessageLog = { reported, unreported, loggedKinds }.
             let ml = ffi::lean_alloc_ctor(0, 3, 0);
             let pa_empty = ffi::meta::get_PersistentArrayEmpty();
-            ffi::lean_inc(pa_empty);
+            // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(pa_empty);
             ffi::lean_ctor_set(ml, 0, pa_empty);
-            ffi::lean_inc(pa_empty);
+            // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(pa_empty);
             ffi::lean_ctor_set(ml, 1, pa_empty);
             ffi::lean_ctor_set(ml, 2, empty_rbmap_like());
             Ok(LeanBound::from_owned_ptr(lean, ml))
@@ -524,7 +536,8 @@ impl CoreState {
             if !force_manual_meta_defaults() {
                 let info_state = ffi::meta::get_ElabInstInhabitedInfoState();
                 if !info_state.is_null() {
-                    ffi::lean_inc(info_state);
+                    // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(info_state);
                     return Ok(LeanBound::from_owned_ptr(lean, info_state));
                 }
             }
@@ -536,7 +549,8 @@ impl CoreState {
             ffi::lean_inc(phm_empty);
             ffi::lean_ctor_set(is, 1, phm_empty);
             let pa_empty = ffi::meta::get_PersistentArrayEmpty();
-            ffi::lean_inc(pa_empty);
+            // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(pa_empty);
             ffi::lean_ctor_set(is, 2, pa_empty);
             ffi::inline::lean_ctor_set_uint8(is, ctor_scalar_offset(3, 0), 1); // enabled = true
             Ok(LeanBound::from_owned_ptr(lean, is))
@@ -601,7 +615,8 @@ impl MetaContext {
                 if !force_manual_meta_defaults() {
                     let ctx = ffi::meta::get_instInhabitedContext();
                     if !ctx.is_null() {
-                        ffi::lean_inc(ctx);
+                        // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(ctx);
                         return Ok(LeanBound::from_owned_ptr(lean, ctx));
                     }
                 }
@@ -906,7 +921,8 @@ impl MetaState {
             if !force_manual_meta_defaults() {
                 let state = ffi::meta::get_instInhabitedState();
                 if !state.is_null() {
-                    ffi::lean_inc(state);
+                    // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(state);
                     return Ok(LeanBound::from_owned_ptr(lean, state));
                 }
             }
@@ -941,7 +957,8 @@ impl MetaState {
 
             // field 3: postponed (PersistentArray PostponedEntry) — empty
             let pa_empty = ffi::meta::get_PersistentArrayEmpty();
-            ffi::lean_inc(pa_empty);
+            // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(pa_empty);
             ffi::lean_ctor_set(state, 3, pa_empty);
 
             // field 4: diag (Meta.Diagnostics)
@@ -959,7 +976,8 @@ impl MetaState {
         if !force_manual_meta_defaults() {
             let mctx_bss = ffi::meta::get_instInhabitedMetavarContext();
             if !mctx_bss.is_null() {
-                ffi::lean_inc(mctx_bss);
+                // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(mctx_bss);
                 return Ok(mctx_bss);
             }
         }
@@ -982,7 +1000,8 @@ impl MetaState {
         if !force_manual_meta_defaults() {
             let cache_bss = ffi::meta::get_instInhabitedCache();
             if !cache_bss.is_null() {
-                ffi::lean_inc(cache_bss);
+                // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(cache_bss);
                 return Ok(cache_bss);
             }
         }
@@ -1002,7 +1021,8 @@ impl MetaState {
         if !force_manual_meta_defaults() {
             let diag_bss = ffi::meta::get_instInhabitedDiagnostics();
             if !diag_bss.is_null() {
-                ffi::lean_inc(diag_bss);
+                // BSS static: no inc (rc 0, dec no-op)
+                    // ffi::lean_inc(diag_bss);
                 return Ok(diag_bss);
             }
         }

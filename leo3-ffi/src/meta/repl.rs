@@ -1,0 +1,119 @@
+//! FFI bindings for Lean's repl-oriented elaborator entry points.
+//!
+//! These bindings give access to the real Lean elaborator from Rust:
+//! tactic-string parsing, tactic execution on a goal, module imports, and
+//! goal pretty-printing. All symbols live in `libleanshared.so` as compiled
+//! Lean functions (not part of the public C API).
+//!
+//! Verified against Lean 4.25.2.
+
+use super::*;
+
+// ============================================================================
+// Tactic parsing (pure function)
+// ============================================================================
+
+extern "C" {
+    /// `Lean.Parser.runParserCategory : Environment → Name → String → String → Except String Syntax`
+    ///
+    /// Pure curried function (arity 4): parse `input` in parser category
+    /// `catName` (e.g. `tactic`) against `env`. Returns `Except.ok Syntax`
+    /// or `Except.error String`.
+    #[link_name = "l_Lean_Parser_runParserCategory"]
+    pub fn lean_parser_run_parser_category(
+        env: *mut *mut lean_object,
+        arg: *mut lean_object,
+    ) -> *mut lean_object;
+}
+
+// ============================================================================
+// Static runtime objects (BSS globals; Windows-safe via lookup)
+// ============================================================================
+
+extern "C" {
+    /// `Lean.initSearchPath : FilePath → IO Unit` (curried, arity 2 with
+    /// the world token). Sets the global search path used by `importModules`
+    /// to `sysroot/lib/lean` plus `LEAN_PATH`.
+    #[link_name = "l_Lean_initSearchPath"]
+    pub fn lean_init_search_path(
+        env: *mut *mut lean_object,
+        arg: *mut lean_object,
+    ) -> *mut lean_object;
+}
+
+extern "C" {
+    /// `Lean.Options.empty` — the empty options map.
+    #[link_name = "l_Lean_Options_empty"]
+    pub static mut lean_options_empty: *mut lean_object;
+
+    /// `Lean.Elab.Term.instInhabitedState` — the `Inhabited Term.State`
+    /// instance record; `default` is field 0.
+    #[link_name = "l_Lean_Elab_Term_instInhabitedState"]
+    pub static mut lean_elab_term_inst_inhabited_state: *mut lean_object;
+}
+
+bss_accessor!(/// The empty `Options` map (Windows-safe).
+    pub fn options_empty() -> lean_options_empty);
+
+bss_accessor!(/// The `Inhabited Term.State` record (Windows-safe).
+    pub fn term_inst_inhabited_state() -> lean_elab_term_inst_inhabited_state);
+
+/// The empty `PersistentArray` (Windows-safe; declared in `super`).
+#[inline]
+pub unsafe fn persistent_array_empty() -> *mut lean_object {
+    #[cfg(not(target_os = "windows"))]
+    {
+        super::l_Lean_PersistentArray_empty
+    }
+    #[cfg(target_os = "windows")]
+    {
+        super::win_bss::lookup_bss_global("l_Lean_PersistentArray_empty")
+    }
+}
+
+// ============================================================================
+// Module import (fully-uncurried)
+// ============================================================================
+
+extern "C" {
+    /// `Lean.importModules` — direct mixed-ABI C function (verified against
+    /// the 4.25.2 stage0 output):
+    /// `(imports : List Name, opts : Options, trustLevel : UInt32,
+    ///  plugins : PersistentArray, leakEnv : Bool, loadExts : Bool,
+    ///  level : Name, arts : PersistentArray, world) → EIO Environment`.
+    #[link_name = "l_Lean_importModules"]
+    pub fn lean_import_modules_full(
+        imports: lean_obj_arg,
+        opts: lean_obj_arg,
+        trust_level: u32,
+        plugins: lean_obj_arg,
+        leak_env: u8,
+        load_exts: u8,
+        level: u32,
+        arts: lean_obj_arg,
+        world: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+// ============================================================================
+// Tactic execution (fully-uncurried monad form)
+// ============================================================================
+
+extern "C" {
+    /// `Lean.Elab.runTactic` — the fully-uncurried monad form (9 args):
+    /// `(mvarId, stx, termCtx, termState, metaCtx, metaStateRef, coreCtx,
+    ///  coreStateRef, world) → EStateM.Result`. Verified against the v4.25.2
+    /// stage0 C output.
+    #[link_name = "l_Lean_Elab_runTactic"]
+    pub fn lean_elab_run_tactic_full(
+        mvar_id: lean_obj_arg,
+        stx: lean_obj_arg,
+        term_ctx: lean_obj_arg,
+        term_state: lean_obj_arg,
+        meta_ctx: lean_obj_arg,
+        meta_state_ref: lean_obj_arg,
+        core_ctx: lean_obj_arg,
+        core_state_ref: lean_obj_arg,
+        world: lean_obj_arg,
+    ) -> lean_obj_res;
+}

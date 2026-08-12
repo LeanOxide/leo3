@@ -513,6 +513,10 @@ macro_rules! bss_accessor {
     };
 }
 
+/// Repl-oriented elaborator entry points (tactic parsing/execution,
+/// module imports, goal pretty-printing).
+pub mod repl;
+
 /// Windows-specific BSS global lookup via `GetProcAddress`.
 ///
 /// Lean's compiler emits BSS globals with `LEAN_EXPORT` (`__declspec(dllexport)` on Windows),

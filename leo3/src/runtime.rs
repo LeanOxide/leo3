@@ -21,42 +21,93 @@ use leo3_ffi as ffi;
 use std::sync::mpsc;
 use std::sync::{Mutex, Once};
 
-static PRELUDE_INIT: Once = Once::new();
-static EXPR_INIT: Once = Once::new();
 static ENV_INIT: Once = Once::new();
 
 /// Ensure `Init.Prelude` is initialized.
+///
+/// Delegates to the full official initialization sequence (which covers
+/// `Init.Prelude`), so no module is ever initialized twice.
 #[inline]
 pub(crate) fn ensure_prelude_initialized() {
-    PRELUDE_INIT.call_once(|| unsafe {
-        ffi::initialize_Init_Prelude(1, std::ptr::null_mut());
-    });
+    ensure_environment_initialized();
 }
 
 /// Ensure `Lean.Expr` is initialized.
 #[inline]
 pub(crate) fn ensure_expr_initialized() {
-    ensure_prelude_initialized();
-
-    EXPR_INIT.call_once(|| unsafe {
-        ffi::initialize_Lean_Expr(1, std::ptr::null_mut());
-    });
+    ensure_environment_initialized();
 }
 
 /// Ensure `Lean.Environment` and its transitive dependencies are initialized.
 #[inline]
 pub(crate) fn ensure_environment_initialized() {
-    ensure_expr_initialized();
-
     ENV_INIT.call_once(|| unsafe {
-        ffi::initialize_Lean_Environment(1, std::ptr::null_mut());
-        ffi::initialize_Lean_Meta(1, std::ptr::null_mut());
+        // Official `lean_initialize` sequence (see lean4 src/initialize/init.cpp):
+        // the whole Init/Std/Lean module trees (including Options, Parser,
+        // Elab, Meta — required for real elaborator use), then the C++
+        // kernel/library modules. Replaces the previous partial manual list.
         ffi::initialize_util_module();
+        let w = ffi::io::lean_io_mk_world();
+        let r = ffi::initialize_Init(1, w as *mut std::ffi::c_void);
+        debug_assert!(ffi::io::lean_io_result_is_ok(r));
+        let w = ffi::io::lean_io_mk_world();
+        let r = ffi::initialize_Std(1, w as *mut std::ffi::c_void);
+        debug_assert!(ffi::io::lean_io_result_is_ok(r));
+        let w = ffi::io::lean_io_mk_world();
+        let r = ffi::initialize_Lean(1, w as *mut std::ffi::c_void);
+        debug_assert!(ffi::io::lean_io_result_is_ok(r));
         ffi::initialize_kernel_module();
         ffi::init_default_print_fn();
         ffi::initialize_library_core_module();
         ffi::initialize_library_module();
-        ffi::lean_io_mark_end_initialization();
+        ffi::initialize_constructions_module();
+        {
+            extern "C" {
+                #[link_name = "l_Lean_Elab_Tactic_tacticElabAttribute"]
+                static tactic_attr: *mut ffi::lean_object;
+            }
+            if tactic_attr.is_null() || ffi::inline::lean_is_scalar(tactic_attr) {
+                panic!("tacticElabAttribute not initialized after initialize_Lean");
+            }
+        }
+        // Ensure builtin tactic registrations exist (the Lean module
+        // initializer chain does not always reach BuiltinTactic).
+        extern "C" {
+            #[link_name = "initialize_Lean_Compiler_InitAttr"]
+            fn init_compiler_init_attr(
+                builtin: u8,
+                w: *mut std::ffi::c_void,
+            ) -> *mut ffi::lean_object;
+        }
+        // `Lean.regularInitAttr` (the `[init]` attribute extension) gates
+        // `runInitAttrs` inside `finalizePersistentExtensions` — without it,
+        // builtin registrations (`@[builtin_tactic]` etc.) never run on
+        // import. The `initialize_Lean` dependency chain does not reach
+        // `Lean.Compiler.InitAttr`, so register it explicitly.
+        let w = ffi::io::lean_io_mk_world();
+        let ria_res = init_compiler_init_attr(1, w as *mut std::ffi::c_void);
+        assert!(ffi::io::lean_io_result_is_ok(ria_res), "init_compiler_init_attr failed");
+        // Directly invoke the intro registration function (bypasses the
+        // initializer's `_G_initialized` guard).
+        extern "C" {
+            #[link_name = "l_Lean_Elab_Tactic_evalIntro___regBuiltin_Lean_Elab_Tactic_evalIntro__1"]
+            fn reg_builtin_intro(w: *mut ffi::lean_object) -> *mut ffi::lean_object;
+        }
+        let w = ffi::io::lean_io_mk_world();
+        let reg_res = reg_builtin_intro(w);
+        assert!(ffi::io::lean_io_result_is_ok(reg_res), "regBuiltin intro failed");
+        // Allow `importModules (loadExts := true)` to run module
+        // initializers while loading `.olean` files (lean CLI order:
+        // init_search_path → enable_initializer_execution → mark_end).
+        //
+        // `mark_end_initialization` is intentionally deferred: module
+        // initializers for imported `.olean` files only run while
+        // `IO.initializing` is still true, and Lean's own CLI imports the
+        // user's file before marking the end. Leo3 calls
+        // `finalize_initialization()` after the first module import.
+        let w = ffi::io::lean_io_mk_world();
+        let enable_res = ffi::lean_enable_initializer_execution(w as *mut std::ffi::c_void);
+        debug_assert!(ffi::io::lean_io_result_is_ok(enable_res));
     });
 }
 
@@ -93,6 +144,10 @@ pub(crate) fn ensure_worker_initialized() {
 
         std::thread::Builder::new()
             .name("leo3-runtime-worker".into())
+            // Full module-tree initialization (`initialize_Init`/`initialize_Std`/
+            // `initialize_Lean`) recurses deeply; the default 2 MiB stack
+            // overflows. 64 MiB matches typical host-process expectations.
+            .stack_size(64 * 1024 * 1024)
             .spawn(move || {
                 unsafe {
                     ffi::lean_initialize_runtime_module();
@@ -152,4 +207,13 @@ where
 
     sender.send(task).expect("runtime worker thread died");
     done_rx.recv().expect("runtime worker thread died").0
+}
+
+/// Run a closure on the single long-lived Lean worker thread (the
+/// canonical serialized path for FFI calls).
+pub fn run_worker<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    with_worker(f)
 }
