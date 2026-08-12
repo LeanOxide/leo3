@@ -51,6 +51,59 @@ extern "C" {
     ) -> lean_obj_res;
 }
 
+#[cfg(not(lean_4_26))]
+extern "C" {
+    /// Run a MetaM computation via `MetaM.toIO`, returning
+    /// `IO (α × Core.State × State)`.
+    ///
+    /// `MetaM.toIO : MetaM α → Core.Context → Core.State → Meta.Context → Meta.State → IO (α × Core.State × State)`
+    ///
+    /// This is the same entry point Lean's own `runMetaM` uses; unlike the
+    /// `MetaM.run` family it returns the final `Core.State` directly instead
+    /// of threading it through an ST.Ref, and (per the 2026-08 audit) it
+    /// does not corrupt the heap when a computation assigns a metavariable.
+    pub fn l_Lean_Meta_MetaM_toIO___redArg(
+        x: lean_obj_arg,
+        core_ctx: lean_obj_arg,
+        core_state: lean_obj_arg,
+        ctx: lean_obj_arg,
+        state: lean_obj_arg,
+        world: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+#[cfg(lean_4_26)]
+extern "C" {
+    pub fn l_Lean_Meta_MetaM_toIO___redArg(
+        x: lean_obj_arg,
+        core_ctx: lean_obj_arg,
+        core_state: lean_obj_arg,
+        ctx: lean_obj_arg,
+        state: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+/// Run a MetaM computation via `MetaM.toIO`, dispatching on the Lean version.
+#[inline]
+pub unsafe fn lean_meta_metam_to_io(
+    x: lean_obj_arg,
+    core_ctx: lean_obj_arg,
+    core_state: lean_obj_arg,
+    ctx: lean_obj_arg,
+    state: lean_obj_arg,
+    world: lean_obj_arg,
+) -> lean_obj_res {
+    #[cfg(not(lean_4_26))]
+    {
+        l_Lean_Meta_MetaM_toIO___redArg(x, core_ctx, core_state, ctx, state, world)
+    }
+    #[cfg(lean_4_26)]
+    {
+        let _ = world;
+        l_Lean_Meta_MetaM_toIO___redArg(x, core_ctx, core_state, ctx, state)
+    }
+}
+
 #[cfg(all(lean_4_22, not(lean_4_26)))]
 extern "C" {
     /// Run a MetaM computation and return the result plus the final Meta.State (Lean 4.22..4.25)

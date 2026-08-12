@@ -257,58 +257,32 @@ impl<'l> MetaMContext<'l> {
 
         let (result, new_meta_state, new_core_state) =
             crate::runtime::with_worker(move || unsafe {
-                #[cfg(not(lean_4_26))]
-                let (core_state_ref, world2) = {
-                    let world = ffi::lean_box(0);
-                    let ref_result = ffi::lean_st_mk_ref(core_state_ptr, world);
-                    let core_state_ref = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
-                    let world2 = ffi::lean_ctor_get(ref_result, 1) as *mut ffi::lean_object;
-                    ffi::lean_inc(core_state_ref);
-                    ffi::lean_inc(world2);
-                    ffi::lean_dec(ref_result);
-                    (core_state_ref, world2)
-                };
-
-                #[cfg(lean_4_26)]
-                let (core_state_ref, world2) = {
-                    let core_state_ref = ffi::lean_st_mk_ref(core_state_ptr, ffi::lean_box(0));
-                    let world2 = ffi::lean_box(0);
-                    (core_state_ref, world2)
-                };
-
-                let result = ffi::meta::lean_meta_metam_run_state(
+                // `MetaM.toIO` is the production entry point Lean's own
+                // `runMetaM` uses. Unlike the `MetaM.run` family it returns
+                // the final `Core.State` in the result pair directly (no
+                // ST.Ref threading) and does not corrupt the heap when the
+                // computation assigns a metavariable (2026-08 audit; the
+                // `MetaM.run` variants double-drop the returned Meta.State).
+                let world = ffi::lean_box(0);
+                let result = ffi::meta::lean_meta_metam_to_io(
                     computation_ptr,
+                    core_ctx_ptr,
+                    core_state_ptr,
                     meta_ctx_ptr,
                     meta_state_ptr,
-                    core_ctx_ptr,
-                    core_state_ref,
-                    world2,
+                    world,
                 );
 
+                // EIO ok carries `α × Core.State × State` (nested pairs).
                 let pair = handle_eio_result(result)?;
-                let value_ptr = ffi::lean_ctor_get(pair, 0) as *mut ffi::lean_object;
-                let meta_state_ptr = ffi::lean_ctor_get(pair, 1) as *mut ffi::lean_object;
-                ffi::lean_inc(value_ptr);
+                let alpha = ffi::lean_ctor_get(pair, 0) as *mut ffi::lean_object;
+                let cs_ms = ffi::lean_ctor_get(pair, 1) as *mut ffi::lean_object;
+                let core_state_ptr = ffi::lean_ctor_get(cs_ms, 0) as *mut ffi::lean_object;
+                let meta_state_ptr = ffi::lean_ctor_get(cs_ms, 1) as *mut ffi::lean_object;
+                ffi::lean_inc(alpha);
+                ffi::lean_inc(core_state_ptr);
                 ffi::lean_inc(meta_state_ptr);
                 ffi::lean_dec(pair);
-
-                #[cfg(not(lean_4_26))]
-                let core_state_ptr = {
-                    let get_result = ffi::lean_st_ref_get(core_state_ref, ffi::lean_box(0));
-                    let value = ffi::lean_ctor_get(get_result, 0) as *mut ffi::lean_object;
-                    ffi::lean_inc(value);
-                    ffi::lean_dec(get_result);
-                    value
-                };
-
-                #[cfg(lean_4_26)]
-                let core_state_ptr = {
-                    let value = ffi::lean_st_ref_get(core_state_ref, ffi::lean_box(0));
-                    ffi::lean_inc(value);
-                    value
-                };
-
-                ffi::lean_dec(core_state_ref);
 
                 Ok::<
                     (
@@ -317,7 +291,7 @@ impl<'l> MetaMContext<'l> {
                         *mut ffi::lean_object,
                     ),
                     LeanError,
-                >((value_ptr, meta_state_ptr, core_state_ptr))
+                >((alpha, meta_state_ptr, core_state_ptr))
             })?;
 
         unsafe {
@@ -902,11 +876,32 @@ unsafe fn handle_eio_result(result: *mut ffi::lean_object) -> LeanResult<*mut ff
     ffi::lean_dec(result);
 
     let exc_tag = ffi::lean_obj_tag(exception_ptr);
-    let is_internal = exc_tag == 1;
+    let exc_objs = ffi::inline::lean_ctor_num_objs(exception_ptr);
 
-    // Field 1 of both Exception constructors is MessageData
-    let msg_data = ffi::lean_ctor_get(exception_ptr, 1) as *mut ffi::lean_object;
-    let message = extract_message_data(msg_data);
+    // `MetaM.run`-family errors carry a `Lean.Exception` (2 object fields:
+    // error/ref+msg, internal/id+extra). `MetaM.toIO` instead reports
+    // `IO.Error` (single object field: the rendered message string), e.g.
+    // `userError` (tag 18). Dispatch on the object layout.
+    let (is_internal, message) = if exc_objs >= 2 {
+        // Lean.Exception: field 1 of the error constructor is MessageData.
+        let msg_data = ffi::lean_ctor_get(exception_ptr, 1) as *mut ffi::lean_object;
+        (exc_tag == 1, extract_message_data(msg_data))
+    } else if exc_objs == 1 {
+        // IO.Error: the message string is the (only) object field.
+        let msg_ptr = ffi::lean_ctor_get(exception_ptr, 0) as *mut ffi::lean_object;
+        let c_str = ffi::inline::lean_string_cstr(msg_ptr);
+        let message = if c_str.is_null() {
+            "<io error>".to_string()
+        } else {
+            std::ffi::CStr::from_ptr(c_str)
+                .to_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|_| "<io error:non-utf8>".to_string())
+        };
+        (false, message)
+    } else {
+        (exc_tag == 1, "<unknown exception>".to_string())
+    };
 
     ffi::lean_dec(exception_ptr);
 

@@ -43,13 +43,13 @@ fn proof_term<'l>(
     LeanExpr::lambda(p_name, prop.clone(), inner, BinderInfo::Default)
 }
 
-/// Known latent issue: `MetaM.run` (run_persistent) corrupts the Lean heap
-/// when the computation assigns a metavariable (Lean 4.25.2 / 4.32.2). The
-/// success path therefore cannot be exercised end to end; this test is
-/// `#[ignore]`d until the runtime interaction is fixed. See
-/// `docs/remaining-work-checklist.md`.
+/// Regression test for the checked-assignment success path.
+///
+/// `MetaM.run` (the previous run_persistent backend) corrupts the Lean heap
+/// when a computation assigns a metavariable; the backend now uses
+/// `MetaM.toIO`, which returns the final `Core.State`/`Meta.State` directly
+/// and is the entry point Lean's own `runMetaM` uses.
 #[test]
-#[ignore = "checked_assign success path corrupts the Lean heap (Known Latent Issues)"]
 fn test_exact_success_roundtrip_does_not_corrupt_heap() {
     let result: LeanResult<()> = leo3::test_with_lean(|lean| {
         let env = LeanEnvironment::empty(lean, 0)?;

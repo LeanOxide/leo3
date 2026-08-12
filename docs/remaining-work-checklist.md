@@ -339,17 +339,18 @@ disassembly, tested on 4.25.2 and 4.32.2):
 
 Remaining:
 
-- **`MetaM.run` (run_persistent) corrupts the Lean heap when the computation
-  assigns a metavariable** (`exact`/`apply` success paths; reproduced on
-  4.25.2 and 4.32.2, confirmed by ASan: the runtime mutates the Meta.State
-  object in place and double-drops the returned state). The value and state
-  unpacking of the returned `(α, Meta.State)` pair is verified correct
-  (field 0/1 of the EIO ok value); attempts to compensate with extra
-  `lean_inc`s or by leaking the pair do not help, so the corruption happens
-  inside the runtime's own state threading. `checked_assign` keeps using
-  `run_persistent` (the `MetaM.run'` variant returns the wrong result for
-  assignments), and the end-to-end success test is `#[ignore]`d
-  (`test_tactic_checked_assign_positive.rs`) until this is understood.
+- **`MetaM.run` corruption on assignment is FIXED by switching the
+  `run_persistent` backend to `MetaM.toIO`** (the entry point Lean's own
+  `runMetaM` uses): it returns `α × Core.State × Meta.State` as ordinary
+  nested pairs — no ST.Ref state threading, no double-drop. The success
+  paths of `exact`/`apply`/`intro`/`rfl` now run clean under 4.25.2 and
+  4.32.2 (including under cargo-careful instrumentation), and the
+  end-to-end `test_tactic_checked_assign_positive.rs` success test is no
+  longer `#[ignore]`d. Two side fixes came out of the switch: `intro` takes
+  an owned reference to the fresh metavariable id from the result pair, and
+  `handle_eio_result` dispatches `IO.Error` (single-field, rendered message
+  string — what `toIO` reports) vs `Lean.Exception` (two-field MessageData)
+  on the object layout instead of assuming field 1.
 - `lean_finalize_task_manager` on Lean 4.25.2 has a runtime join race that
   occasionally hangs the process (timing-dependent; also triggered by
   llvm-cov instrumentation). `LeanTask::spawn` no longer depends on Lean's

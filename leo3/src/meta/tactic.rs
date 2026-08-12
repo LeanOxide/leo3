@@ -436,11 +436,13 @@ pub fn intro<'l>(
             Ok(r) => r,
             Err(e) => return TacticResult::Failure(e),
         };
-        let new_mvar_id = LeanBound::<crate::instance::LeanAny>::from_borrowed_ptr(
-            metam.lean(),
-            ffi::lean_ctor_get(result.as_ptr(), 1),
-        )
-        .cast();
+        // The result pair is owned by `result`; take an owned reference to
+        // the fresh metavariable id before the pair is dropped.
+        let new_mvar_id_ptr = ffi::lean_ctor_get(result.as_ptr(), 1) as *mut ffi::lean_object;
+        ffi::lean_inc(new_mvar_id_ptr);
+        let new_mvar_id =
+            LeanBound::<crate::instance::LeanAny>::from_owned_ptr(metam.lean(), new_mvar_id_ptr)
+                .cast();
         match LeanExpr::mvar(metam.lean(), new_mvar_id) {
             Ok(m) => m,
             Err(e) => return TacticResult::Failure(e),
