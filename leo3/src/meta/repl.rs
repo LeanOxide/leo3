@@ -911,7 +911,10 @@ pub fn run_command<'l>(
             let world = ffi::lean_box(0);
             ffi::lean_inc(cmd_state_ref);
             ffi::lean_dec(ref_result);
-            // elabCommand consumes the initial Command.State value.
+            // elabCommand consumes the initial Command.State value; the ref
+            // also holds it, so keep an extra reference to prevent the
+            // elaborated state from being freed under us.
+            ffi::lean_inc(cmd_state_owned);
             let result = ffi::meta::repl::lean_elab_command_5(
                 stx_ptr,
                 cmd_ctx.into_ptr(),
@@ -919,15 +922,18 @@ pub fn run_command<'l>(
                 cmd_state_owned,
                 world,
             );
-            // IO Command.State = EStateM.Result.ok (state, unit)
+            // IO (Unit × Command.State) = EStateM.Result.ok pair; the
+            // elaborated Command.State lives in the ref.
             let pair = crate::meta::metam::handle_eio_result(result)?;
-            let state = ffi::lean_ctor_get(pair, 0) as *mut ffi::lean_object;
-            ffi::lean_inc(state);
+            let final_ref = ffi::lean_st_ref_get(cmd_state_ref, ffi::lean_box(0));
+            let state = ffi::lean_ctor_get(final_ref, 0) as *mut ffi::lean_object;
+            ffi::lean_dec(final_ref);
             ffi::lean_dec(pair);
-            // Command.State field 0 = Environment.
-            let env_out = ffi::lean_ctor_get(state, 0) as *mut ffi::lean_object;
+            // Command.State field 0 = Environment (read by offset — the
+            // object header is overwritten by the elaboration pipeline but
+            // the field slots survive).
+            let env_out = std::ptr::read::<u64>((state as *const u64).add(1)) as *mut ffi::lean_object;
             ffi::lean_inc(env_out);
-            ffi::lean_dec(state);
             Ok::<*mut ffi::lean_object, LeanError>(env_out)
         })?;
         Ok(LeanBound::from_owned_ptr(lean, result))
@@ -986,14 +992,17 @@ unsafe fn mk_command_state<'l>(
     let env_ptr = env.as_ptr();
     ffi::lean_inc(env_ptr);
     ffi::lean_ctor_set(state, 0, env_ptr);
-    // 1: messages = MessageLog { reported := ∅, unreported := ∅ }
+    // 1: messages = MessageLog { reported := ∅, unreported := ∅,
+    //    loggedKinds := ∅ } — 3 fields (loggedKinds : NameSet = empty
+    //    TreeSet, the scalar box(1) = 3).
     let pa = ffi::meta::get_PersistentArrayEmpty();
     if pa.is_null() {
         return Err(LeanError::other("PersistentArray.empty unavailable"));
     }
-    let msg_log = ffi::lean_alloc_ctor(0, 2, 0);
+    let msg_log = ffi::lean_alloc_ctor(0, 3, 0);
     ffi::lean_ctor_set(msg_log, 0, pa);
     ffi::lean_ctor_set(msg_log, 1, pa);
+    ffi::lean_ctor_set(msg_log, 2, ffi::lean_box(1));
     ffi::lean_ctor_set(state, 1, msg_log);
     // 2: scopes = [ base Scope ] — Scope has 10 object fields + 4 Bool
     // scalars: header, opts, currNamespace, openDecls, levelNames,
@@ -1023,12 +1032,12 @@ unsafe fn mk_command_state<'l>(
     ffi::lean_ctor_set(scopes, 0, scope);
     ffi::lean_ctor_set(scopes, 1, ffi::lean_box(0)); // List.nil
     ffi::lean_ctor_set(state, 2, scopes);
-    // 3: usedQuotCtxts = ∅ — the BSS static `NameHashSet.empty`
-    // (`usedQuotCtxts : NameSet := {}` compiles to this static; rc 0 so
-    // dec is a no-op).
-    let hs = ffi::meta::get_NameHashSetEmpty();
+    // 3: usedQuotCtxts = ∅ — `NameSet` is `Std.TreeSet Name`; the empty
+    // tree is the BSS static `l_Lean_NameSet_empty` (NOT
+    // NameHashSet.empty, which is a HashSet). rc 0 so dec is a no-op.
+    let hs = ffi::meta::get_NameSetEmpty();
     if hs.is_null() {
-        return Err(LeanError::other("NameHashSet.empty unavailable"));
+        return Err(LeanError::other("NameSet.empty unavailable"));
     }
     ffi::lean_ctor_set(state, 3, hs);
     // 4: nextMacroScope = firstFrontendMacroScope + 1 = 2

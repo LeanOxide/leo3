@@ -489,6 +489,9 @@ extern "C" {
     pub static l_Lean_NameHashSet_empty: *mut lean_object;
     /// `EmptyCollection NameSet` instance record.
     pub static l_Lean_NameHashSet_instEmptyCollection: *mut lean_object;
+    /// `Std.TreeSet.empty` for `Name` — `NameSet` is a `Std.TreeSet Name`,
+    /// NOT a HashSet; this is the empty red-black tree.
+    pub static l_Lean_NameSet_empty: *mut lean_object;
     pub static l_Lean_instInhabitedFileMap: *mut lean_object;
     // Building-block symbols for PersistentHashMap/PersistentArray/KVMap.
     // `empty` for PersistentHashMap/PersistentArray are 0-arg thunks (`T`
@@ -851,6 +854,19 @@ pub unsafe fn get_PersistentArrayEmpty() -> *mut lean_object {
 /// On Windows, tries `GetProcAddress` first, then returns `lean_box(0)`.
 /// KVMap.empty is a zero-field enum (tag 0).
 #[inline]
+/// Get the empty `NameSet` (`Std.TreeSet Name`) singleton (BSS static).
+#[inline]
+pub unsafe fn get_NameSetEmpty() -> *mut lean_object {
+    #[cfg(not(target_os = "windows"))]
+    {
+        l_Lean_NameSet_empty
+    }
+    #[cfg(target_os = "windows")]
+    {
+        win_bss::lookup_bss_global("l_Lean_NameSet_empty")
+    }
+}
+
 /// Get the empty `NameSet` (`Std.HashSet Name`) singleton (BSS static).
 #[inline]
 pub unsafe fn get_NameHashSetEmpty() -> *mut lean_object {
@@ -1229,4 +1245,10 @@ extern "C" {
     /// - `env` must be a valid Environment (borrowed)
     /// - `decl_name` must be a valid Name (borrowed)
     pub fn lean_is_matcher(env: b_lean_obj_arg, decl_name: b_lean_obj_arg) -> u8;
+}
+
+extern "C" {
+    /// `NameSet.contains : NameSet → Name → Bool` (reduced arity).
+    #[link_name = "l_Lean_NameSet_contains"]
+    pub fn l_Lean_NameSet_contains(set: lean_obj_arg, name: lean_obj_arg) -> lean_obj_res;
 }
