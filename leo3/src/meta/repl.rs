@@ -927,6 +927,10 @@ pub fn run_command<'l>(
             let pair = crate::meta::metam::handle_eio_result(result)?;
             let final_ref = ffi::lean_st_ref_get(cmd_state_ref, ffi::lean_box(0));
             let state = ffi::lean_ctor_get(final_ref, 0) as *mut ffi::lean_object;
+            // dec-ing the io_result ctor recursively decs its field 0 (the
+            // State) — take a reference first or we read freed memory.
+            let raw_mv = std::ptr::read::<u64>((cmd_state_ref as *const u64).add(1));
+            ffi::lean_inc(state);
             ffi::lean_dec(final_ref);
             ffi::lean_dec(pair);
             // Command.State field 0 = Environment (read by offset — the
