@@ -895,7 +895,7 @@ pub fn run_command<'l>(
     stx: &LeanBound<'l, LeanExpr>,
 ) -> LeanResult<LeanBound<'l, LeanEnvironment>> {
     unsafe {
-        let cmd_ctx = mk_command_context(lean)?;
+        let cmd_ctx = mk_command_context(lean, stx.as_ptr())?;
         let env = metam.env().clone();
 
         let stx_ptr = {
@@ -911,6 +911,10 @@ pub fn run_command<'l>(
             let world = ffi::lean_box(0);
             ffi::lean_inc(cmd_state_ref);
             ffi::lean_dec(ref_result);
+            // elabCommand consumes the initial Command.State value; the ref
+            // also holds it, so keep an extra reference to prevent the
+            // elaborated state from being freed under us.
+            ffi::lean_inc(cmd_state_owned);
             // elabCommand consumes the initial Command.State value; the ref
             // also holds it, so keep an extra reference to prevent the
             // elaborated state from being freed under us.
@@ -945,8 +949,12 @@ pub fn run_command<'l>(
 }
 
 /// Build a default `Lean.Elab.Command.Context` (v4.25 layout: 10 object
-/// fields + 1 Bool scalar: suppressElabErrors).
-unsafe fn mk_command_context<'l>(lean: Lean<'l>) -> LeanResult<LeanBound<'l, LeanAny>> {
+/// fields + 1 Bool scalar: suppressElabErrors). `stx` becomes `ctx.ref`
+/// (matching the real frontend).
+unsafe fn mk_command_context<'l>(
+    lean: Lean<'l>,
+    stx: *mut ffi::lean_object,
+) -> LeanResult<LeanBound<'l, LeanAny>> {
     let ctx = ffi::lean_alloc_ctor(0, 10, 1);
     // 0: fileName
     let file_name = crate::types::LeanString::mk(lean, "<stdin>")?;
@@ -967,12 +975,9 @@ unsafe fn mk_command_context<'l>(lean: Lean<'l>) -> LeanResult<LeanBound<'l, Lea
     ffi::lean_ctor_set(ctx, 5, ffi::lean_box(0));
     // 6: currMacroScope = firstFrontendMacroScope = 1
     ffi::lean_ctor_set(ctx, 6, ffi::lean_box(1));
-    // 7: ref = Syntax.missing (BSS static)
-    let syntax = ffi::meta::get_instInhabitedSyntax();
-    if syntax.is_null() {
-        return Err(LeanError::other("instInhabitedSyntax unavailable"));
-    }
-    ffi::lean_ctor_set(ctx, 7, syntax);
+    // 7: ref = the command's syntax (like the real frontend does)
+    ffi::lean_inc(stx);
+    ffi::lean_ctor_set(ctx, 7, stx);
     // 8: snap? = none
     ffi::lean_ctor_set(ctx, 8, ffi::lean_box(0));
     // 9: cancelTk? = none
