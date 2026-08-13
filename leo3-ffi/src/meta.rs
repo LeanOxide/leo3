@@ -1266,3 +1266,18 @@ extern "C" {
     #[link_name = "l_Lean_MessageData_toString"]
     pub fn lean_message_data_to_string(msg_data: lean_obj_arg, world: lean_obj_arg) -> lean_obj_res;
 }
+
+extern "C" {
+    /// `LocalContext.sanitizeNames : LocalContext → StateM NameSanitizerState
+    /// LocalContext` — rename local declarations whose user names carry
+    /// macro scopes (e.g. `a._@._internal.0._hyg.37`) to clean display
+    /// names (`a✝`), so goal hypotheses render like the real frontend.
+    /// Fully-applied form: `(lctx, state) → (LocalContext ×
+    /// NameSanitizerState)`.
+    ///
+    /// # Safety
+    /// - `lctx` must be a valid `LocalContext` (standard, consumed)
+    /// - `state` must be a valid `NameSanitizerState` (standard, consumed)
+    #[link_name = "l_Lean_LocalContext_sanitizeNames"]
+    pub fn lean_local_ctx_sanitize_names(lctx: lean_obj_arg, state: lean_obj_arg) -> lean_obj_res;
+}

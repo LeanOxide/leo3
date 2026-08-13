@@ -124,3 +124,38 @@ fn test_error_message_rendering_twice() {
     });
     result.unwrap();
 }
+
+/// After `induction n`, hypothesis names must be sanitized like the real
+/// frontend (`n✝`/`a✝`), not the raw hygiene names (`n._@._hyg.36`).
+#[test]
+fn test_goal_hyps_sanitized_after_induction() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let env = import_modules(lean, &["Lean"], 0)?;
+        let mut metam = MetaMContext::new(lean, env)?;
+        let ty = add_comm_type(lean)?;
+        let goal = metam.mk_goal(&ty)?;
+        let mvar = LeanExpr::mvar_id(&goal)?;
+        let stx = parse_tactic(lean, metam.env(), "intro n m")?;
+        let o1 = run_tactic(&mut metam, &mvar, &stx, None)?;
+        let stx2 = parse_tactic(lean, metam.env(), "induction n")?;
+        let o2 = run_tactic(&mut metam, &o1.goals[0], &stx2, Some(&o1.meta_state_ref))?;
+        assert_eq!(o2.goals.len(), 2);
+        // The step goal has the hygienic `n✝` and the induction hypothesis.
+        let g = &o2.goals[1];
+        let (hyps, ty_pp) = metam.goal_hyps_and_type_pp(g)?;
+        eprintln!("STEP-HYPS: {hyps:?}");
+        eprintln!("STEP-TY: {ty_pp}");
+        for (name, _) in &hyps {
+            assert!(
+                !name.contains("_hyg") && !name.contains("@"),
+                "raw hygiene name leaked into goal hypotheses: {name}"
+            );
+        }
+        assert!(
+            hyps.iter().any(|(n, _)| n.contains('✝')),
+            "expected sanitized dagger names, got: {hyps:?}"
+        );
+        Ok(())
+    });
+    result.unwrap();
+}

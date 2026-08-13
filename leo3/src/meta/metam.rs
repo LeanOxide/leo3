@@ -724,15 +724,54 @@ impl<'l> MetaMContext<'l> {
         }
     }
 
-    /// Get the local hypotheses of a goal as `(user_name, type_pp)` pairs,
-    /// together with the goal's pretty-printed type.
-    ///
-    /// Like [`goal_hyps_and_type`], but both the hypothesis types and the
-    /// goal type are rendered by Lean's real pretty printer
-    /// (`Meta.ppExpr` under the goal's local context), so free variables
-    /// appear with their user-facing names and usual notations.
-    ///
-    /// Used by the Repl layer to render goal states.
+/// Sanitize a goal's local context via `LocalContext.sanitizeNames`, like
+/// `Lean.Meta.ppGoal` does before pretty-printing: declarations whose user
+/// names carry macro scopes (hygiene names such as `n._@._hyg.36` that
+/// `induction`/`intro` introduce) are renamed to clean display names
+/// (`n✝`), so the hypothesis names match the real frontend's goal view.
+///
+/// Options come from the session's `Meta.Context` (the `pp.sanitizeNames`
+/// option defaults to `true`). The sanitizer state (`NameSanitizerState`:
+/// options + two empty name maps) is built fresh for each call.
+fn sanitize_local_ctx<'a>(
+    metam: &MetaMContext<'a>,
+    lctx: &LeanBound<'a, LeanAny>,
+) -> LeanResult<LeanBound<'a, LeanAny>> {
+    unsafe {
+        // Options from the Core.Context (field 2, per `CoreContext::mk_default`);
+        // `MetaM.getOptions` reads the same value. `pp.sanitizeNames`
+        // defaults to `true`, so empty options still sanitize.
+        let options = ffi::lean_ctor_get(metam.core_ctx().as_ptr(), 2) as *mut ffi::lean_object;
+
+        // NameSanitizerState { options, nameStem2Idx := {}, userName2Sanitized := {} }.
+        // Empty `NameMap` = `Std.DTreeMap.empty` = `Cell.nil` = box(1)
+        // (verified against `l_Std_DTreeMap_empty`, which returns box(1)).
+        let state = ffi::lean_alloc_ctor(0, 3, 0);
+        ffi::lean_inc(options);
+        ffi::inline::lean_ctor_set(state, 0, options);
+        ffi::inline::lean_ctor_set(state, 1, ffi::lean_box(1));
+        ffi::inline::lean_ctor_set(state, 2, ffi::lean_box(1));
+
+        // The export consumes both arguments (standard convention); lctx is
+        // borrowed here, so hand it a reference.
+        ffi::lean_inc(lctx.as_ptr());
+        let result = ffi::meta::lean_local_ctx_sanitize_names(lctx.as_ptr(), state);
+        let lctx_new = ffi::lean_ctor_get(result, 0) as *mut ffi::lean_object;
+        ffi::lean_inc(lctx_new);
+        ffi::lean_dec(result);
+        Ok(LeanBound::<LeanAny>::from_owned_ptr(metam.lean(), lctx_new).cast())
+    }
+}
+
+/// Get the local hypotheses of a goal as `(user_name, type_pp)` pairs,
+/// together with the goal's pretty-printed type.
+///
+/// Like [`goal_hyps_and_type`], but both the hypothesis types and the
+/// goal type are rendered by Lean's real pretty printer
+/// (`Meta.ppExpr` under the goal's local context), so free variables
+/// appear with their user-facing names and usual notations.
+///
+/// Used by the Repl layer to render goal states.
     pub fn goal_hyps_and_type_pp(
         &mut self,
         mvar: &LeanBound<'l, LeanName>,
@@ -740,7 +779,11 @@ impl<'l> MetaMContext<'l> {
         crate::runtime::ensure_meta_initialized();
         let gexpr = LeanExpr::mvar(self.lean, mvar.clone())?;
         let decl = self.get_mvar_decl(&gexpr)?;
-        let lctx = decl.lctx;
+        // Sanitize the goal's local context (like `Lean.Meta.ppGoal` does):
+        // declarations whose user names carry macro scopes (e.g. the
+        // hygiene names `n._@._hyg.36` induction introduces) are renamed
+        // to clean display names (`n✝`), matching the real frontend.
+        let lctx = Self::sanitize_local_ctx(self, &decl.lctx)?;
         let local_instances = decl.local_instances;
         let goal_ty = decl.type_;
         let mut hyps = Vec::new();
