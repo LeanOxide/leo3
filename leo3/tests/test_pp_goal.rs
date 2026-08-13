@@ -81,3 +81,46 @@ fn test_pp_goal_after_intro() {
     });
     result.unwrap();
 }
+
+/// Two consecutive failing tactics must render readable messages and leave
+/// the session usable (regression for MessageData.toString rendering).
+#[test]
+fn test_error_message_rendering_twice() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let env = import_modules(lean, &["Lean"], 0)?;
+        let mut metam = MetaMContext::new(lean, env)?;
+        let ty = add_comm_type(lean)?;
+        let goal = metam.mk_goal(&ty)?;
+        let mvar = LeanExpr::mvar_id(&goal)?;
+        let stx = parse_tactic(lean, metam.env(), "intro n m")?;
+        let outcome = run_tactic(&mut metam, &mvar, &stx, None)?;
+        let g = &outcome.goals[0];
+
+        let stx_rfl = parse_tactic(lean, metam.env(), "rfl")?;
+        let e1 = run_tactic(&mut metam, g, &stx_rfl, Some(&outcome.meta_state_ref))
+            .err()
+            .expect("rfl must fail");
+        let m1 = format!("{e1}");
+        eprintln!("ERR1: {m1}");
+        assert!(
+            !m1.contains("MessageData") && !m1.contains("<Format"),
+            "raw MessageData leaked into error: {m1}"
+        );
+        assert!(m1.contains("definitionally equal"), "expected readable rfl error, got: {m1}");
+
+        let stx_exact = parse_tactic(lean, metam.env(), "exact Nat.zero")?;
+        let e2 = run_tactic(&mut metam, g, &stx_exact, Some(&outcome.meta_state_ref))
+            .err()
+            .expect("exact must fail");
+        let m2 = format!("{e2}");
+        eprintln!("ERR2: {m2}");
+        assert!(!m2.contains("MessageData") && !m2.contains("<Format"), "raw MessageData leaked: {m2}");
+
+        // Session still usable after two rendered failures.
+        let stx2 = parse_tactic(lean, metam.env(), "induction n")?;
+        let o2 = run_tactic(&mut metam, g, &stx2, Some(&outcome.meta_state_ref))?;
+        assert_eq!(o2.goals.len(), 2);
+        Ok(())
+    });
+    result.unwrap();
+}

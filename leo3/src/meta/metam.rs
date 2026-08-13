@@ -1144,6 +1144,68 @@ pub unsafe fn handle_eio_result(result: *mut ffi::lean_object) -> LeanResult<*mu
 /// - `ofExpr` (tag 4): uses `lean_expr_dbg_to_string` for a debug representation
 /// - `withContext` (tag 6): recurses into the inner MessageData
 /// - `tagged` (tag 8): recurses into the inner MessageData
+/// Render a `MessageData` to a human-readable string.
+///
+/// Uses Lean's real message renderer (`MessageData.toString : BaseIO
+/// String`): it forces lazy messages (the common shape for tactic errors)
+/// and formats embedded expressions/names with the default pp options —
+/// e.g. `rfl` on `n + m = m + n` yields
+/// `Tactic 'rfl' failed, n + m = m + n is not definitionally equal to ...`
+/// instead of `<MessageData:lazy><Format:scalar>...`.
+///
+/// Falls back to the hand-rolled extractor below if the renderer fails
+/// (e.g. `IO.Error`), and to `<MessageData:scalar>` for scalar values.
+///
+/// # Safety
+///
+/// - `msg_data` must be a valid Lean `MessageData` object (borrowed, not consumed)
+/// - the Lean runtime must be initialized (caller runs inside the worker)
+unsafe fn extract_message_data(msg_data: *mut ffi::lean_object) -> String {
+    if ffi::inline::lean_is_scalar(msg_data) {
+        return "<MessageData:scalar>".to_string();
+    }
+
+    // Real renderer first: `MessageData.toString` (BaseIO String).
+    // Result: `Except (IO.Error × World) (String × World)` — ok = tag 0
+    // with fields `(value, world)` (see `lean_io_result_mk_ok`).
+    // The export consumes its argument (standard convention); msg_data is
+    // borrowed here, so hand it a reference.
+    ffi::lean_inc(msg_data);
+    let world = ffi::io::lean_io_mk_world();
+    let rendered = ffi::meta::lean_message_data_to_string(msg_data, world);
+    let string = if ffi::lean_obj_tag(rendered) == 0 {
+        let str_obj = ffi::lean_ctor_get(rendered, 0) as *mut ffi::lean_object;
+        let c_str = ffi::inline::lean_string_cstr(str_obj);
+        if c_str.is_null() {
+            None
+        } else {
+            CStr::from_ptr(c_str)
+                .to_str()
+                .ok()
+                .map(|s| s.to_string())
+        }
+    } else {
+        None
+    };
+    ffi::lean_dec(rendered);
+    if let Some(s) = string {
+        if !s.is_empty() {
+            return s;
+        }
+    }
+
+    extract_message_data_fallback(msg_data)
+}
+
+/// Best-effort hand-rolled extraction of a human-readable string from
+/// Lean's `MessageData`, used when the real renderer fails.
+///
+/// `MessageData` is a complex inductive type. This function handles the
+/// most common cases:
+/// - `ofFormat` (tag 0): checks for `Format.text` (tag 0) containing a string
+/// - `ofExpr` (tag 4): uses `lean_expr_dbg_to_string` for a debug representation
+/// - `withContext` (tag 6): recurses into the inner MessageData
+/// - `tagged` (tag 8): recurses into the inner MessageData
 /// - `nest` (tag 9): recurses into the inner MessageData
 /// - `compose` (tag 10): recursively extracts from both children and concatenates
 /// - `group` (tag 11): recurses into the inner MessageData
@@ -1153,11 +1215,7 @@ pub unsafe fn handle_eio_result(result: *mut ffi::lean_object) -> LeanResult<*mu
 /// # Safety
 ///
 /// - `msg_data` must be a valid Lean `MessageData` object (borrowed, not consumed)
-unsafe fn extract_message_data(msg_data: *mut ffi::lean_object) -> String {
-    if ffi::inline::lean_is_scalar(msg_data) {
-        return "<MessageData:scalar>".to_string();
-    }
-
+unsafe fn extract_message_data_fallback(msg_data: *mut ffi::lean_object) -> String {
     // Hand-rolled extractor for the 4.25 constructor layout:
     // 0 ofFormatWithInfos, 1 ofGoal, 2 ofWidget, 3 withContext,
     // 4 withNamingContext, 5 nest, 6 group, 7 compose, 8 tagged,

@@ -1252,3 +1252,17 @@ extern "C" {
     #[link_name = "l_Lean_NameSet_contains"]
     pub fn l_Lean_NameSet_contains(set: lean_obj_arg, name: lean_obj_arg) -> lean_obj_res;
 }
+
+extern "C" {
+    /// `MessageData.toString : MessageData → BaseIO String` — render a
+    /// `MessageData` with Lean's real message renderer: forces lazy
+    /// messages and formats embedded expressions/names with the default pp
+    /// options. Returns `IO.Result` (`Except (IO.Error × World)
+    /// (String × World)`).
+    ///
+    /// # Safety
+    /// - `msg_data` must be a valid `MessageData` (standard, consumed)
+    /// - `world` must be a valid world token
+    #[link_name = "l_Lean_MessageData_toString"]
+    pub fn lean_message_data_to_string(msg_data: lean_obj_arg, world: lean_obj_arg) -> lean_obj_res;
+}
