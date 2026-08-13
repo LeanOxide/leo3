@@ -123,15 +123,13 @@ extern "C" {
 // ============================================================================
 
 extern "C" {
-    /// `Lean.Elab.Command.elabCommand` — direct mixed-ABI call:
-    /// `(stx, cmdCtx, cmdStateRef : IO.Ref Command.State, cmdState : Command.State,
-    ///  world) → IO Command.State` (Result.ok (state, unit)).
+    /// `Lean.Elab.Command.elabCommand` — direct mixed-ABI call.
+    /// Disassembly shows arity 4: `(stx, ctx, ref, world)`.
     #[link_name = "l_Lean_Elab_Command_elabCommand"]
-    pub fn lean_elab_command_5(
+    pub fn lean_elab_command_4(
         stx: lean_obj_arg,
         cmd_ctx: lean_obj_arg,
         cmd_state_ref: lean_obj_arg,
-        cmd_state: lean_obj_arg,
         world: lean_obj_arg,
     ) -> lean_obj_res;
 }

@@ -915,33 +915,48 @@ pub fn run_command<'l>(
             // also holds it, so keep an extra reference to prevent the
             // elaborated state from being freed under us.
             ffi::lean_inc(cmd_state_owned);
-            // elabCommand consumes the initial Command.State value; the ref
-            // also holds it, so keep an extra reference to prevent the
-            // elaborated state from being freed under us.
             ffi::lean_inc(cmd_state_owned);
-            let result = ffi::meta::repl::lean_elab_command_5(
+            // Disassembly of `l_Lean_Elab_Command_elabCommand` shows arity 4:
+            // (stx : rdi, ctx : rsi, ref : rdx, world : rcx) → go(stx, ctx,
+            // ref, world). The old 5-arg call put the Command.State in the
+            // world slot (rcx) and the world in r8 (ignored).
+            let result = ffi::meta::repl::lean_elab_command_4(
                 stx_ptr,
                 cmd_ctx.into_ptr(),
                 cmd_state_ref,
-                cmd_state_owned,
                 world,
             );
-            // IO (Unit × Command.State) = EStateM.Result.ok pair; the
-            // elaborated Command.State lives in the ref.
             let pair = crate::meta::metam::handle_eio_result(result)?;
+            ffi::lean_dec(pair);
             let final_ref = ffi::lean_st_ref_get(cmd_state_ref, ffi::lean_box(0));
             let state = ffi::lean_ctor_get(final_ref, 0) as *mut ffi::lean_object;
-            // dec-ing the io_result ctor recursively decs its field 0 (the
-            // State) — take a reference first or we read freed memory.
-            let raw_mv = std::ptr::read::<u64>((cmd_state_ref as *const u64).add(1));
             ffi::lean_inc(state);
             ffi::lean_dec(final_ref);
-            ffi::lean_dec(pair);
             // Command.State field 0 = Environment (read by offset — the
             // object header is overwritten by the elaboration pipeline but
             // the field slots survive).
             let env_out = std::ptr::read::<u64>((state as *const u64).add(1)) as *mut ffi::lean_object;
+            // The embedded runtime executes the elaboration pipeline
+            // (addDecl is reached) but the `CoreM` environment write-back
+            // through the `liftTermElabM`/`modify` chain is lost in this
+            // direct-call embedding: the final ref state keeps the initial
+            // environment. Detect that and fail loudly instead of silently
+            // returning an environment that does not contain the declared
+            // constants (26 rounds of investigation; the real `lean --run`
+            // process with the identical call shape updates the env, so the
+            // difference is in the embedded runtime environment, not in the
+            // call).
+            let env_init = env.as_ptr();
+            if env_out == env_init {
+                ffi::lean_dec(state);
+                return Err(LeanError::other(
+                    "run_cmd: elaboration ran but the environment was not updated \
+                     (embedded CommandElabM write-back limitation); \
+                     command rejected",
+                ));
+            }
             ffi::lean_inc(env_out);
+            ffi::lean_dec(state);
             Ok::<*mut ffi::lean_object, LeanError>(env_out)
         })?;
         Ok(LeanBound::from_owned_ptr(lean, result))
