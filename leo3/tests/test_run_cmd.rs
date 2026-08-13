@@ -148,3 +148,33 @@ fn test_parse_file_commands_splits_and_skips_imports() {
     });
     result.unwrap();
 }
+
+#[test]
+fn test_run_cmd_env_visible_to_tactics() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let env = import_modules(lean, &["Lean"], 0)?;
+        let mut metam = MetaMContext::new(lean, env)?;
+        // Define a local constant through run_command and chain the env.
+        let env2 = run_cmd(lean, &metam, "def local_base : Nat := 21")?;
+        metam.replace_env(env2);
+        let env3 = run_cmd(lean, &metam, "theorem local_eq : local_base = 21 := rfl")?;
+        metam.replace_env(env3);
+        // Tactic elaboration must see the local constants via Core.State.env.
+        let goal = metam.mk_goal(&LeanExpr::const_(
+            lean,
+            LeanName::from_str(lean, "True")?,
+            LeanList::nil(lean)?,
+        )?)?;
+        let mvar = LeanExpr::mvar_id(&goal)?;
+        let stx = leo3::meta::repl::parse_tactic(
+            lean, metam.env(), "suffices h : local_base = local_base from True.intro")?;
+        let outcome = run_tactic(&mut metam, &mvar, &stx, None)?;
+        assert_eq!(outcome.goals.len(), 1, "suffices should leave one goal");
+        // The remaining goal can be closed by rfl.
+        let stx2 = leo3::meta::repl::parse_tactic(lean, metam.env(), "rfl")?;
+        let outcome2 = run_tactic(&mut metam, &outcome.goals[0], &stx2, None)?;
+        assert!(outcome2.goals.is_empty(), "rfl should close local_base = local_base");
+        Ok(())
+    });
+    result.unwrap();
+}

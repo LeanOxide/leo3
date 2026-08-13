@@ -394,7 +394,27 @@ impl<'l> MetaMContext<'l> {
 
     /// Replace the context's environment (e.g. with the output of
     /// [`crate::meta::repl::run_command`]).
+    ///
+    /// Tactic elaboration reads constants from `Core.State.env` (field 0),
+    /// so the new environment must be threaded there too — otherwise
+    /// locally declared constants are invisible to `run_tactic`.
     pub fn replace_env(&mut self, env: LeanBound<'l, LeanEnvironment>) {
+        unsafe {
+            // Core.State has 9 object fields: env, nextMacroScope, ngen,
+            // auxDeclNGen, traceState, cache, messages, infoState,
+            // snapshotTasks.
+            let old_core = self.core_state.as_ptr();
+            let new_core = ffi::lean_alloc_ctor(0, 9, 0);
+            ffi::lean_inc(env.as_ptr());
+            ffi::lean_ctor_set(new_core, 0, env.as_ptr());
+            for i in 1..9u32 {
+                let f = ffi::lean_ctor_get(old_core, i) as *mut ffi::lean_object;
+                ffi::lean_inc(f);
+                ffi::lean_ctor_set(new_core, i, f);
+            }
+            self.core_state =
+                LeanBound::<crate::meta::CoreState>::from_owned_ptr(self.lean, new_core);
+        }
         self.env = env;
     }
 
