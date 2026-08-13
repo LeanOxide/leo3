@@ -628,12 +628,15 @@ impl<'l> MetaMContext<'l> {
             let type_ =
                 LeanBound::<LeanAny>::from_borrowed_ptr(self.lean, ffi::lean_ctor_get(decl_ptr, 2))
                     .cast();
-            // MetavarDecl object layout (4.25.2): 7 object slots —
-            // userName(0), lctx(1), type(2), depth(3, small Nat = scalar
-            // value in the slot), localInstances(4, `Array LocalInstance`),
-            // numScopeArgs(6), index(7) — with `kind` stored as a scalar
-            // value in slot 5. Field 4 is the local instances array
-            // (verified: slot 4 holds a `LeanArray` object).
+            // MetavarDecl object layout (4.25.2, verified by LiveView of the
+            // decl produced with `MVarId.getDecl`): userName(0), lctx(1),
+            // type(2), localInstances(4, `Array LocalInstance`). Only these
+            // three fields are read here.
+            //
+            // NOTE: Lean exports NO field accessors for `MetavarDecl` (nm
+            // shows only `l_Lean_MetavarDecl_ctorIdx` on 4.25.2), so manual
+            // slot reads are the only option; the `num_objs < 5` guard above
+            // makes layout drift fail loudly instead of corrupting memory.
             let local_instances =
                 LeanBound::<LeanAny>::from_borrowed_ptr(self.lean, ffi::lean_ctor_get(decl_ptr, 4))
                     .cast();
@@ -1155,6 +1158,9 @@ pub unsafe fn handle_eio_result(result: *mut ffi::lean_object) -> LeanResult<*mu
     // `userError` (tag 18). Dispatch on the object layout.
     let (is_internal, message) = if exc_objs >= 2 {
         // Lean.Exception: field 1 of the error constructor is MessageData.
+        // (Fallback if the Exception layout ever drifts: `internal_elim` /
+        // `error_elim` exports extract the fields version-safely, at the
+        // cost of a Lean closure callback per error.)
         let msg_data = ffi::lean_ctor_get(exception_ptr, 1) as *mut ffi::lean_object;
         (exc_tag == 1, extract_message_data(msg_data))
     } else if exc_objs == 1 {
