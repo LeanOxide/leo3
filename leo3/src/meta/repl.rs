@@ -902,62 +902,130 @@ pub fn run_command<'l>(
             ffi::lean_inc(stx.as_ptr());
             stx.as_ptr()
         };
-        let result = crate::runtime::run_worker(move || unsafe {
-            let cmd_state_owned = mk_command_state(lean, &env)?;
-            let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, ffi::lean_box(0));
-            let cmd_state_ref = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
-            // `io_result_mk_ok` returns a 1-field ctor; the unit world is
-            // erased — thread a fresh box(0).
-            let world = ffi::lean_box(0);
-            ffi::lean_inc(cmd_state_ref);
-            ffi::lean_dec(ref_result);
-            // elabCommand consumes the initial Command.State value; the ref
-            // also holds it, so keep an extra reference to prevent the
-            // elaborated state from being freed under us.
-            ffi::lean_inc(cmd_state_owned);
-            ffi::lean_inc(cmd_state_owned);
-            // Disassembly of `l_Lean_Elab_Command_elabCommand` shows arity 4:
-            // (stx : rdi, ctx : rsi, ref : rdx, world : rcx) → go(stx, ctx,
-            // ref, world). The old 5-arg call put the Command.State in the
-            // world slot (rcx) and the world in r8 (ignored).
-            let result = ffi::meta::repl::lean_elab_command_4(
-                stx_ptr,
-                cmd_ctx.into_ptr(),
-                cmd_state_ref,
-                world,
-            );
-            let pair = crate::meta::metam::handle_eio_result(result)?;
-            ffi::lean_dec(pair);
-            let final_ref = ffi::lean_st_ref_get(cmd_state_ref, ffi::lean_box(0));
-            let state = ffi::lean_ctor_get(final_ref, 0) as *mut ffi::lean_object;
-            ffi::lean_inc(state);
-            ffi::lean_dec(final_ref);
-            // Command.State field 0 = Environment (read by offset — the
-            // object header is overwritten by the elaboration pipeline but
-            // the field slots survive).
-            let env_out = std::ptr::read::<u64>((state as *const u64).add(1)) as *mut ffi::lean_object;
-            // The embedded runtime executes the elaboration pipeline
-            // (addDecl is reached) but the `CoreM` environment write-back
-            // through the `liftTermElabM`/`modify` chain is lost in this
-            // direct-call embedding: the final ref state keeps the initial
-            // environment. Detect that and fail loudly instead of silently
-            // returning an environment that does not contain the declared
-            // constants (26 rounds of investigation; the real `lean --run`
-            // process with the identical call shape updates the env, so the
-            // difference is in the embedded runtime environment, not in the
-            // call).
-            let env_init = env.as_ptr();
-            if env_out == env_init {
+        let result = crate::runtime::run_worker(move || -> LeanResult<*mut ffi::lean_object> {
+            unsafe {
+                let cmd_state_owned = mk_command_state(lean, &env)?;
+                let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, ffi::lean_box(0));
+                let cmd_state_ref = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
+                // `lean_st_mk_ref` returns an IO pair `(ref, world)`: use the
+                // REAL world token it produces (like `import_modules` and
+                // `run_tactic` do), not a synthetic box(0).
+                let world = ffi::lean_ctor_get(ref_result, 1) as *mut ffi::lean_object;
+                ffi::lean_inc(cmd_state_ref);
+                ffi::lean_inc(world);
+                ffi::lean_dec(ref_result);
+                // elabCommand consumes the initial Command.State value; the
+                // ref also holds it, so keep extra references to prevent the
+                // elaborated state from being freed under us.
+                ffi::lean_inc(cmd_state_owned);
+                ffi::lean_inc(cmd_state_owned);
+                // The callee also consumes the ref argument (lean_obj_arg):
+                // keep our own reference so the ref survives the call (same
+                // pattern as run_tactic's "Keep our own references").
+                ffi::lean_inc(cmd_state_ref);
+
+                // `elabCommandTopLevel` is the real frontend entry; arity 4:
+                // (stx, ctx, ref, world).
+                let result = ffi::meta::repl::lean_elab_command_top_level_4(
+                    stx_ptr,
+                    cmd_ctx.into_ptr(),
+                    cmd_state_ref,
+                    world,
+                );
+                let pair = crate::meta::metam::handle_eio_result(result)?;
+                ffi::lean_dec(pair);
+
+                // The elaboration pipeline threads the final Command.State
+                // through the ref in place; read it back.
+                let final_ref = ffi::lean_st_ref_get(cmd_state_ref, world);
+                let state = ffi::lean_ctor_get(final_ref, 0) as *mut ffi::lean_object;
+                ffi::lean_inc(state);
+                ffi::lean_dec(final_ref);
+                // Command.State field 0 = Environment.
+                let env_out =
+                    std::ptr::read::<u64>((state as *const u64).add(1)) as *mut ffi::lean_object;
+
+                // Error reporting: `withLogging` swallows elaboration
+                // failures into the command message log (no exception
+                // propagates), so surface the first `error`-severity
+                // message as a LeanError. `MessageLog.toList` (pure) +
+                // `Message.serialize` + `SerialMessage.toString` render
+                // messages with a position prefix, e.g.
+                // `<stdin>:0:0-0:0: error: ...`.
+                extern "C" {
+                    #[link_name = "l_Lean_MessageLog_toList"]
+                    fn lean_msglog_tolist(a: *mut ffi::lean_object) -> *mut ffi::lean_object;
+                    #[link_name = "l_Lean_Message_serialize"]
+                    fn lean_message_serialize(
+                        a: *mut ffi::lean_object,
+                        w: *mut ffi::lean_object,
+                    ) -> *mut ffi::lean_object;
+                    #[link_name = "l_Lean_SerialMessage_toString"]
+                    fn lean_serial_to_string(
+                        a: *mut ffi::lean_object,
+                        b: *mut ffi::lean_object,
+                    ) -> *mut ffi::lean_object;
+                }
+                let msg_log =
+                    std::ptr::read::<u64>((state as *const u64).add(2)) as *mut ffi::lean_object;
+                ffi::lean_inc(msg_log);
+                let c = ffi::inline::lean_alloc_closure(
+                    lean_msglog_tolist as *mut std::ffi::c_void,
+                    1,
+                    0,
+                );
+                let lst = ffi::closure::lean_apply_1(c, msg_log);
+                let mut err_msg: Option<String> = None;
+                let mut cur = lst;
+                while !ffi::inline::lean_is_scalar(cur) && err_msg.is_none() {
+                    let m = ffi::lean_ctor_get(cur, 0) as *mut ffi::lean_object;
+                    ffi::lean_inc(m);
+                    let w = ffi::io::lean_io_mk_world();
+                    let c2 = ffi::inline::lean_alloc_closure(
+                        lean_message_serialize as *mut std::ffi::c_void,
+                        2,
+                        0,
+                    );
+                    let r = ffi::closure::lean_apply_2(c2, m, w);
+                    if !ffi::inline::lean_is_scalar(r) && ffi::lean_obj_tag(r) == 0 {
+                        let sm = ffi::lean_ctor_get(r, 0) as *mut ffi::lean_object;
+                        ffi::lean_inc(sm);
+                        ffi::lean_dec(r);
+                        let c3 = ffi::inline::lean_alloc_closure(
+                            lean_serial_to_string as *mut std::ffi::c_void,
+                            2,
+                            0,
+                        );
+                        let s2 = ffi::closure::lean_apply_2(c3, sm, ffi::lean_box(0));
+                        let cs = ffi::inline::lean_string_cstr(s2);
+                        if !cs.is_null() {
+                            let txt =
+                                std::ffi::CStr::from_ptr(cs).to_string_lossy().into_owned();
+                            // Severity markers: `: error: ...` or
+                            // `: error(name): ...` after the position prefix.
+                            if txt.contains(": error") {
+                                err_msg = Some(txt.trim().to_string());
+                            }
+                        }
+                        ffi::lean_dec(s2);
+                    }
+                    cur = ffi::lean_ctor_get(cur, 1) as *mut ffi::lean_object;
+                }
+                ffi::lean_dec(lst);
+                if let Some(msg) = err_msg {
+                    let msg = format!("run_cmd: command failed: {msg}");
+                    ffi::lean_dec(state);
+                    return Err(LeanError::other(&msg));
+                }
+
+                // Note: commands that never touch the environment (`#check`,
+                // `set_option` with no options change, ...) legitimately
+                // return the same environment object — do not reject them;
+                // elaboration failures are surfaced via the message check.
+                ffi::lean_inc(env_out);
                 ffi::lean_dec(state);
-                return Err(LeanError::other(
-                    "run_cmd: elaboration ran but the environment was not updated \
-                     (embedded CommandElabM write-back limitation); \
-                     command rejected",
-                ));
+                Ok::<*mut ffi::lean_object, LeanError>(env_out)
             }
-            ffi::lean_inc(env_out);
-            ffi::lean_dec(state);
-            Ok::<*mut ffi::lean_object, LeanError>(env_out)
         })?;
         Ok(LeanBound::from_owned_ptr(lean, result))
     }
@@ -1028,12 +1096,12 @@ unsafe fn mk_command_state<'l>(
     ffi::lean_ctor_set(msg_log, 1, pa);
     ffi::lean_ctor_set(msg_log, 2, ffi::lean_box(1));
     ffi::lean_ctor_set(state, 1, msg_log);
-    // 2: scopes = [ base Scope ] — Scope has 10 object fields + 4 Bool
+    // 2: scopes = [ base Scope ] — Scope has 10 object fields + 3 Bool
     // scalars: header, opts, currNamespace, openDecls, levelNames,
-    // varDecls, varUIds, includedVars, omittedVars, attrs, isNoncomputable,
-    // isPublic, isMeta.
+    // varDecls, varUIds, includedVars, omittedVars, isNoncomputable,
+    // isPublic, isMeta, attrs.
     let empty_str = ffi::string::lean_mk_string_from_bytes(b"".as_ptr() as *const _, 0);
-    let scope = ffi::lean_alloc_ctor(0, 10, 4);
+    let scope = ffi::lean_alloc_ctor(0, 10, 3);
     ffi::lean_ctor_set(scope, 0, empty_str);                    // header
     let opts = ffi::meta::get_KVMapEmpty();                     // opts (empty)
     ffi::lean_ctor_set(scope, 1, opts);
@@ -1051,7 +1119,6 @@ unsafe fn mk_command_state<'l>(
     ffi::inline::lean_ctor_set_uint8(scope, sb, 0);             // isNoncomputable
     ffi::inline::lean_ctor_set_uint8(scope, sb + 1, 0);         // isPublic
     ffi::inline::lean_ctor_set_uint8(scope, sb + 2, 0);         // isMeta
-    ffi::inline::lean_ctor_set_uint8(scope, sb + 3, 0);         // (4th Bool scalar)
     let scopes = ffi::lean_alloc_ctor(1, 2, 0); // List.cons
     ffi::lean_ctor_set(scopes, 0, scope);
     ffi::lean_ctor_set(scopes, 1, ffi::lean_box(0)); // List.nil
@@ -1094,8 +1161,9 @@ unsafe fn mk_command_state<'l>(
     ffi::inline::lean_ctor_set_uint8(info_state, 3 * 8, 1); // enabled := true
     ffi::lean_ctor_set(state, 8, info_state);
     // 9: traceState = TraceState { tid := 0, traces := ∅ } — 1 object +
-    //    1 UInt64 scalar (tid).
-    let trace_state = ffi::lean_alloc_ctor(0, 1, 1);
+    //    1 UInt64 scalar (tid, 8 bytes). NB: scalar_sz is BYTES: allocating
+    //    1 and writing 8 overwrites the neighboring heap block.
+    let trace_state = ffi::lean_alloc_ctor(0, 1, 8);
     ffi::lean_ctor_set(trace_state, 0, pa);
     ffi::lean_ctor_set_uint64(trace_state, 1 * 8, 0);
     ffi::lean_ctor_set(state, 9, trace_state);

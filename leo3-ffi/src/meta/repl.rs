@@ -95,6 +95,7 @@ extern "C" {
     ) -> lean_obj_res;
 }
 
+
 // ============================================================================
 // Tactic execution (fully-uncurried monad form)
 // ============================================================================
@@ -123,10 +124,10 @@ extern "C" {
 // ============================================================================
 
 extern "C" {
-    /// `Lean.Elab.Command.elabCommand` — direct mixed-ABI call.
-    /// Disassembly shows arity 4: `(stx, ctx, ref, world)`.
-    #[link_name = "l_Lean_Elab_Command_elabCommand"]
-    pub fn lean_elab_command_4(
+    /// `Lean.Elab.Command.elabCommandTopLevel` — direct mixed-ABI call.
+    /// Arity 4: `(stx, ctx, ref, world)`.
+    #[link_name = "l_Lean_Elab_Command_elabCommandTopLevel"]
+    pub fn lean_elab_command_top_level_4(
         stx: lean_obj_arg,
         cmd_ctx: lean_obj_arg,
         cmd_state_ref: lean_obj_arg,

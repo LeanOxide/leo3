@@ -137,6 +137,7 @@ pub mod tokio_bridge;
 pub use err::{KernelExceptionCode, LeanError, LeanResult};
 pub use instance::{LeanBorrowed, LeanBound, LeanRef};
 pub use instance::LeanAny;
+#[cfg(any(feature = "meta", feature = "task"))]
 pub use runtime::run_worker;
 pub use marker::Lean;
 pub use unbound::LeanUnbound;

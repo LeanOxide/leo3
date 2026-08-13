@@ -392,6 +392,12 @@ impl<'l> MetaMContext<'l> {
         &self.env
     }
 
+    /// Replace the context's environment (e.g. with the output of
+    /// [`crate::meta::repl::run_command`]).
+    pub fn replace_env(&mut self, env: LeanBound<'l, LeanEnvironment>) {
+        self.env = env;
+    }
+
     /// Get the [`Lean`] runtime token associated with this context.
     pub fn lean(&self) -> Lean<'l> {
         self.lean

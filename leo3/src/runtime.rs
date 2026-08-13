@@ -211,6 +211,7 @@ where
 
 /// Run a closure on the single long-lived Lean worker thread (the
 /// canonical serialized path for FFI calls).
+#[cfg(any(feature = "meta", feature = "task"))]
 pub fn run_worker<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
