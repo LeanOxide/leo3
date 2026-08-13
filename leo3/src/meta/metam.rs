@@ -628,6 +628,12 @@ impl<'l> MetaMContext<'l> {
             let type_ =
                 LeanBound::<LeanAny>::from_borrowed_ptr(self.lean, ffi::lean_ctor_get(decl_ptr, 2))
                     .cast();
+            // MetavarDecl object layout (4.25.2): 7 object slots —
+            // userName(0), lctx(1), type(2), depth(3, small Nat = scalar
+            // value in the slot), localInstances(4, `Array LocalInstance`),
+            // numScopeArgs(6), index(7) — with `kind` stored as a scalar
+            // value in slot 5. Field 4 is the local instances array
+            // (verified: slot 4 holds a `LeanArray` object).
             let local_instances =
                 LeanBound::<LeanAny>::from_borrowed_ptr(self.lean, ffi::lean_ctor_get(decl_ptr, 4))
                     .cast();
@@ -716,6 +722,76 @@ impl<'l> MetaMContext<'l> {
             }
             Ok((hyps, ty))
         }
+    }
+
+    /// Get the local hypotheses of a goal as `(user_name, type_pp)` pairs,
+    /// together with the goal's pretty-printed type.
+    ///
+    /// Like [`goal_hyps_and_type`], but both the hypothesis types and the
+    /// goal type are rendered by Lean's real pretty printer
+    /// (`Meta.ppExpr` under the goal's local context), so free variables
+    /// appear with their user-facing names and usual notations.
+    ///
+    /// Used by the Repl layer to render goal states.
+    pub fn goal_hyps_and_type_pp(
+        &mut self,
+        mvar: &LeanBound<'l, LeanName>,
+    ) -> LeanResult<(Vec<(String, String)>, String)> {
+        crate::runtime::ensure_meta_initialized();
+        let gexpr = LeanExpr::mvar(self.lean, mvar.clone())?;
+        let decl = self.get_mvar_decl(&gexpr)?;
+        let lctx = decl.lctx;
+        let local_instances = decl.local_instances;
+        let goal_ty = decl.type_;
+        let mut hyps = Vec::new();
+        let ty_pp = {
+            unsafe {
+                extern "C" {
+                    #[link_name = "l_Lean_Name_toString"]
+                    fn name_to_string(
+                        env: *mut *mut ffi::lean_object,
+                        arg: *mut ffi::lean_object,
+                    ) -> *mut ffi::lean_object;
+                }
+                ffi::lean_inc(lctx.as_ptr());
+                let num_raw = ffi::meta::lean_local_ctx_num_indices(lctx.as_ptr());
+                let num = LeanBound::<LeanNat>::from_owned_ptr(self.lean, num_raw);
+                let n = LeanNat::to_usize(&num)?;
+                for i in 0..n {
+                    let idx = LeanNat::from_usize(self.lean, i)?;
+                    ffi::lean_inc(lctx.as_ptr());
+                    let raw = ffi::meta::lean_local_ctx_get_at(lctx.as_ptr(), idx.as_ptr());
+                    if ffi::inline::lean_is_scalar(raw) {
+                        continue;
+                    }
+                    let local_decl = unpack_option_local_decl(self.lean, raw);
+                    let un_raw = ffi::meta::lean_local_decl_user_name(local_decl.as_ptr());
+                    let un =
+                        LeanBound::<LeanAny>::from_owned_ptr(self.lean, un_raw).cast::<LeanName>();
+                    let tp_raw = ffi::meta::lean_local_decl_type(local_decl.as_ptr());
+                    let tp = LeanBound::<LeanAny>::from_owned_ptr(self.lean, tp_raw)
+                        .cast::<LeanExpr>();
+                    // Name.toString (arity-1 curried pure function).
+                    let closure = ffi::inline::lean_alloc_closure(
+                        name_to_string as *mut std::ffi::c_void,
+                        1u32,
+                        0,
+                    );
+                    let s = ffi::closure::lean_apply_1(closure, un.into_ptr());
+                    let s = LeanBound::<crate::types::LeanString>::from_owned_ptr(self.lean, s);
+                    let name_str = crate::types::LeanString::cstr(&s)?.to_string();
+                    let ty_str = crate::meta::repl::pp_expr(
+                        self,
+                        &lctx,
+                        &local_instances,
+                        &tp,
+                    )?;
+                    hyps.push((name_str, ty_str));
+                }
+                crate::meta::repl::pp_expr(self, &lctx, &local_instances, &goal_ty)?
+            }
+        };
+        Ok((hyps, ty_pp))
     }
 
     /// Get the most recently introduced hypothesis from a goal's local context.

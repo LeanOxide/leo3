@@ -881,6 +881,230 @@ pub fn run_tactic<'l>(
     }
 }
 
+/// Pretty-print a goal metavariable with Lean's real pretty printer.
+///
+/// Runs `Lean.Meta.ppGoal` (delaborator + pretty printer) in the session's
+/// `MetaM` context and renders the resulting `Format` with
+/// `Format.pretty`. Unlike `LeanExpr::dbg_to_string` — which prints free
+/// variables by their internal id — the output uses the local context's
+/// user-facing names and the usual notations, e.g.
+/// `n m : Nat ⊢ n + m = m + n`.
+///
+/// # Errors
+///
+/// Returns the Lean exception if pretty-printing fails (e.g. the goal
+/// metavariable is not in the context).
+pub fn pp_goal<'l>(
+    metam: &mut MetaMContext<'l>,
+    mvar: &LeanBound<'l, LeanName>,
+) -> LeanResult<String> {
+    crate::runtime::ensure_meta_initialized();
+
+    let meta_ctx = metam.meta_ctx().clone();
+    let core_ctx = metam.core_ctx().clone();
+    let core_state = metam.core_state().clone();
+    let meta_state = metam.meta_state().clone();
+    let mvar_ptr = mvar.as_ptr();
+    unsafe {
+        ffi::lean_inc(mvar_ptr);
+    }
+    let meta_ctx_ptr = meta_ctx.into_ptr();
+    let core_ctx_ptr = core_ctx.into_ptr();
+    let core_state_ptr = core_state.into_ptr();
+    let meta_state_ptr = meta_state.into_ptr();
+
+    let rendered = crate::runtime::with_worker(move || unsafe {
+        // State refs, following the run_tactic pattern: wrap the session's
+        // current Meta.State / Core.State in fresh ST refs plus a world token.
+        #[cfg(not(lean_4_26))]
+        let meta_state_ref = {
+            let world_in = ffi::lean_box(0);
+            let ref_result = ffi::lean_st_mk_ref(meta_state_ptr, world_in);
+            let r = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
+            ffi::lean_inc(r);
+            ffi::lean_dec(ref_result);
+            r
+        };
+        #[cfg(lean_4_26)]
+        let meta_state_ref = ffi::lean_st_mk_ref(meta_state_ptr, ffi::lean_box(0));
+        #[cfg(not(lean_4_26))]
+        let (core_state_ref, world) = {
+            let world_in = ffi::lean_box(0);
+            let ref_result = ffi::lean_st_mk_ref(core_state_ptr, world_in);
+            let r = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
+            let w = ffi::lean_ctor_get(ref_result, 1) as *mut ffi::lean_object;
+            ffi::lean_inc(r);
+            ffi::lean_inc(w);
+            ffi::lean_dec(ref_result);
+            (r, w)
+        };
+        #[cfg(lean_4_26)]
+        let (core_state_ref, world) = (
+            ffi::lean_st_mk_ref(core_state_ptr, ffi::lean_box(0)),
+            ffi::lean_box(0),
+        );
+        // Keep our own references so the refs survive the callee's dec; we
+        // release them after the call (ppGoal is read-only).
+        ffi::lean_inc(meta_state_ref);
+        ffi::lean_inc(core_state_ref);
+
+        let result = ffi::meta::repl::lean_meta_pp_goal(
+            mvar_ptr,
+            meta_ctx_ptr,
+            meta_state_ref,
+            core_ctx_ptr,
+            core_state_ref,
+            world,
+        );
+        let fmt = super::metam::handle_eio_result(result)?;
+        // Render the Format with the default width (120), no indent/column.
+        let width = ffi::inline::lean_usize_to_nat(120);
+        let indent = ffi::inline::lean_usize_to_nat(0);
+        let column = ffi::inline::lean_usize_to_nat(0);
+        let s = ffi::meta::repl::lean_format_pretty(fmt, width, indent, column);
+
+        // ppGoal does not mutate the state refs; drop our extra references.
+        ffi::lean_dec(meta_state_ref);
+        ffi::lean_dec(core_state_ref);
+        Ok::<*mut ffi::lean_object, LeanError>(s)
+    })?;
+
+    unsafe {
+        let s = LeanBound::<crate::types::LeanString>::from_owned_ptr(metam.lean(), rendered);
+        Ok(crate::types::LeanString::cstr(&s)?.to_string())
+    }
+}
+
+/// Pretty-print an expression with Lean's real pretty printer.
+///
+/// Runs `Meta.ppExpr` with a `Meta.Context` whose local context and local
+/// instances are the given goal's, so free variables resolve to their
+/// user-facing names and notations are applied (e.g. `n + m` rather than
+/// `HAdd.hAdd.{0, 0, 0} Nat Nat Nat (instHAdd.{0} Nat instAddNat) 65 68`).
+///
+/// We build the context by copying the session's current `Meta.Context`
+/// (same config/options) and patching the `lctx` and `localInstances`
+/// slots, then call the fully-uncurried `lean_meta_pp_expr` export
+/// directly. `Lean.Meta.withLCtx` cannot be used here: its `___redArg`
+/// export expects its action argument as a closure in an undocumented
+/// calling convention (it dereferences `[arg2+0x10]` unconditionally, so a
+/// nil `LocalInstances` — a scalar `box(0)` — segfaults inside the callee).
+///
+/// `Meta.Context` layout (verified on 4.25.2, both against the `Inhabited`
+/// static and against `Lean.Meta.withLCtx'`'s compiled code, which patches
+/// `[ctx+0x18]`): 7 object slots + 3 trailing bool bytes, 0x48 bytes total:
+/// keyedConfig(0), trackZetaDelta(1, scalar), lctx(2), localInstances(3),
+/// defEqCtx?(4, scalar `none`), synthPendingDepth(5, scalar),
+/// canUnfold?(6, scalar `none`), bytes 0x40-0x42 (univApprox,
+/// inTypeClassResolution).
+pub fn pp_expr<'l>(
+    metam: &MetaMContext<'l>,
+    lctx: &LeanBound<'l, crate::instance::LeanAny>,
+    local_instances: &LeanBound<'l, crate::instance::LeanAny>,
+    e: &LeanBound<'l, LeanExpr>,
+) -> LeanResult<String> {
+    crate::runtime::ensure_meta_initialized();
+
+    let meta_ctx = metam.meta_ctx().clone();
+    let core_ctx = metam.core_ctx().clone();
+    let core_state = metam.core_state().clone();
+    let meta_state = metam.meta_state().clone();
+    let lctx_ptr = lctx.as_ptr();
+    let insts_ptr = local_instances.as_ptr();
+    let e_ptr = e.as_ptr();
+    unsafe {
+        // These references are transferred into the patched context below.
+        ffi::lean_inc(lctx_ptr);
+        ffi::lean_inc(insts_ptr);
+        ffi::lean_inc(e_ptr);
+    }
+    let meta_ctx_ptr = meta_ctx.into_ptr();
+    let core_ctx_ptr = core_ctx.into_ptr();
+    let core_state_ptr = core_state.into_ptr();
+    let meta_state_ptr = meta_state.into_ptr();
+
+    let rendered = crate::runtime::with_worker(move || unsafe {
+        #[cfg(not(lean_4_26))]
+        let meta_state_ref = {
+            let world_in = ffi::lean_box(0);
+            let ref_result = ffi::lean_st_mk_ref(meta_state_ptr, world_in);
+            let r = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
+            ffi::lean_inc(r);
+            ffi::lean_dec(ref_result);
+            r
+        };
+        #[cfg(lean_4_26)]
+        let meta_state_ref = ffi::lean_st_mk_ref(meta_state_ptr, ffi::lean_box(0));
+        #[cfg(not(lean_4_26))]
+        let (core_state_ref, world) = {
+            let world_in = ffi::lean_box(0);
+            let ref_result = ffi::lean_st_mk_ref(core_state_ptr, world_in);
+            let r = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
+            let w = ffi::lean_ctor_get(ref_result, 1) as *mut ffi::lean_object;
+            ffi::lean_inc(r);
+            ffi::lean_inc(w);
+            ffi::lean_dec(ref_result);
+            (r, w)
+        };
+        #[cfg(lean_4_26)]
+        let (core_state_ref, world) = (
+            ffi::lean_st_mk_ref(core_state_ptr, ffi::lean_box(0)),
+            ffi::lean_box(0),
+        );
+        ffi::lean_inc(meta_state_ref);
+        ffi::lean_inc(core_state_ref);
+
+        // Patched Meta.Context: same size (0x48) and slot count (7 object
+        // slots + 8 scalar bytes) as the real record, so the GC's
+        // field-scanning (`m_other = 7`) stays correct. Scalar slots are
+        // copied verbatim; object slots are refcounted; slots 2/3 (lctx,
+        // localInstances) take the goal's values.
+        let new_ctx = ffi::lean_alloc_ctor(0, 7, 8);
+        for i in 0..7u32 {
+            let src = *(meta_ctx_ptr as *const u64).add(1 + i as usize);
+            let v = match i {
+                2 => lctx_ptr,
+                3 => insts_ptr,
+                _ => {
+                    if src & 1 == 0 {
+                        ffi::lean_inc(src as *mut ffi::lean_object);
+                    }
+                    src as *mut ffi::lean_object
+                }
+            };
+            ffi::inline::lean_ctor_set(new_ctx, i, v);
+        }
+        // Trailing bool bytes (univApprox, inTypeClassResolution): copy the
+        // whole 8-byte word (3 used bytes + alignment padding).
+        *(new_ctx as *mut u64).add(8) = *(meta_ctx_ptr as *const u64).add(8);
+
+        let result = ffi::meta::repl::lean_meta_pp_expr(
+            e_ptr,
+            new_ctx,
+            meta_state_ref,
+            core_ctx_ptr,
+            core_state_ref,
+            world,
+        );
+        let fmt = super::metam::handle_eio_result(result)?;
+        let width = ffi::inline::lean_usize_to_nat(120);
+        let indent = ffi::inline::lean_usize_to_nat(0);
+        let column = ffi::inline::lean_usize_to_nat(0);
+        let s = ffi::meta::repl::lean_format_pretty(fmt, width, indent, column);
+
+        // ppExpr does not mutate the state refs; drop our extra references.
+        ffi::lean_dec(meta_state_ref);
+        ffi::lean_dec(core_state_ref);
+        Ok::<*mut ffi::lean_object, LeanError>(s)
+    })?;
+
+    unsafe {
+        let s = LeanBound::<crate::types::LeanString>::from_owned_ptr(metam.lean(), rendered);
+        Ok(crate::types::LeanString::cstr(&s)?.to_string())
+    }
+}
+
+
 
 // ============================================================================
 // Command execution (run_cmd)

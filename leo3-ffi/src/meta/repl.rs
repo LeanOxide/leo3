@@ -134,3 +134,52 @@ extern "C" {
         world: lean_obj_arg,
     ) -> lean_obj_res;
 }
+
+// ============================================================================
+// Goal pretty-printing (fully-uncurried monad form)
+// ============================================================================
+
+extern "C" {
+    /// `Lean.Meta.ppGoal` — the fully-uncurried monad form (6 args):
+    /// `(mvarId, metaCtx, metaStateRef, coreCtx, coreStateRef, world) →
+    /// EStateM.Result Format`. Runs the real delaborator + pretty printer,
+    /// producing a VSCode-style goal view (hypotheses + `⊢` + type).
+    #[link_name = "l_Lean_Meta_ppGoal"]
+    pub fn lean_meta_pp_goal(
+        mvar_id: lean_obj_arg,
+        meta_ctx: lean_obj_arg,
+        meta_state_ref: lean_obj_arg,
+        core_ctx: lean_obj_arg,
+        core_state_ref: lean_obj_arg,
+        world: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+extern "C" {
+    /// `Format.pretty : Format → Nat → Nat → Nat → String` — the exported
+    /// C API (`@[export lean_format_pretty]`): render a `Format` to a string
+    /// with the given width / indent / starting column.
+    #[link_name = "lean_format_pretty"]
+    pub fn lean_format_pretty(
+        fmt: lean_obj_arg,
+        width: lean_obj_arg,
+        indent: lean_obj_arg,
+        column: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+extern "C" {
+    /// `Lean.Meta.ppExpr` — the fully-uncurried monad form (6 args):
+    /// `(e, metaCtx, metaStateRef, coreCtx, coreStateRef, world) →
+    /// EStateM.Result Format`. Pretty-prints an expression with Lean's real
+    /// delaborator + pretty printer, using the *current* local context.
+    #[link_name = "l_Lean_Meta_ppExpr"]
+    pub fn lean_meta_pp_expr(
+        e: lean_obj_arg,
+        meta_ctx: lean_obj_arg,
+        meta_state_ref: lean_obj_arg,
+        core_ctx: lean_obj_arg,
+        core_state_ref: lean_obj_arg,
+        world: lean_obj_arg,
+    ) -> lean_obj_res;
+}
