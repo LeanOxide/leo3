@@ -1031,6 +1031,94 @@ pub fn run_command<'l>(
     }
 }
 
+/// Read a `Lean.Name` as its dotted string form (str/num segments),
+/// mirroring `Name.toString` for the common hierarchical names used as
+/// syntax-node kinds. Returns `None` for malformed names.
+/// Parse a Lean source file into its top-level commands, returning the
+/// command syntaxes in order.
+///
+/// Uses Lean's real `command`-category parser (`runParserCategory`, the
+/// same entry the repl uses for single commands) line by line, accumulating
+/// lines until the accumulated buffer parses as exactly one command — this
+/// handles multi-line commands such as long `theorem` bodies. `import`
+/// commands are skipped (module loading is the caller's responsibility via
+/// [`import_modules`]). A file whose final accumulated lines fail to parse
+/// yields a `LeanError` with the parser message. Commands must be
+/// separated by newlines (one command per line is the Lean convention; a
+/// single line holding several commands is rejected with an explicit
+/// error). Feed the results to [`run_command`] to elaborate a file.
+pub fn parse_file_commands<'l>(
+    lean: Lean<'l>,
+    env: &LeanBound<'l, LeanEnvironment>,
+    input: &str,
+    file_name: &str,
+) -> LeanResult<Vec<LeanBound<'l, LeanExpr>>> {
+    crate::runtime::ensure_meta_initialized();
+    let _ = file_name;
+    let mut out: Vec<LeanBound<'l, LeanExpr>> = Vec::new();
+    let mut buf = String::new();
+    let mut line_no = 0usize;
+    // `lines()` splits on '\n' without the terminator; reassemble with
+    // '\n' so the parser sees faithful positions.
+    for line in input.split('\n') {
+        line_no += 1;
+        if line_no == 1 && buf.is_empty() && line.trim().is_empty() {
+            continue; // skip leading blank lines
+        }
+        buf.push_str(line);
+        buf.push('\n');
+        // Parse the accumulated candidate with trailing whitespace
+        // stripped: Lean's `runParserCategory` requires the whole input to
+        // be consumed, and a trailing newline after a complete command is
+        // reported as "expected end of input".
+        let candidate = buf.trim_end();
+        if candidate.is_empty() {
+            buf.clear();
+            continue;
+        }
+        // `import` lives at module level, not in the `command` category —
+        // skip import lines entirely (module loading is the caller's job).
+        if candidate.starts_with("import ") || candidate == "import" {
+            buf.clear();
+            continue;
+        }
+        match parse_command(lean, env, candidate) {
+            Ok(stx) => {
+                // One complete command: check it is not an import, keep it.
+                out.push(stx);
+                buf.clear();
+            }
+            Err(e) => {
+                let msg = format!("{e}");
+                if msg.contains("unexpected end of input") {
+                    // Incomplete command (multi-line body): keep accumulating.
+                    continue;
+                }
+                if msg.contains("expected end of input") {
+                    // The candidate is complete but holds trailing content
+                    // that is not whitespace: several commands on one line.
+                    let msg2 = format!(
+                        "parse_file_commands: multiple commands on one line (line {line_no}) \
+                         are not supported: {msg}"
+                    );
+                    return Err(LeanError::other(&msg2));
+                }
+                // Any other parse failure: could still be a multi-line
+                // command, keep accumulating; the trailing buffer reports
+                // the error at EOF if it never completes.
+            }
+        }
+    }
+    if !buf.trim().is_empty() {
+        // Trailing lines never formed a complete command.
+        let msg2 = format!(
+            "parse_file_commands: incomplete or invalid command at end of file (line {line_no}): {buf:?}"
+        );
+        return Err(LeanError::other(&msg2));
+    }
+    Ok(out)
+}
+
 /// Build a default `Lean.Elab.Command.Context` (v4.25 layout: 10 object
 /// fields + 1 Bool scalar: suppressElabErrors). `stx` becomes `ctx.ref`
 /// (matching the real frontend).

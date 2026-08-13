@@ -125,3 +125,26 @@ fn test_run_cmd_repeated_calls_stable() {
     });
     result.unwrap();
 }
+
+#[test]
+fn test_parse_file_commands_splits_and_skips_imports() {
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        let env = import_modules(lean, &["Lean"], 0)?;
+        let src = "import Lean\n\ndef file_def : Nat := 7\n\ntheorem file_thm : file_def = file_def := rfl\n";
+        let cmds = leo3::meta::repl::parse_file_commands(lean, &env, src, "test.lean")?;
+        // import is skipped; def + theorem remain, in order.
+        assert_eq!(cmds.len(), 2, "expected 2 commands, got {}", cmds.len());
+        // Elaborate them in sequence onto the environment.
+        let mut metam = MetaMContext::new(lean, env)?;
+        for stx in &cmds {
+            let env2 = leo3::meta::repl::run_command(lean, &metam, stx)?;
+            metam.replace_env(env2);
+        }
+        let found = LeanEnvironment::find(&metam.env(), &LeanName::from_components(lean, "file_def")?)?;
+        assert!(found.is_some(), "file_def should be declared");
+        let found = LeanEnvironment::find(&metam.env(), &LeanName::from_components(lean, "file_thm")?)?;
+        assert!(found.is_some(), "file_thm should be declared");
+        Ok(())
+    });
+    result.unwrap();
+}
