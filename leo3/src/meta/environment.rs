@@ -69,6 +69,14 @@ impl LeanEnvironment {
     /// let env = LeanEnvironment::empty(lean, 0)?;
     /// ```
     pub fn empty<'l>(lean: Lean<'l>, trust_level: u32) -> LeanResult<LeanBound<'l, Self>> {
+        crate::runtime::ensure_meta_initialized();
+        // `lean_mk_empty_environment` refuses to run while
+        // `IO.initializing == true` ("environment objects cannot be created
+        // during initialization"). `import_modules_with_exts` ends the
+        // initialization phase before importing; do the same here (the call
+        // is idempotent) so an empty environment can be created without a
+        // prior import.
+        crate::meta::repl::finalize_initialization();
         let env_ptr = with_worker(move || unsafe {
             let world = ffi::io::lean_io_mk_world();
             let io_result = ffi::environment::lean_mk_empty_environment(trust_level, world);
