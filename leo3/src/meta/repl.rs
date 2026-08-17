@@ -410,6 +410,61 @@ pub unsafe fn default_term_state<'l>(
     }
 }
 
+/// A copy of the default `Lean.Elab.Term.State` with a *fresh* empty
+/// `MessageLog` installed in the `messages` slot (object field 6 on
+/// v4.25.2).
+///
+/// `runTactic` writes tactic diagnostics (e.g. `exact 42` against a
+/// proposition goal) into `Term.State.messages` as `error`-severity
+/// messages and returns `Ok`; the caller must scan that log to surface
+/// them, since the tactic itself does not throw. Feeding the shared static
+/// default state would let those messages leak into the shared object, so
+/// we clone the default and give it its own log (copies of every object
+/// field except slot 6, which gets a fresh empty `MessageLog`).
+///
+/// # Safety
+///
+/// The default state is a static object (rc == 0): read its fields without
+/// touching refcounts, and only materialize our own fresh log + increfs.
+pub unsafe fn fresh_term_state_with_empty_messages<'l>(
+    lean: Lean<'l>,
+) -> LeanResult<LeanBound<'l, crate::instance::LeanAny>> {
+    crate::runtime::ensure_meta_initialized();
+    unsafe {
+        let default = ffi::meta::repl::term_inst_inhabited_state();
+        // v4.25: 7 object fields; slot 6 is `messages`.  Clone all object
+        // slots, replacing slot 6 with a fresh empty MessageLog.
+        let n_fields = 7;
+        let new_state = ffi::lean_alloc_ctor(0, n_fields, 0);
+        for i in 0..n_fields {
+            if i == 6 {
+                // Fresh empty MessageLog { reported := ∅, unreported := ∅,
+                //   loggedKinds := ∅ } — the `PersistentArray.empty` +
+                //   empty TreeSet layout, matching `mk_empty_message_log`.
+                let pa = ffi::meta::get_PersistentArrayEmpty();
+                if pa.is_null() {
+                    return Err(LeanError::other(
+                        "PersistentArray.empty unavailable for Term.State messages",
+                    ));
+                }
+                let msg_log = ffi::lean_alloc_ctor(0, 3, 0);
+                ffi::lean_ctor_set(msg_log, 0, pa);
+                ffi::lean_ctor_set(msg_log, 1, pa);
+                ffi::lean_ctor_set(msg_log, 2, ffi::lean_box(1));
+                ffi::lean_ctor_set(new_state, i, msg_log);
+            } else {
+                let src = std::ptr::read::<u64>((default as *const u64).add(1 + i as usize))
+                    as *mut ffi::lean_object;
+                if !src.is_null() {
+                    ffi::lean_inc(src);
+                }
+                ffi::lean_ctor_set(new_state, i, src);
+            }
+        }
+        Ok(LeanBound::from_owned_ptr(lean, new_state))
+    }
+}
+
 /// Parse a term string into a `Syntax` object using Lean's real parser
 /// (`term` category).
 pub fn parse_term<'l>(
@@ -600,17 +655,30 @@ fn discover_sysroot() -> LeanResult<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-static SEARCH_PATH_INITIALIZED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Ensure Lean's search path is initialized (once per process), so module
-/// imports resolve `.olean` files. Safe to call repeatedly.
+/// Ensure Lean's search path reflects the current `LEAN_PATH` + sysroot,
+/// so module imports resolve `.olean` files. Safe to call repeatedly.
+///
+/// The embedded runtime's `lean_init_search_path` (=
+/// `initSearchPathInternal`) derives the system root from `IO.appDir.parent`
+/// and prepends `LEAN_PATH` from the environment. We make that lookup
+/// concrete: ensure `LEAN_PATH` (if unset) contains `sysroot/lib/lean`, so
+/// the standard library (and, via an explicitly-set `LEAN_PATH`, lake-built
+/// packages such as Mathlib) resolve regardless of the host executable's
+/// directory.
+///
+/// Re-initialized on every call (not once per process) so a caller that
+/// changes `LEAN_PATH` between sessions — e.g. to point at a lake-built
+/// Mathlib — is honored on the next import.
 pub fn ensure_search_path<'l>(lean: Lean<'l>) -> LeanResult<()> {
-    if !SEARCH_PATH_INITIALIZED.load(std::sync::atomic::Ordering::Relaxed) {
-        let sysroot = discover_sysroot()?;
-        init_search_path(lean, &sysroot)?;
-        SEARCH_PATH_INITIALIZED.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
+    let sysroot = discover_sysroot()?;
+    let lean_lib = format!("{sysroot}/lib/lean");
+    let lean_path = std::env::var("LEAN_PATH")
+        .map(|p| format!("{p}:{lean_lib}"))
+        .unwrap_or_else(|_| lean_lib.clone());
+    // Ignore failure to set the env var (read-only environ in some
+    // embedded hosts); `init_search_path` still tries `IO.appDir`.
+    std::env::set_var("LEAN_PATH", lean_path);
+    init_search_path(lean, &sysroot)?;
     Ok(())
 }
 
@@ -664,7 +732,12 @@ pub fn import_modules_with_exts<'l>(
         } else {
             let arr = ffi::array::lean_alloc_array(names.len(), names.len());
             for (i, name) in names.iter().enumerate() {
-                let nm = LeanName::from_str(lean, name)?;
+                // Dot-separated module names (`basic.MyThm`, `Lean.Data.Name`)
+                // must be built as hierarchical `Name` objects so `getRoot`
+                // resolves the module directory (`basic/`, `Lean/Data/`).
+                // `from_str` would produce a single flat component and the
+                // olean lookup would fail with `unknown module prefix`.
+                let nm = LeanName::from_components(lean, name)?;
                 let imp = ffi::lean_alloc_ctor(0, 1, 0);
                 ffi::inline::lean_ctor_set(imp, 0, nm.into_ptr());
                 ffi::array::lean_array_set_core(arr, i, imp);
@@ -735,7 +808,11 @@ pub fn run_tactic<'l>(
     crate::runtime::ensure_meta_initialized();
 
     let term_ctx = unsafe { default_term_context(metam.lean())? };
-    let term_state = unsafe { default_term_state(metam.lean())? };
+    // Run the tactic against a Term.State whose `messages` slot is a fresh
+    // empty log: `runTactic` returns `Ok` even when it recorded an
+    // error-severity diagnostic (e.g. `exact 42` on a proposition goal),
+    // and we surface those below rather than silently reporting success.
+    let term_state = unsafe { fresh_term_state_with_empty_messages(metam.lean())? };
     let mvar_ptr = mvar.as_ptr();
     let stx_ptr = stx.as_ptr();
     unsafe {
@@ -842,6 +919,23 @@ pub fn run_tactic<'l>(
         })?;
 
     unsafe {
+        // Surface error-severity diagnostics the tactic recorded but did
+        // not throw (e.g. `exact 42` against a proposition goal): scan the
+        // `Core.State.messages` log the computation threaded through the
+        // Core.State ref (via `CoreM.logMessage` → `messages.add`), and
+        // reject on the first `error` message, like `run_command` does for
+        // commands. Scanned BEFORE `update_states` consumes `new_core_state`;
+        // the scan borrows the pointer without taking ownership.
+        if let Some(msg) = unsafe {
+            let core_state = LeanBound::<crate::instance::LeanAny>::from_borrowed_ptr(
+                metam.lean(),
+                new_core_state,
+            );
+            scan_core_state_error(&core_state)
+        } {
+            return Err(LeanError::other(&format!("tactic error: {msg}")));
+        }
+
         // Core.State came back in the result; Meta.State lives in the kept
         // ref (threaded in place) — store that ref so the next step reuses it.
         metam.update_states(
@@ -873,6 +967,7 @@ pub fn run_tactic<'l>(
         let term_state = LeanBound::from_owned_ptr(metam.lean(), new_term_state);
         let meta_ref: LeanBound<crate::instance::LeanAny> =
             LeanBound::from_owned_ptr(metam.lean(), kept_meta_ref);
+
         Ok(RunTacticOutcome {
             goals,
             term_state,
@@ -881,7 +976,88 @@ pub fn run_tactic<'l>(
     }
 }
 
-/// Pretty-print a goal metavariable with Lean's real pretty printer.
+/// Scan the message log of a `Lean.Core.State` (object field 6 on v4.25)
+/// for the first `error`-severity entry and return its rendered text (with
+/// the usual `<file>:<line>:<col>: error: ...` position prefix). Returns
+/// `None` when the log has no error.
+///
+/// Mirrors the message scan in `run_command`: `MessageLog.toList` (pure) +
+/// `Message.serialize` + `SerialMessage.toString` render each message, and
+/// we look for the `: error` severity marker after the position prefix.
+///
+/// # Safety
+///
+/// `core_state` must be a real `Lean.Core.State` object; the log is read
+/// without mutation.
+unsafe fn scan_core_state_error<'l>(
+    core_state: &LeanBound<'l, crate::instance::LeanAny>,
+) -> Option<String> {
+    unsafe {
+        let state = core_state.as_ptr();
+        // v4.25 Core.State: 9 object fields, `messages` is object field 6
+        // (see `CoreState::mk_core_state`, `field_offset + 2`).
+        let msg_log =
+            std::ptr::read::<u64>((state as *const u64).add(1 + 6)) as *mut ffi::lean_object;
+        ffi::lean_inc(msg_log);
+        extern "C" {
+            #[link_name = "l_Lean_MessageLog_toList"]
+            fn lean_msglog_tolist(a: *mut ffi::lean_object) -> *mut ffi::lean_object;
+            #[link_name = "l_Lean_Message_serialize"]
+            fn lean_message_serialize(
+                a: *mut ffi::lean_object,
+                w: *mut ffi::lean_object,
+            ) -> *mut ffi::lean_object;
+            #[link_name = "l_Lean_SerialMessage_toString"]
+            fn lean_serial_to_string(
+                a: *mut ffi::lean_object,
+                b: *mut ffi::lean_object,
+            ) -> *mut ffi::lean_object;
+        }
+        let c = ffi::inline::lean_alloc_closure(
+            lean_msglog_tolist as *mut std::ffi::c_void,
+            1,
+            0,
+        );
+        let lst = ffi::closure::lean_apply_1(c, msg_log);
+        let mut err_msg: Option<String> = None;
+        let mut cur = lst;
+        while !ffi::inline::lean_is_scalar(cur) && err_msg.is_none() {
+            let m = ffi::lean_ctor_get(cur, 0) as *mut ffi::lean_object;
+            ffi::lean_inc(m);
+            let w = ffi::io::lean_io_mk_world();
+            let c2 = ffi::inline::lean_alloc_closure(
+                lean_message_serialize as *mut std::ffi::c_void,
+                2,
+                0,
+            );
+            let r = ffi::closure::lean_apply_2(c2, m, w);
+            if !ffi::inline::lean_is_scalar(r) && ffi::lean_obj_tag(r) == 0 {
+                let sm = ffi::lean_ctor_get(r, 0) as *mut ffi::lean_object;
+                ffi::lean_inc(sm);
+                ffi::lean_dec(r);
+                let c3 = ffi::inline::lean_alloc_closure(
+                    lean_serial_to_string as *mut std::ffi::c_void,
+                    2,
+                    0,
+                );
+                let s2 = ffi::closure::lean_apply_2(c3, sm, ffi::lean_box(0));
+                let cs = ffi::inline::lean_string_cstr(s2);
+                if !cs.is_null() {
+                    let txt = std::ffi::CStr::from_ptr(cs).to_string_lossy().into_owned();
+                    // Severity markers: `: error: ...` or `: error(name): ...`
+                    // after the position prefix.
+                    if txt.contains(": error") {
+                        err_msg = Some(txt.trim().to_string());
+                    }
+                }
+                ffi::lean_dec(s2);
+            }
+            cur = ffi::lean_ctor_get(cur, 1) as *mut ffi::lean_object;
+        }
+        ffi::lean_dec(lst);
+        err_msg
+    }
+}
 ///
 /// Runs `Lean.Meta.ppGoal` (delaborator + pretty printer) in the session's
 /// `MetaM` context and renders the resulting `Format` with
