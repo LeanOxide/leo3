@@ -707,6 +707,11 @@ pub fn import_modules_with_exts<'l>(
     crate::runtime::ensure_meta_initialized();
     unsafe {
         ensure_search_path(lean)?;
+        // `Lean.importModules` wraps each call in `withImporting`, whose
+        // finally block resets `runInitializersRef` to false.  Re-enable it
+        // immediately before each import on the worker thread; doing this
+        // only once in process bootstrap means later Repl sessions load
+        // constants but skip Mathlib's `[init]` registrations.
         // End the initialization phase BEFORE importing: environment
         // creation (`lean_mk_empty_environment`) requires
         // `IO.initializing == false`, and initializer execution during
@@ -715,17 +720,6 @@ pub fn import_modules_with_exts<'l>(
         // Register core builtin tactics before creating the imported
         // environment: new environments snapshot the attribute table.
         ensure_core_builtin_tactics(lean)?;
-        {
-            extern "C" {
-                #[link_name = "l___private_Lean_Environment_0__Lean_EnvExtension_envExtensionsRef"]
-                static env_exts_ref: *mut ffi::lean_object;
-                #[link_name = "l_Lean_persistentEnvExtensionsRef"]
-                static pers_exts_ref: *mut ffi::lean_object;
-            }
-            let e = ffi::inline::lean_to_ref(env_exts_ref);
-            let p = ffi::inline::lean_to_ref(pers_exts_ref);
-            let _ = (e, p);
-        }
         // Array Import: one Import = ctor(0, 1, 0) with field 0 = module Name.
         let imports = if names.is_empty() {
             ffi::array::lean_alloc_array(0, 0)
@@ -749,7 +743,6 @@ pub fn import_modules_with_exts<'l>(
         let plugins = ffi::array::lean_alloc_array(0, 0);
         // Empty NameMap (DTreeMap).
         let arts = empty_name_map();
-        let world = ffi::io::lean_io_mk_world();
 
         let result = crate::runtime::with_worker(move || unsafe {
             // Must run on the worker thread: importModules allocates Lean
@@ -757,6 +750,18 @@ pub fn import_modules_with_exts<'l>(
             // objects must not cross mimalloc thread-local heaps.
             // Direct mixed-ABI call (not curried): scalar params are raw
             // u32/u8 values.
+            let enable_world = ffi::io::lean_io_mk_world();
+            let enable_res = ffi::lean_enable_initializer_execution(
+                enable_world as *mut std::ffi::c_void,
+            );
+            let enable_ok = ffi::io::lean_io_result_is_ok(enable_res);
+            ffi::lean_dec(enable_res);
+            if !enable_ok {
+                return Err(LeanError::other(
+                    "failed to enable initializer execution before import",
+                ));
+            }
+            let world = ffi::io::lean_io_mk_world();
             let result = ffi::meta::repl::lean_import_modules_full(
                 imports,
                 opts,
