@@ -98,6 +98,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cstr()` is length-aware (no C-string truncation)
 - `leo3-codegen` merges multiple class-metadata entries by class name
   (impl block + field accessors) into a single `.lean` file per class
+- **Module search path now anchors to the linked toolchain**: the runtime
+  exports `LEO3_LEAN_SYSROOT` / `LEO3_LEAN_LIB_DIR` (the Lean library
+  directory `leo3-build-config` bakes in at build time), so `discover_sysroot`
+  resolves against the same toolchain the binary is linked against rather than
+  elan / the project `lean-toolchain`. When an explicit `LEAN_SYSROOT`
+  disagrees, `ensure_search_path` reports an actionable error instead of
+  reading the wrong toolchain's `.olean` files and crashing.
+- **`run_command` failure messages render via `MessageData.toString`**: the
+  caption/data are read from the raw `Message` (stable 5-object-field layout)
+  and rendered as `"{caption}: {data}"` (no position prefix), replacing the
+  previous fixed-offset read of the serialized `SerialMessage` (which asserted
+  on 4.25.2 and misrendered on 4.33.0-rc1).
 
 ### Fixed
 - **Task manager initialization race**: `LeanTask::spawn` now initializes
@@ -124,6 +136,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `handle::is_eof` no longer references the Lean-level `IO.FS.Handle.isEof`
   API (absent in 4.25.2); it binds the exported
   `lean_io_prim_handle_is_eof` primitive directly
+- **meta command/goal paths (`run_command` / `run_tactic` / `pp_goal`) now run
+  on 4.26–4.33 cross toolchains**: the message-severity byte was read one slot
+  early and the error text was extracted from the serialized `SerialMessage`
+  at fixed field offsets (assert on 4.25.2, misrender on 4.33.0-rc1); reading
+  the raw message fixes both. Also fixes the 4.33 cross test suite aborting
+  (SIGABRT) in `test_run_cmd` and killing every subsequent test binary (W-344).
 
 ### Changed
 

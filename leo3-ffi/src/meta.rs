@@ -1284,7 +1284,8 @@ extern "C" {
     /// - `world` must be a valid world token
     #[cfg(not(lean_4_26))]
     #[link_name = "l_Lean_MessageData_toString"]
-    pub fn lean_message_data_to_string(msg_data: lean_obj_arg, world: lean_obj_arg) -> lean_obj_res;
+    pub fn lean_message_data_to_string(msg_data: lean_obj_arg, world: lean_obj_arg)
+        -> lean_obj_res;
 }
 extern "C" {
     /// `MessageData.toString : MessageData → BaseIO String` — Lean 4.26+
