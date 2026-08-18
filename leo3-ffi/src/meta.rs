@@ -847,13 +847,6 @@ pub unsafe fn get_PersistentArrayEmpty() -> *mut lean_object {
         ptr as *mut lean_object
     }
 }
-
-/// Get the empty `KVMap` (Options) singleton.
-///
-/// On non-Windows, reads the BSS global directly.
-/// On Windows, tries `GetProcAddress` first, then returns `lean_box(0)`.
-/// KVMap.empty is a zero-field enum (tag 0).
-#[inline]
 /// Get the empty `NameSet` (`Std.TreeSet Name`) singleton (BSS static).
 #[inline]
 pub unsafe fn get_NameSetEmpty() -> *mut lean_object {
@@ -879,7 +872,11 @@ pub unsafe fn get_NameHashSetEmpty() -> *mut lean_object {
         win_bss::lookup_bss_global("l_Lean_NameHashSet_empty")
     }
 }
-
+/// Get the empty `KVMap` (Options) singleton.
+///
+/// On non-Windows, reads the BSS global directly.
+/// On Windows, tries `GetProcAddress` first, then returns `lean_box(0)`.
+/// KVMap.empty is a zero-field enum (tag 0).
 pub unsafe fn get_KVMapEmpty() -> *mut lean_object {
     if force_manual_meta_defaults() {
         return lean_box(0);

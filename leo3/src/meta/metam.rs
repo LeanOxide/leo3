@@ -388,6 +388,7 @@ impl<'l> MetaMContext<'l> {
         }
     }
 
+    /// The context's environment.
     pub fn env(&self) -> &LeanBound<'l, LeanEnvironment> {
         &self.env
     }
@@ -495,9 +496,7 @@ impl<'l> MetaMContext<'l> {
             // Keep one extra reference on the previous Meta.Context before
             // replacing it: the initial context may be a BSS static object,
             // and dropping it to rc 0 would free the static block.
-            unsafe {
-                ffi::object::lean_inc(self.meta_ctx.as_ptr());
-            }
+            ffi::object::lean_inc(self.meta_ctx.as_ptr());
             self.meta_ctx = LeanBound::<LeanAny>::from_owned_ptr(self.lean, ctx).cast();
         }
     }
@@ -789,54 +788,57 @@ fn sanitize_local_ctx<'a>(
         let lctx = Self::sanitize_local_ctx(self, &decl.lctx)?;
         let local_instances = decl.local_instances;
         let goal_ty = decl.type_;
-        let mut hyps = Vec::new();
-        let ty_pp = {
-            unsafe {
-                extern "C" {
-                    #[link_name = "l_Lean_Name_toString"]
-                    fn name_to_string(
-                        env: *mut *mut ffi::lean_object,
-                        arg: *mut ffi::lean_object,
-                    ) -> *mut ffi::lean_object;
-                }
-                ffi::lean_inc(lctx.as_ptr());
-                let num_raw = ffi::meta::lean_local_ctx_num_indices(lctx.as_ptr());
-                let num = LeanBound::<LeanNat>::from_owned_ptr(self.lean, num_raw);
-                let n = LeanNat::to_usize(&num)?;
-                for i in 0..n {
-                    let idx = LeanNat::from_usize(self.lean, i)?;
-                    ffi::lean_inc(lctx.as_ptr());
-                    let raw = ffi::meta::lean_local_ctx_get_at(lctx.as_ptr(), idx.as_ptr());
-                    if ffi::inline::lean_is_scalar(raw) {
-                        continue;
-                    }
-                    let local_decl = unpack_option_local_decl(self.lean, raw);
-                    let un_raw = ffi::meta::lean_local_decl_user_name(local_decl.as_ptr());
-                    let un =
-                        LeanBound::<LeanAny>::from_owned_ptr(self.lean, un_raw).cast::<LeanName>();
-                    let tp_raw = ffi::meta::lean_local_decl_type(local_decl.as_ptr());
-                    let tp = LeanBound::<LeanAny>::from_owned_ptr(self.lean, tp_raw)
-                        .cast::<LeanExpr>();
-                    // Name.toString (arity-1 curried pure function).
-                    let closure = ffi::inline::lean_alloc_closure(
-                        name_to_string as *mut std::ffi::c_void,
-                        1u32,
-                        0,
-                    );
-                    let s = ffi::closure::lean_apply_1(closure, un.into_ptr());
-                    let s = LeanBound::<crate::types::LeanString>::from_owned_ptr(self.lean, s);
-                    let name_str = crate::types::LeanString::cstr(&s)?.to_string();
-                    let ty_str = crate::meta::repl::pp_expr(
-                        self,
-                        &lctx,
-                        &local_instances,
-                        &tp,
-                    )?;
-                    hyps.push((name_str, ty_str));
-                }
-                crate::meta::repl::pp_expr(self, &lctx, &local_instances, &goal_ty)?
+        // Collect the user name + type expression of every hypothesis, plus
+        // the goal type, then batch-render them all in ONE worker trip.
+        // (Each `pp_expr` is a serialized worker rendezvous; the whole
+        // local context + goal share one lctx / local-instances, so they
+        // fold into a single `pp_exprs` call.)
+        let mut hyp_names: Vec<String> = Vec::new();
+        let mut to_pp: Vec<LeanBound<'l, LeanExpr>> = Vec::new();
+        unsafe {
+            extern "C" {
+                #[link_name = "l_Lean_Name_toString"]
+                fn name_to_string(
+                    env: *mut *mut ffi::lean_object,
+                    arg: *mut ffi::lean_object,
+                ) -> *mut ffi::lean_object;
             }
-        };
+            ffi::lean_inc(lctx.as_ptr());
+            let num_raw = ffi::meta::lean_local_ctx_num_indices(lctx.as_ptr());
+            let num = LeanBound::<LeanNat>::from_owned_ptr(self.lean, num_raw);
+            let n = LeanNat::to_usize(&num)?;
+            for i in 0..n {
+                let idx = LeanNat::from_usize(self.lean, i)?;
+                ffi::lean_inc(lctx.as_ptr());
+                let raw = ffi::meta::lean_local_ctx_get_at(lctx.as_ptr(), idx.as_ptr());
+                if ffi::inline::lean_is_scalar(raw) {
+                    continue;
+                }
+                let local_decl = unpack_option_local_decl(self.lean, raw);
+                let un_raw = ffi::meta::lean_local_decl_user_name(local_decl.as_ptr());
+                let un = LeanBound::<LeanAny>::from_owned_ptr(self.lean, un_raw).cast::<LeanName>();
+                let tp_raw = ffi::meta::lean_local_decl_type(local_decl.as_ptr());
+                let tp = LeanBound::<LeanAny>::from_owned_ptr(self.lean, tp_raw).cast::<LeanExpr>();
+                // Name.toString (arity-1 curried pure function).
+                let closure =
+                    ffi::inline::lean_alloc_closure(name_to_string as *mut std::ffi::c_void, 1u32, 0);
+                let s = ffi::closure::lean_apply_1(closure, un.into_ptr());
+                let s = LeanBound::<crate::types::LeanString>::from_owned_ptr(self.lean, s);
+                let name_str = crate::types::LeanString::cstr(&s)?.to_string();
+                to_pp.push(tp);
+                hyp_names.push(name_str);
+            }
+        }
+        to_pp.push(goal_ty);
+        // One batched pretty-print: all hyp types followed by the goal type.
+        let mut rendered = crate::meta::repl::pp_exprs(self, &lctx, &local_instances, &to_pp)?;
+        let mut hyps = Vec::with_capacity(hyp_names.len());
+        for (k, name) in hyp_names.iter().enumerate() {
+            hyps.push((name.clone(), rendered[k].clone()));
+        }
+        let ty_pp = rendered
+            .pop()
+            .ok_or_else(|| LeanError::other("pp_exprs returned no goal type"))?;
         Ok((hyps, ty_pp))
     }
 
