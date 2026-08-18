@@ -89,13 +89,31 @@ pub(crate) fn ensure_environment_initialized() {
         assert!(ffi::io::lean_io_result_is_ok(ria_res), "init_compiler_init_attr failed");
         // Directly invoke the intro registration function (bypasses the
         // initializer's `_G_initialized` guard).
-        extern "C" {
-            #[link_name = "l_Lean_Elab_Tactic_evalIntro___regBuiltin_Lean_Elab_Tactic_evalIntro__1"]
-            fn reg_builtin_intro(w: *mut ffi::lean_object) -> *mut ffi::lean_object;
+        //
+        // Version notes: the symbol does not exist in Lean 4.20, so the
+        // call is gated on 4.25 (where the repl layer, which needs the
+        // `intro` tactic registered, also lives). The mangled name of the
+        // `regBuiltin` closure changed in Lean 4.31: declarations defined
+        // in a file sub-module of `Lean.Elab.Tactic` now carry the
+        // `___private_Lean_Elab_Tactic_BuiltinTactic_0__` file-attribution
+        // prefix (verified against v4.31.0 / v4.32.2 / v4.33.0; the old
+        // name is what v4.25.2 exports).
+        #[cfg(lean_4_25)]
+        {
+            #[cfg(not(lean_4_31))]
+            extern "C" {
+                #[link_name = "l_Lean_Elab_Tactic_evalIntro___regBuiltin_Lean_Elab_Tactic_evalIntro__1"]
+                fn reg_builtin_intro(w: *mut ffi::lean_object) -> *mut ffi::lean_object;
+            }
+            #[cfg(lean_4_31)]
+            extern "C" {
+                #[link_name = "l___private_Lean_Elab_Tactic_BuiltinTactic_0__Lean_Elab_Tactic_evalIntro___regBuiltin_Lean_Elab_Tactic_evalIntro__1"]
+                fn reg_builtin_intro(w: *mut ffi::lean_object) -> *mut ffi::lean_object;
+            }
+            let w = ffi::io::lean_io_mk_world();
+            let reg_res = reg_builtin_intro(w);
+            assert!(ffi::io::lean_io_result_is_ok(reg_res), "regBuiltin intro failed");
         }
-        let w = ffi::io::lean_io_mk_world();
-        let reg_res = reg_builtin_intro(w);
-        assert!(ffi::io::lean_io_result_is_ok(reg_res), "regBuiltin intro failed");
         // Allow `importModules (loadExts := true)` to run module
         // initializers while loading `.olean` files (lean CLI order:
         // init_search_path → enable_initializer_execution → mark_end).

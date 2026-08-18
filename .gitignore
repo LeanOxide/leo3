@@ -51,3 +51,10 @@ examples/*/target/
 
 CLAUDE.md
 .cache/
+
+# Cross-toolchain build dirs (see TESTING.md: LEO3_CROSS_*)
+**/target-tc433/
+
+# Downloaded Lean toolchains (verification scratch)
+lean-4.20.0-linux/
+lean-4.20.0-linux.tar.zst

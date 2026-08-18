@@ -467,7 +467,14 @@ impl<'l> MetaMContext<'l> {
         local_instances: &LeanBound<'l, LeanAny>,
     ) {
         unsafe {
-            #[cfg(lean_4_25)]
+            // Meta.Context has 7 object fields in all supported versions.
+            // Scalar (Bool) bytes: 3 on Lean 4.25–4.30 (trackZetaDelta,
+            // univApprox, inTypeClassResolution); Lean 4.31 adds
+            // `cacheInferType` as a 4th scalar (verified against the
+            // `Meta/Basic.lean` source of v4.25.2 and v4.33.0).
+            #[cfg(lean_4_31)]
+            let ctx = ffi::lean_alloc_ctor(0, 7, 4);
+            #[cfg(all(lean_4_25, not(lean_4_31)))]
             let ctx = ffi::lean_alloc_ctor(0, 7, 3);
             #[cfg(not(lean_4_25))]
             let ctx = ffi::lean_alloc_ctor(0, 7, 11);
@@ -480,7 +487,13 @@ impl<'l> MetaMContext<'l> {
             ffi::lean_ctor_set(ctx, 2, lctx.clone().into_ptr());
             ffi::lean_ctor_set(ctx, 3, local_instances.clone().into_ptr());
 
-            #[cfg(lean_4_25)]
+            #[cfg(lean_4_31)]
+            {
+                let src = ffi::inline::lean_ctor_scalar_cptr(self.meta_ctx.as_ptr());
+                let dst = ffi::inline::lean_ctor_scalar_cptr(ctx);
+                std::ptr::copy_nonoverlapping(src, dst, 4);
+            }
+            #[cfg(all(lean_4_25, not(lean_4_31)))]
             {
                 let src = ffi::inline::lean_ctor_scalar_cptr(self.meta_ctx.as_ptr());
                 let dst = ffi::inline::lean_ctor_scalar_cptr(ctx);

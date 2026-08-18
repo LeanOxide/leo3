@@ -155,11 +155,33 @@ extern "C" {
     ) -> lean_obj_res;
 }
 
+#[cfg(not(lean_4_31))]
 extern "C" {
-    /// `Format.pretty : Format → Nat → Nat → Nat → String` — the exported
-    /// C API (`@[export lean_format_pretty]`): render a `Format` to a string
-    /// with the given width / indent / starting column.
+    /// `Format.pretty : Format → Nat → Nat → Nat → String` — render a
+    /// `Format` to a string with the given width / indent / starting
+    /// column.
+    ///
+    /// Version note: in Lean ≤ 4.30 the function lives in the root
+    /// `Format` namespace and is exported under the C name
+    /// `lean_format_pretty` (`@[export]`). From 4.31 it moved to
+    /// `Std.Format` without the export attribute, so its mangled name is
+    /// `l_Std_Format_pretty` (verified against v4.20.0 / v4.25.2 for the
+    /// old name and v4.31.0 / v4.32.2 / v4.33.0 for the new). Same
+    /// 4-arg signature in both.
     #[link_name = "lean_format_pretty"]
+    pub fn lean_format_pretty(
+        fmt: lean_obj_arg,
+        width: lean_obj_arg,
+        indent: lean_obj_arg,
+        column: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+#[cfg(lean_4_31)]
+extern "C" {
+    /// `Std.Format.pretty : Format → Nat → Nat → Nat → String` (Lean
+    /// ≥ 4.31; same 4-arg signature, new mangled name).
+    #[link_name = "l_Std_Format_pretty"]
     pub fn lean_format_pretty(
         fmt: lean_obj_arg,
         width: lean_obj_arg,

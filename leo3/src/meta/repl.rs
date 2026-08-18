@@ -320,7 +320,14 @@ unsafe fn empty_name_map() -> *mut ffi::lean_object {
 }
 
 /// Construct a default `Lean.Elab.Term.Context` (all fields at their Lean
-/// defaults), matching Lean 4.25.2's field layout.
+/// defaults), matching the target Lean version's field layout:
+/// 8 object fields + 11 Bool scalars on Lean 4.31+, 7 + 11 on 4.25–4.30
+/// (verified against the `TermElabM.lean` source of v4.25.2 and v4.33.0;
+/// the 4.31 change: the `autoBoundImplicits : PersistentArray` object
+/// became `autoBoundImplicitContext : Option AutoBoundImplicitContext`
+/// and `fixedTermElabs : Array FixedTermElabRef` was appended, while the
+/// `autoBoundImplicit : Bool` scalar was removed and `isMetaSection : Bool`
+/// added — so the scalar count stays 11).
 ///
 /// # Safety
 ///
@@ -330,61 +337,131 @@ pub unsafe fn default_term_context<'l>(
 ) -> LeanResult<LeanBound<'l, crate::instance::LeanAny>> {
     crate::runtime::ensure_meta_initialized();
     unsafe {
-        // Term.Context (Lean 4.25.2): 7 object fields followed by
-        // 11 scalar (Bool) bytes, per Lean's object-first ctor layout.
-        // Object fields (declaration order): declName?, macroStack,
-        // autoBoundImplicits, autoBoundImplicitForbidden, sectionVars,
-        // sectionFVars, tacSnap?.
-        // Scalar bytes (declaration order): mayPostpone, errToSorry,
-        // autoBoundImplicit, implicitLambda, heedElabAsElim,
-        // isNoncomputableSection, ignoreTCFailures, inPattern,
-        // saveRecAppSyntax, holesAsSyntheticOpaque, checkDeprecated.
-        const NUM_OBJ_FIELDS: u32 = 7;
-        let ctx = ffi::lean_alloc_ctor(0, NUM_OBJ_FIELDS, 11);
-        let set_obj = |i: u32, v: *mut ffi::lean_object| {
-            ffi::inline::lean_ctor_set(ctx, i, v)
-        };
-        // Scalar slots live *after* the object area; the byte offset counts
-        // from the object area start: num_objs * ptr_size + scalar_index.
-        let scalar_base = NUM_OBJ_FIELDS * std::mem::size_of::<*mut ffi::lean_object>() as u32;
-        let set_bool = |scalar_idx: u32, v: u8| {
-            ffi::inline::lean_ctor_set_uint8(ctx, scalar_base + scalar_idx, v)
-        };
+        #[cfg(lean_4_31)]
+        {
+            // Term.Context (Lean 4.31+): 8 object fields followed by
+            // 11 scalar (Bool) bytes, per Lean's object-first ctor layout.
+            // Object fields (declaration order): declName?, macroStack,
+            // autoBoundImplicitContext, autoBoundImplicitForbidden,
+            // sectionVars, sectionFVars, tacSnap?, fixedTermElabs.
+            // Scalar bytes (declaration order): mayPostpone, errToSorry,
+            // implicitLambda, heedElabAsElim, isNoncomputableSection,
+            // isMetaSection, ignoreTCFailures, inPattern,
+            // saveRecAppSyntax, holesAsSyntheticOpaque, checkDeprecated.
+            const NUM_OBJ_FIELDS: u32 = 8;
+            let ctx = ffi::lean_alloc_ctor(0, NUM_OBJ_FIELDS, 11);
+            let set_obj = |i: u32, v: *mut ffi::lean_object| {
+                ffi::inline::lean_ctor_set(ctx, i, v)
+            };
+            // Scalar slots live *after* the object area; the byte offset
+            // counts from the object area start: num_objs * ptr_size +
+            // scalar_index.
+            let scalar_base =
+                NUM_OBJ_FIELDS * std::mem::size_of::<*mut ffi::lean_object>() as u32;
+            let set_bool = |scalar_idx: u32, v: u8| {
+                ffi::inline::lean_ctor_set_uint8(ctx, scalar_base + scalar_idx, v)
+            };
 
-        // 0: declName? = none (first ctor = tag 0 = box(0))
-        set_obj(0, ffi::inline::lean_box(0));
-        // 1: macroStack = [] (List.nil = tag 0 = box(0))
-        set_obj(1, ffi::inline::lean_box(0));
-        // 2: autoBoundImplicits = PersistentArray.empty
-        set_obj(2, persistent_array_empty());
-        // 3: autoBoundImplicitForbidden = (never-called) 1-arg bool fn
-        let forbidden = ffi::inline::lean_alloc_closure(
-            lean_expr_is_sort as *mut std::ffi::c_void,
-            1u32,
-            0,
-        );
-        set_obj(3, forbidden);
-        // 4: sectionVars = {} (empty NameMap/DTreeMap)
-        set_obj(4, empty_name_map());
-        // 5: sectionFVars = {}
-        set_obj(5, empty_name_map());
-        // 6: tacSnap? = none
-        set_obj(6, ffi::inline::lean_box(0));
+            // 0: declName? = none (first ctor = tag 0 = box(0))
+            set_obj(0, ffi::inline::lean_box(0));
+            // 1: macroStack = [] (List.nil = tag 0 = box(0))
+            set_obj(1, ffi::inline::lean_box(0));
+            // 2: autoBoundImplicitContext = none
+            set_obj(2, ffi::inline::lean_box(0));
+            // 3: autoBoundImplicitForbidden = (never-called) 1-arg bool fn
+            set_obj(
+                3,
+                ffi::inline::lean_alloc_closure(
+                    lean_expr_is_sort as *mut std::ffi::c_void,
+                    1u32,
+                    0,
+                ),
+            );
+            // 4: sectionVars = {} (empty NameMap/DTreeMap)
+            set_obj(4, empty_name_map());
+            // 5: sectionFVars = {}
+            set_obj(5, empty_name_map());
+            // 6: tacSnap? = none
+            set_obj(6, ffi::inline::lean_box(0));
+            // 7: fixedTermElabs = #[] (Array ≡ PersistentArray; empty
+            // singleton is shared)
+            set_obj(7, persistent_array_empty());
 
-        // Scalar bytes (all Bool, 1 = true, 0 = false).
-        set_bool(0, 1); // mayPostpone
-        set_bool(1, 1); // errToSorry
-        set_bool(2, 0); // autoBoundImplicit
-        set_bool(3, 1); // implicitLambda
-        set_bool(4, 1); // heedElabAsElim
-        set_bool(5, 0); // isNoncomputableSection
-        set_bool(6, 0); // ignoreTCFailures
-        set_bool(7, 0); // inPattern
-        set_bool(8, 1); // saveRecAppSyntax
-        set_bool(9, 0); // holesAsSyntheticOpaque
-        set_bool(10, 1); // checkDeprecated
+            // Scalar bytes (all Bool, 1 = true, 0 = false).
+            set_bool(0, 1); // mayPostpone
+            set_bool(1, 1); // errToSorry
+            set_bool(2, 1); // implicitLambda
+            set_bool(3, 1); // heedElabAsElim
+            set_bool(4, 0); // isNoncomputableSection
+            set_bool(5, 0); // isMetaSection
+            set_bool(6, 0); // ignoreTCFailures
+            set_bool(7, 0); // inPattern
+            set_bool(8, 1); // saveRecAppSyntax
+            set_bool(9, 0); // holesAsSyntheticOpaque
+            set_bool(10, 1); // checkDeprecated
 
-        Ok(LeanBound::from_owned_ptr(lean, ctx))
+            return Ok(LeanBound::from_owned_ptr(lean, ctx));
+        }
+        #[cfg(not(lean_4_31))]
+        {
+            // Term.Context (Lean 4.25): 7 object fields followed by
+            // 11 scalar (Bool) bytes, per Lean's object-first ctor layout.
+            // Object fields (declaration order): declName?, macroStack,
+            // autoBoundImplicits, autoBoundImplicitForbidden, sectionVars,
+            // sectionFVars, tacSnap?.
+            // Scalar bytes (declaration order): mayPostpone, errToSorry,
+            // autoBoundImplicit, implicitLambda, heedElabAsElim,
+            // isNoncomputableSection, ignoreTCFailures, inPattern,
+            // saveRecAppSyntax, holesAsSyntheticOpaque, checkDeprecated.
+            const NUM_OBJ_FIELDS: u32 = 7;
+            let ctx = ffi::lean_alloc_ctor(0, NUM_OBJ_FIELDS, 11);
+            let set_obj = |i: u32, v: *mut ffi::lean_object| {
+                ffi::inline::lean_ctor_set(ctx, i, v)
+            };
+            // Scalar slots live *after* the object area; the byte offset
+            // counts from the object area start: num_objs * ptr_size +
+            // scalar_index.
+            let scalar_base =
+                NUM_OBJ_FIELDS * std::mem::size_of::<*mut ffi::lean_object>() as u32;
+            let set_bool = |scalar_idx: u32, v: u8| {
+                ffi::inline::lean_ctor_set_uint8(ctx, scalar_base + scalar_idx, v)
+            };
+
+            // 0: declName? = none (first ctor = tag 0 = box(0))
+            set_obj(0, ffi::inline::lean_box(0));
+            // 1: macroStack = [] (List.nil = tag 0 = box(0))
+            set_obj(1, ffi::inline::lean_box(0));
+            // 2: autoBoundImplicits = PersistentArray.empty
+            set_obj(2, persistent_array_empty());
+            // 3: autoBoundImplicitForbidden = (never-called) 1-arg bool fn
+            let forbidden = ffi::inline::lean_alloc_closure(
+                lean_expr_is_sort as *mut std::ffi::c_void,
+                1u32,
+                0,
+            );
+            set_obj(3, forbidden);
+            // 4: sectionVars = {} (empty NameMap/DTreeMap)
+            set_obj(4, empty_name_map());
+            // 5: sectionFVars = {}
+            set_obj(5, empty_name_map());
+            // 6: tacSnap? = none
+            set_obj(6, ffi::inline::lean_box(0));
+
+            // Scalar bytes (all Bool, 1 = true, 0 = false).
+            set_bool(0, 1); // mayPostpone
+            set_bool(1, 1); // errToSorry
+            set_bool(2, 0); // autoBoundImplicit
+            set_bool(3, 1); // implicitLambda
+            set_bool(4, 1); // heedElabAsElim
+            set_bool(5, 0); // isNoncomputableSection
+            set_bool(6, 0); // ignoreTCFailures
+            set_bool(7, 0); // inPattern
+            set_bool(8, 1); // saveRecAppSyntax
+            set_bool(9, 0); // holesAsSyntheticOpaque
+            set_bool(10, 1); // checkDeprecated
+
+            return Ok(LeanBound::from_owned_ptr(lean, ctx));
+        }
     }
 }
 
