@@ -792,9 +792,14 @@ fn sanitize_local_ctx<'a>(
         // the goal type, then batch-render them all in ONE worker trip.
         // (Each `pp_expr` is a serialized worker rendezvous; the whole
         // local context + goal share one lctx / local-instances, so they
-        // fold into a single `pp_exprs` call.)
-        let mut hyp_names: Vec<String> = Vec::new();
-        let mut to_pp: Vec<LeanBound<'l, LeanExpr>> = Vec::new();
+        // fold into a single `pp_exprs` call. Mirroring `Lean.Meta.ppGoal`'s
+        // `prevType?` dedup, consecutive hypotheses with structurally-equal
+        // types share one `pp_expr` call, so a goal whose hypotheses all have
+        // the same type (e.g. `∀ x y z : Nat, …`) renders in O(hyps) instead
+        // of O(hyps^2) - each separate `pp_expr` call rebuilds its
+        // delaborator context from the whole local context.
+        let mut hyps: Vec<(String, usize)> = Vec::new();
+        let mut groups: Vec<LeanBound<'l, LeanExpr>> = Vec::new();
         unsafe {
             extern "C" {
                 #[link_name = "l_Lean_Name_toString"]
@@ -825,21 +830,36 @@ fn sanitize_local_ctx<'a>(
                 let s = ffi::closure::lean_apply_1(closure, un.into_ptr());
                 let s = LeanBound::<crate::types::LeanString>::from_owned_ptr(self.lean, s);
                 let name_str = crate::types::LeanString::cstr(&s)?.to_string();
-                to_pp.push(tp);
-                hyp_names.push(name_str);
+                // Mirror `ppGoal`'s `prevType?`: a hypothesis whose type is
+                // structurally equal to the previous one reuses that run's
+                // group, so a run of equal types costs one `pp_expr` call
+                // regardless of its length.
+                let dup = match groups.last() {
+                    Some(prev_tp) => LeanExpr::equal(prev_tp, &tp),
+                    None => false,
+                };
+                let group = if dup {
+                    groups.len() - 1
+                } else {
+                    groups.push(tp);
+                    groups.len() - 1
+                };
+                hyps.push((name_str, group));
             }
         }
+        // One batched pretty-print: one entry per distinct consecutive
+        // hypothesis type, followed by the goal type.
+        let mut to_pp = groups;
         to_pp.push(goal_ty);
-        // One batched pretty-print: all hyp types followed by the goal type.
         let mut rendered = crate::meta::repl::pp_exprs(self, &lctx, &local_instances, &to_pp)?;
-        let mut hyps = Vec::with_capacity(hyp_names.len());
-        for (k, name) in hyp_names.iter().enumerate() {
-            hyps.push((name.clone(), rendered[k].clone()));
+        let mut hyp_pp = Vec::with_capacity(hyps.len());
+        for (name, gi) in &hyps {
+            hyp_pp.push((name.clone(), rendered[*gi].clone()));
         }
         let ty_pp = rendered
             .pop()
             .ok_or_else(|| LeanError::other("pp_exprs returned no goal type"))?;
-        Ok((hyps, ty_pp))
+        Ok((hyp_pp, ty_pp))
     }
 
     /// Get the most recently introduced hypothesis from a goal's local context.
