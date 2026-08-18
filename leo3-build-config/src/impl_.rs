@@ -989,6 +989,24 @@ pub fn emit_link_config(config: &LeanConfig) {
     println!("cargo:include={}", config.lean_include_dir.display());
 }
 
+/// Emit the Lean library directory the current crate is being linked
+/// against, baked into the compiled crate so the runtime can anchor its
+/// module search path to the *same* toolchain.
+///
+/// The link step pins `libleanshared.so` via RPATH, but Lean's module
+/// search path is resolved at runtime — by default through elan, which
+/// follows the process cwd's `lean-toolchain` file. Under a
+/// `LEO3_CROSS_LIB_DIR` cross build those disagree (the runtime reads
+/// `.olean` files from a different Lean version and aborts with
+/// "incompatible header"), so the runtime prefers this build-time value
+/// over re-resolving via `lean --print-prefix`.
+pub fn emit_runtime_envs(config: &LeanConfig) {
+    println!(
+        "cargo:rustc-env=LEO3_LEAN_LIB_DIR={}",
+        config.lean_lib_dir.display()
+    );
+}
+
 /// The `lean_4_N` minors to emit for a version (`0..=minor`), or `None` for
 /// versions that are not Lean 4 (no cfgs are emitted).
 fn lean_4_cfg_minors(version: &LeanVersion) -> Option<Vec<u32>> {

@@ -29,6 +29,7 @@ fn emit_resolved_config(config: &LeanConfig) {
     impl_::emit_link_config(config);
     impl_::emit_version_cfgs(config);
     impl_::emit_allocator_cfgs(config);
+    impl_::emit_runtime_envs(config);
     println!("cargo:rerun-if-changed={}", config.lean_home.display());
 }
 

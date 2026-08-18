@@ -500,6 +500,12 @@ extern "C" {
     pub fn l_Lean_PersistentHashMap_empty() -> *mut lean_object;
     pub fn l_Lean_PersistentArray_empty() -> *mut lean_object;
     pub static l_Lean_KVMap_empty: *mut lean_object;
+    /// `Inhabited Scope.default` for `Lean.Elab.Command` — the top-level
+    /// base scope (`{ header := "" }` with all defaults). The frontend's
+    /// `elabCommandTopLevel` itself uses this global as the `List.head`
+    /// default for `state.scopes`, so it is guaranteed to be the correct
+    /// layout for the linked toolchain version.
+    pub static l_Lean_Elab_Command_instInhabitedScope_default: *mut lean_object;
 }
 
 // ============================================================================
@@ -710,6 +716,19 @@ bss_accessor!(/// Get the default `Syntax` (`Syntax.missing`).
 
 bss_accessor!(/// Get the default `FileMap`.
     pub fn get_instInhabitedFileMap() -> l_Lean_instInhabitedFileMap);
+
+bss_accessor!(/// Get the default `Lean.Elab.Command.Scope`
+    /// (`instInhabitedScope_default` — the top-level base scope
+    /// `{ header := "" }`).
+    ///
+    /// The `Scope` struct layout changed across Lean versions (extra
+    /// `varUIds`/`includedVars`/`omittedVars`/Bool fields in newer ones),
+    /// and its `opts` field type changed from `KVMap` to the
+    /// `Options` struct in 4.28. Reading the toolchain's own prebuilt
+    /// default object sidesteps both: it is exactly the object the
+    /// frontend's `elabCommandTopLevel` uses as the `List.head` default
+    /// for `state.scopes`.
+    pub fn get_instInhabitedScope() -> l_Lean_Elab_Command_instInhabitedScope_default);
 
 #[inline]
 fn force_manual_meta_defaults() -> bool {
@@ -1254,14 +1273,30 @@ extern "C" {
     /// `MessageData.toString : MessageData → BaseIO String` — render a
     /// `MessageData` with Lean's real message renderer: forces lazy
     /// messages and formats embedded expressions/names with the default pp
-    /// options. Returns `IO.Result` (`Except (IO.Error × World)
-    /// (String × World)`).
+    /// options.
+    ///
+    /// Pre-4.26 ABI: `BaseIO g = IO (Except g)` threads the world token,
+    /// so the export takes `(msg_data, world)` and returns `IO.Result`
+    /// (`Except (IO.Error × World) (String × World)`).
     ///
     /// # Safety
     /// - `msg_data` must be a valid `MessageData` (standard, consumed)
     /// - `world` must be a valid world token
+    #[cfg(not(lean_4_26))]
     #[link_name = "l_Lean_MessageData_toString"]
     pub fn lean_message_data_to_string(msg_data: lean_obj_arg, world: lean_obj_arg) -> lean_obj_res;
+}
+extern "C" {
+    /// `MessageData.toString : MessageData → BaseIO String` — Lean 4.26+
+    /// (ST redesign) ABI: `BaseIO` is `ST RealWorld String` with the
+    /// singleton world erased, so the C export takes no world token and
+    /// returns the rendered `String` directly (no `IO.Result` wrapper).
+    ///
+    /// # Safety
+    /// - `msg_data` must be a valid `MessageData` (standard, consumed)
+    #[cfg(lean_4_26)]
+    #[link_name = "l_Lean_MessageData_toString"]
+    pub fn lean_message_data_to_string_st(msg_data: lean_obj_arg) -> lean_obj_res;
 }
 
 extern "C" {

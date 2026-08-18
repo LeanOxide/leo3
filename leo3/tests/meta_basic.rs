@@ -87,7 +87,8 @@ fn test_core_state_creation() {
             let expected_macro_scope = 1;
             assert_eq!(
                 macro_scope_val, expected_macro_scope,
-                "nextMacroScope should be {}", expected_macro_scope
+                "nextMacroScope should be {}",
+                expected_macro_scope
             );
 
             // Field 2 should be NameGenerator (should be a constructor)
@@ -109,7 +110,8 @@ fn test_core_state_creation() {
                 "snapshotTasks should not be null"
             );
             assert_eq!(
-                leo3_ffi::array::lean_array_size(snapshot_tasks), 0,
+                leo3_ffi::array::lean_array_size(snapshot_tasks),
+                0,
                 "snapshotTasks should be an empty array"
             );
         }

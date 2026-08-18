@@ -90,11 +90,41 @@ unsafe fn ensure_core_builtin_tactics(lean: Lean<'_>) -> LeanResult<()> {
             arg: *mut ffi::lean_object,
         ) -> *mut ffi::lean_object;
     }
-    register_builtin_tactic(lean, "Lean.Parser.Tactic.intro", "Lean.Elab.Tactic.evalIntro", eval_intro as *mut std::ffi::c_void, 10)?;
-    register_builtin_tactic(lean, "Lean.Parser.Tactic.skip", "Lean.Elab.Tactic.evalSkip", eval_skip as *mut std::ffi::c_void, 10)?;
-    register_builtin_tactic(lean, "Lean.Parser.Tactic.simp", "Lean.Elab.Tactic.evalSimp", eval_simp as *mut std::ffi::c_void, 11)?;
-    register_builtin_tactic(lean, "Lean.Parser.Tactic.exact", "Lean.Elab.Tactic.evalExact", eval_exact as *mut std::ffi::c_void, 11)?;
-    register_builtin_tactic(lean, "Lean.Parser.Tactic.induction", "Lean.Elab.Tactic.evalInduction", eval_induction as *mut std::ffi::c_void, 10)?;
+    register_builtin_tactic(
+        lean,
+        "Lean.Parser.Tactic.intro",
+        "Lean.Elab.Tactic.evalIntro",
+        eval_intro as *mut std::ffi::c_void,
+        10,
+    )?;
+    register_builtin_tactic(
+        lean,
+        "Lean.Parser.Tactic.skip",
+        "Lean.Elab.Tactic.evalSkip",
+        eval_skip as *mut std::ffi::c_void,
+        10,
+    )?;
+    register_builtin_tactic(
+        lean,
+        "Lean.Parser.Tactic.simp",
+        "Lean.Elab.Tactic.evalSimp",
+        eval_simp as *mut std::ffi::c_void,
+        11,
+    )?;
+    register_builtin_tactic(
+        lean,
+        "Lean.Parser.Tactic.exact",
+        "Lean.Elab.Tactic.evalExact",
+        eval_exact as *mut std::ffi::c_void,
+        11,
+    )?;
+    register_builtin_tactic(
+        lean,
+        "Lean.Parser.Tactic.induction",
+        "Lean.Elab.Tactic.evalInduction",
+        eval_induction as *mut std::ffi::c_void,
+        10,
+    )?;
     Ok(())
 }
 
@@ -146,55 +176,19 @@ pub unsafe fn apply_curried(
             2 => ffi::closure::lean_apply_2(fn_obj, args[0], args[1]),
             3 => ffi::closure::lean_apply_3(fn_obj, args[0], args[1], args[2]),
             4 => ffi::closure::lean_apply_4(fn_obj, args[0], args[1], args[2], args[3]),
-            5 => ffi::closure::lean_apply_5(
-                fn_obj,
-                args[0],
-                args[1],
-                args[2],
-                args[3],
-                args[4],
-            ),
+            5 => ffi::closure::lean_apply_5(fn_obj, args[0], args[1], args[2], args[3], args[4]),
             6 => ffi::closure::lean_apply_6(
-                fn_obj,
-                args[0],
-                args[1],
-                args[2],
-                args[3],
-                args[4],
-                args[5],
+                fn_obj, args[0], args[1], args[2], args[3], args[4], args[5],
             ),
             7 => ffi::closure::lean_apply_7(
-                fn_obj,
-                args[0],
-                args[1],
-                args[2],
-                args[3],
-                args[4],
-                args[5],
-                args[6],
+                fn_obj, args[0], args[1], args[2], args[3], args[4], args[5], args[6],
             ),
             8 => ffi::closure::lean_apply_8(
-                fn_obj,
-                args[0],
-                args[1],
-                args[2],
-                args[3],
-                args[4],
-                args[5],
-                args[6],
-                args[7],
+                fn_obj, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
             ),
             9 => {
                 let partial = ffi::closure::lean_apply_8(
-                    fn_obj,
-                    args[0],
-                    args[1],
-                    args[2],
-                    args[3],
-                    args[4],
-                    args[5],
-                    args[6],
-                    args[7],
+                    fn_obj, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
                 );
                 ffi::closure::lean_apply_1(partial, args[8])
             }
@@ -208,55 +202,19 @@ pub unsafe fn apply_curried(
             2 => ffi::closure::lean_apply_2(closure, args[0], args[1]),
             3 => ffi::closure::lean_apply_3(closure, args[0], args[1], args[2]),
             4 => ffi::closure::lean_apply_4(closure, args[0], args[1], args[2], args[3]),
-            5 => ffi::closure::lean_apply_5(
-                closure,
-                args[0],
-                args[1],
-                args[2],
-                args[3],
-                args[4],
-            ),
+            5 => ffi::closure::lean_apply_5(closure, args[0], args[1], args[2], args[3], args[4]),
             6 => ffi::closure::lean_apply_6(
-                closure,
-                args[0],
-                args[1],
-                args[2],
-                args[3],
-                args[4],
-                args[5],
+                closure, args[0], args[1], args[2], args[3], args[4], args[5],
             ),
             7 => ffi::closure::lean_apply_7(
-                closure,
-                args[0],
-                args[1],
-                args[2],
-                args[3],
-                args[4],
-                args[5],
-                args[6],
+                closure, args[0], args[1], args[2], args[3], args[4], args[5], args[6],
             ),
             8 => ffi::closure::lean_apply_8(
-                closure,
-                args[0],
-                args[1],
-                args[2],
-                args[3],
-                args[4],
-                args[5],
-                args[6],
-                args[7],
+                closure, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
             ),
             9 => {
                 let partial = ffi::closure::lean_apply_8(
-                    closure,
-                    args[0],
-                    args[1],
-                    args[2],
-                    args[3],
-                    args[4],
-                    args[5],
-                    args[6],
-                    args[7],
+                    closure, args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7],
                 );
                 ffi::closure::lean_apply_1(partial, args[8])
             }
@@ -311,11 +269,7 @@ extern "C" {
 /// Name.quickLt`. `DTreeMap` is a structure wrapping its tree, so the empty
 /// value is *not* a scalar.
 unsafe fn empty_name_map() -> *mut ffi::lean_object {
-    let cmp = ffi::inline::lean_alloc_closure(
-        lean_name_quick_lt as *mut std::ffi::c_void,
-        2u32,
-        0,
-    );
+    let cmp = ffi::inline::lean_alloc_closure(lean_name_quick_lt as *mut std::ffi::c_void, 2u32, 0);
     apply_curried(lean_std_dtreemap_empty as *mut std::ffi::c_void, 1, &[cmp])
 }
 
@@ -350,14 +304,11 @@ pub unsafe fn default_term_context<'l>(
             // saveRecAppSyntax, holesAsSyntheticOpaque, checkDeprecated.
             const NUM_OBJ_FIELDS: u32 = 8;
             let ctx = ffi::lean_alloc_ctor(0, NUM_OBJ_FIELDS, 11);
-            let set_obj = |i: u32, v: *mut ffi::lean_object| {
-                ffi::inline::lean_ctor_set(ctx, i, v)
-            };
+            let set_obj = |i: u32, v: *mut ffi::lean_object| ffi::inline::lean_ctor_set(ctx, i, v);
             // Scalar slots live *after* the object area; the byte offset
             // counts from the object area start: num_objs * ptr_size +
             // scalar_index.
-            let scalar_base =
-                NUM_OBJ_FIELDS * std::mem::size_of::<*mut ffi::lean_object>() as u32;
+            let scalar_base = NUM_OBJ_FIELDS * std::mem::size_of::<*mut ffi::lean_object>() as u32;
             let set_bool = |scalar_idx: u32, v: u8| {
                 ffi::inline::lean_ctor_set_uint8(ctx, scalar_base + scalar_idx, v)
             };
@@ -415,14 +366,11 @@ pub unsafe fn default_term_context<'l>(
             // saveRecAppSyntax, holesAsSyntheticOpaque, checkDeprecated.
             const NUM_OBJ_FIELDS: u32 = 7;
             let ctx = ffi::lean_alloc_ctor(0, NUM_OBJ_FIELDS, 11);
-            let set_obj = |i: u32, v: *mut ffi::lean_object| {
-                ffi::inline::lean_ctor_set(ctx, i, v)
-            };
+            let set_obj = |i: u32, v: *mut ffi::lean_object| ffi::inline::lean_ctor_set(ctx, i, v);
             // Scalar slots live *after* the object area; the byte offset
             // counts from the object area start: num_objs * ptr_size +
             // scalar_index.
-            let scalar_base =
-                NUM_OBJ_FIELDS * std::mem::size_of::<*mut ffi::lean_object>() as u32;
+            let scalar_base = NUM_OBJ_FIELDS * std::mem::size_of::<*mut ffi::lean_object>() as u32;
             let set_bool = |scalar_idx: u32, v: u8| {
                 ffi::inline::lean_ctor_set_uint8(ctx, scalar_base + scalar_idx, v)
             };
@@ -584,10 +532,14 @@ pub fn parse_term<'l>(
             let message = if c_str.is_null() {
                 "<unprintable>".to_string()
             } else {
-                std::ffi::CStr::from_ptr(c_str).to_string_lossy().into_owned()
+                std::ffi::CStr::from_ptr(c_str)
+                    .to_string_lossy()
+                    .into_owned()
             };
             ffi::lean_dec(result);
-            Err(LeanError::other(format!("term parse error: {message}").as_str()))
+            Err(LeanError::other(
+                format!("term parse error: {message}").as_str(),
+            ))
         }
     }
 }
@@ -636,10 +588,14 @@ pub fn parse_tactic<'l>(
             let message = if c_str.is_null() {
                 "<unprintable>".to_string()
             } else {
-                std::ffi::CStr::from_ptr(c_str).to_string_lossy().into_owned()
+                std::ffi::CStr::from_ptr(c_str)
+                    .to_string_lossy()
+                    .into_owned()
             };
             ffi::lean_dec(result);
-            Err(LeanError::other(format!("tactic parse error: {message}").as_str()))
+            Err(LeanError::other(
+                format!("tactic parse error: {message}").as_str(),
+            ))
         }
     }
 }
@@ -688,10 +644,14 @@ pub fn parse_command<'l>(
             let message = if c_str.is_null() {
                 "<unprintable>".to_string()
             } else {
-                std::ffi::CStr::from_ptr(c_str).to_string_lossy().into_owned()
+                std::ffi::CStr::from_ptr(c_str)
+                    .to_string_lossy()
+                    .into_owned()
             };
             ffi::lean_dec(result);
-            Err(LeanError::other(format!("command parse error: {message}").as_str()))
+            Err(LeanError::other(
+                format!("command parse error: {message}").as_str(),
+            ))
         }
     }
 }
@@ -713,12 +673,27 @@ pub fn init_search_path<'l>(lean: Lean<'l>, sysroot: &str) -> LeanResult<()> {
     }
 }
 
-/// Discover the Lean system root: `LEAN_SYSROOT` env, else `lean
-/// --print-prefix` (one subprocess, cached).
+/// Discover the Lean system root: `LEAN_SYSROOT` env, else the Lean
+/// library directory this crate was linked against (baked in at build
+/// time by `leo3-build-config` as `LEO3_LEAN_LIB_DIR`), else `lean
+/// --print-prefix` (one subprocess).
+///
+/// The linked-library directory wins over `lean --print-prefix` because
+/// the binary's RPATH pins it to the `libleanshared.so` of the toolchain
+/// it was built against, while `lean --print-prefix` follows elan and the
+/// process cwd's `lean-toolchain` file — which can resolve to a different
+/// Lean version (e.g. a repo-pinned toolchain under a `LEO3_CROSS_LIB_DIR`
+/// cross build), making the runtime read `.olean` files it cannot parse
+/// ("incompatible header").
 fn discover_sysroot() -> LeanResult<String> {
     if let Ok(root) = std::env::var("LEAN_SYSROOT") {
         if !root.is_empty() {
             return Ok(root);
+        }
+    }
+    if let Some(lib_dir) = option_env!("LEO3_LEAN_LIB_DIR") {
+        if let Some(sysroot) = sysroot_from_lib_dir(lib_dir) {
+            return Ok(sysroot);
         }
     }
     let out = std::process::Command::new("lean")
@@ -734,8 +709,28 @@ fn discover_sysroot() -> LeanResult<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// The sysroot for a standard-layout `<sysroot>/lib/lean` library
+/// directory, or `None` if the path is not shaped that way.
+fn sysroot_from_lib_dir(lib_dir: &str) -> Option<String> {
+    let lib = std::path::Path::new(lib_dir);
+    if lib.file_name() != Some(std::ffi::OsStr::new("lean")) {
+        return None;
+    }
+    let lib_parent = lib.parent()?;
+    if lib_parent.file_name() != Some(std::ffi::OsStr::new("lib")) {
+        return None;
+    }
+    Some(lib_parent.parent()?.to_string_lossy().into_owned())
+}
+
 /// Ensure Lean's search path reflects the current `LEAN_PATH` + sysroot,
 /// so module imports resolve `.olean` files. Safe to call repeatedly.
+///
+/// The sysroot comes from [`discover_sysroot`] (`LEAN_SYSROOT`, then the
+/// linked toolchain, then `lean --print-prefix`). If it points at a
+/// different library directory than the one the binary was built
+/// against, this fails with an explicit error: loading `.olean` files
+/// from another Lean version aborts the process ("incompatible header").
 ///
 /// The embedded runtime's `lean_init_search_path` (=
 /// `initSearchPathInternal`) derives the system root from `IO.appDir.parent`
@@ -751,6 +746,22 @@ fn discover_sysroot() -> LeanResult<String> {
 pub fn ensure_search_path<'l>(lean: Lean<'l>) -> LeanResult<()> {
     let sysroot = discover_sysroot()?;
     let lean_lib = format!("{sysroot}/lib/lean");
+    // The binary's RPATH pins it to the `libleanshared.so` of the
+    // toolchain it was built against. If the resolved search path points
+    // at a different library directory, the runtime would read `.olean`
+    // files from another Lean version and abort on import ("incompatible
+    // header") — fail fast with an explicit error instead.
+    if let Some(linked) = option_env!("LEO3_LEAN_LIB_DIR") {
+        if !same_lib_dir(&lean_lib, linked) {
+            return Err(LeanError::other(&format!(
+                "Lean module search path mismatch: this binary is linked against the \
+                 Lean libraries in '{linked}', but the search path resolves to \
+                 '{lean_lib}' (sysroot '{sysroot}'). Olean files from a different Lean \
+                 version cannot be loaded (\"incompatible header\"). Point LEAN_SYSROOT \
+                 at the linked toolchain, or rebuild against it."
+            )));
+        }
+    }
     let lean_path = std::env::var("LEAN_PATH")
         .map(|p| format!("{p}:{lean_lib}"))
         .unwrap_or_else(|_| lean_lib.clone());
@@ -761,10 +772,29 @@ pub fn ensure_search_path<'l>(lean: Lean<'l>) -> LeanResult<()> {
     Ok(())
 }
 
+/// True if two Lean library directories name the same path, comparing
+/// after normalizing separators, trailing slashes, and (on Windows) case.
+fn same_lib_dir(a: &str, b: &str) -> bool {
+    let normalize = |s: &str| {
+        let normalized = s.replace('\\', "/");
+        let s = normalized.trim_end_matches('/');
+        #[cfg(windows)]
+        {
+            s.to_ascii_lowercase()
+        }
+        #[cfg(not(windows))]
+        {
+            s.to_string()
+        }
+    };
+    normalize(a) == normalize(b)
+}
+
 /// Import compiled Lean modules (e.g. `Init`) into a fresh environment.
 ///
 /// Calls `Lean.importModules` (IO). The search path is initialized from
-/// `LEAN_SYSROOT` (or `lean --print-prefix`) plus `LEAN_PATH` on first use.
+/// the linked toolchain's sysroot (overridable via `LEAN_SYSROOT`) plus
+/// `LEAN_PATH` on first use.
 pub fn import_modules<'l>(
     lean: Lean<'l>,
     names: &[&str],
@@ -830,9 +860,8 @@ pub fn import_modules_with_exts<'l>(
             // Direct mixed-ABI call (not curried): scalar params are raw
             // u32/u8 values.
             let enable_world = ffi::io::lean_io_mk_world();
-            let enable_res = ffi::lean_enable_initializer_execution(
-                enable_world as *mut std::ffi::c_void,
-            );
+            let enable_res =
+                ffi::lean_enable_initializer_execution(enable_world as *mut std::ffi::c_void);
             let enable_ok = ffi::io::lean_io_result_is_ok(enable_res);
             ffi::lean_dec(enable_res);
             if !enable_ok {
@@ -846,9 +875,9 @@ pub fn import_modules_with_exts<'l>(
                 opts,
                 trust_level,
                 plugins,
-                0, // leakEnv
+                0,                   // leakEnv
                 u8::from(load_exts), // loadExts
-                2, // OLeanLevel.private
+                2,                   // OLeanLevel.private
                 arts,
                 world,
             );
@@ -972,11 +1001,25 @@ pub fn run_tactic<'l>(
             // The computation threaded Meta.State and Core.State through
             // their refs in place; read both back for the next step.
             let read_ref = |r: *mut ffi::lean_object| -> *mut ffi::lean_object {
-                let res = ffi::lean_st_ref_get(r, world);
-                let v = ffi::lean_ctor_get(res, 0) as *mut ffi::lean_object;
-                ffi::lean_inc(v);
-                ffi::lean_dec(res);
-                v
+                #[cfg(lean_4_26)]
+                {
+                    // Lean >= 4.26 (ST redesign): the C ABI dropped the
+                    // world token, so `lean_st_ref_get` returns the value
+                    // directly and the extra `world` arg is ignored by the
+                    // callee. Decoding the return as the old
+                    // `(value, world)` pair would read `field 0` of the
+                    // state itself (e.g. Core.State's `env`) and corrupt
+                    // the session.
+                    ffi::lean_st_ref_get(r, world)
+                }
+                #[cfg(not(lean_4_26))]
+                {
+                    let res = ffi::lean_st_ref_get(r, world);
+                    let v = ffi::lean_ctor_get(res, 0) as *mut ffi::lean_object;
+                    ffi::lean_inc(v);
+                    ffi::lean_dec(res);
+                    v
+                }
             };
             let updated_meta = read_ref(meta_state_ref);
             let updated_core = read_ref(core_state_ref);
@@ -999,7 +1042,13 @@ pub fn run_tactic<'l>(
                     *mut ffi::lean_object,
                 ),
                 LeanError,
-            >((alpha, updated_meta, updated_core, term_state_ptr, meta_state_ref))
+            >((
+                alpha,
+                updated_meta,
+                updated_core,
+                term_state_ptr,
+                meta_state_ref,
+            ))
         })?;
 
     unsafe {
@@ -1023,14 +1072,8 @@ pub fn run_tactic<'l>(
         // Core.State came back in the result; Meta.State lives in the kept
         // ref (threaded in place) — store that ref so the next step reuses it.
         metam.update_states(
-            LeanBound::<crate::instance::LeanAny>::from_owned_ptr(
-                metam.lean(),
-                new_meta_state,
-            ),
-            LeanBound::<crate::instance::LeanAny>::from_owned_ptr(
-                metam.lean(),
-                new_core_state,
-            ),
+            LeanBound::<crate::instance::LeanAny>::from_owned_ptr(metam.lean(), new_meta_state),
+            LeanBound::<crate::instance::LeanAny>::from_owned_ptr(metam.lean(), new_core_state),
         );
 
         // α' is `List MVarId` (runTactic : MetaM (List MVarId × Term.State)):
@@ -1097,11 +1140,7 @@ unsafe fn scan_core_state_error<'l>(
                 b: *mut ffi::lean_object,
             ) -> *mut ffi::lean_object;
         }
-        let c = ffi::inline::lean_alloc_closure(
-            lean_msglog_tolist as *mut std::ffi::c_void,
-            1,
-            0,
-        );
+        let c = ffi::inline::lean_alloc_closure(lean_msglog_tolist as *mut std::ffi::c_void, 1, 0);
         let lst = ffi::closure::lean_apply_1(c, msg_log);
         let mut err_msg: Option<String> = None;
         let mut cur = lst;
@@ -1266,9 +1305,9 @@ pub fn pp_expr<'l>(
     // Delegate to the batched implementation: a single-expression batch is
     // one worker trip, so this preserves the single-expression contract
     // without duplicating the refcounting.
-    pp_exprs(metam, lctx, local_instances, std::slice::from_ref(e))?.pop().ok_or_else(|| {
-        LeanError::other("pp_exprs returned no result for a single expression")
-    })
+    pp_exprs(metam, lctx, local_instances, std::slice::from_ref(e))?
+        .pop()
+        .ok_or_else(|| LeanError::other("pp_exprs returned no result for a single expression"))
 }
 
 /// Batch variant of [`pp_expr`]: pretty-print several expressions in a
@@ -1304,8 +1343,7 @@ pub fn pp_exprs<'l>(
     let lctx_ptr = lctx.as_ptr();
     let insts_ptr = local_instances.as_ptr();
     // One owned reference per expression (the callee consumes `e`).
-    let e_ptrs: Vec<*mut ffi::lean_object> =
-        exprs.iter().map(|e| e.as_ptr()).collect();
+    let e_ptrs: Vec<*mut ffi::lean_object> = exprs.iter().map(|e| e.as_ptr()).collect();
     unsafe {
         // One owned reference per expression (the callee consumes `e`).
         // lctx / localInstances are inc'd per-iteration inside the loop,
@@ -1420,7 +1458,6 @@ pub fn pp_exprs<'l>(
     Ok(strings)
 }
 
-
 // ============================================================================
 // Command execution (run_cmd)
 // ============================================================================
@@ -1446,15 +1483,26 @@ pub fn run_command<'l>(
             // objects (olean reading, environment construction), and Lean
             // objects must not cross minimal-move local heaps.
             let cmd_state_owned = mk_command_state(&env)?;
-            let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, ffi::lean_box(0));
-            let cmd_state_ref = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
-            // `lean_st_mk_ref` returns an IO pair `(ref, world)`: use the
-            // REAL world token it produces (like `import_modules` and
-            // `run_tactic` do), not a synthetic box(0).
-            let world = ffi::lean_ctor_get(ref_result, 1) as *mut ffi::lean_object;
-            ffi::lean_inc(cmd_state_ref);
-            ffi::lean_inc(world);
-            ffi::lean_dec(ref_result);
+            #[cfg(not(lean_4_26))]
+            let (cmd_state_ref, world) = {
+                let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, ffi::lean_box(0));
+                // `lean_st_mk_ref` returns an IO pair `(ref, world)`: use
+                // the REAL world token it produces (like `import_modules`
+                // and `run_tactic` do), not a synthetic box(0).
+                let cmd_state_ref = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
+                let world = ffi::lean_ctor_get(ref_result, 1) as *mut ffi::lean_object;
+                ffi::lean_inc(cmd_state_ref);
+                ffi::lean_inc(world);
+                ffi::lean_dec(ref_result);
+                (cmd_state_ref, world)
+            };
+            #[cfg(lean_4_26)]
+            let (cmd_state_ref, world) = (
+                // Lean >= 4.26: `lean_st_mk_ref` returns the ST.Ref
+                // directly; the second arg is ignored by the callee.
+                ffi::lean_st_mk_ref(cmd_state_owned, ffi::lean_box(0)),
+                ffi::lean_box(0),
+            );
             // elabCommand consumes the initial Command.State value; the
             // ref also holds it, so keep extra references to prevent the
             // elaborated state from being freed under us.
@@ -1465,8 +1513,20 @@ pub fn run_command<'l>(
             // pattern as run_tactic's "Keep our own references").
             ffi::lean_inc(cmd_state_ref);
 
-            // `elabCommandTopLevel` is the real frontend entry; arity 4:
-            // (stx, ctx, ref, world).
+            // `elabCommandTopLevel` is the real frontend entry.
+            // Pre-4.32 arity 4: (stx, ctx, ref, world); from 4.32 the
+            // signature gained a leading `cmds : Array Syntax` linter
+            // bookkeeping parameter (default `#[]`), shifting the ABI to
+            // (stx, cmds, ctx, ref, world).
+            #[cfg(lean_4_32)]
+            let result = ffi::meta::repl::lean_elab_command_top_level_5(
+                stx_ptr,
+                ffi::array::lean_mk_empty_array(),
+                cmd_ctx.into_ptr(),
+                cmd_state_ref,
+                world,
+            );
+            #[cfg(not(lean_4_32))]
             let result = ffi::meta::repl::lean_elab_command_top_level_4(
                 stx_ptr,
                 cmd_ctx.into_ptr(),
@@ -1478,10 +1538,17 @@ pub fn run_command<'l>(
 
             // The elaboration pipeline threads the final Command.State
             // through the ref in place; read it back.
-            let final_ref = ffi::lean_st_ref_get(cmd_state_ref, world);
-            let state = ffi::lean_ctor_get(final_ref, 0) as *mut ffi::lean_object;
-            ffi::lean_inc(state);
-            ffi::lean_dec(final_ref);
+            #[cfg(lean_4_26)]
+            // Lean >= 4.26: `lean_st_ref_get` returns the value directly.
+            let state = ffi::lean_st_ref_get(cmd_state_ref, world);
+            #[cfg(not(lean_4_26))]
+            let state = {
+                let final_ref = ffi::lean_st_ref_get(cmd_state_ref, world);
+                let state = ffi::lean_ctor_get(final_ref, 0) as *mut ffi::lean_object;
+                ffi::lean_inc(state);
+                ffi::lean_dec(final_ref);
+                state
+            };
             // Command.State field 0 = Environment.
             let env_out =
                 std::ptr::read::<u64>((state as *const u64).add(1)) as *mut ffi::lean_object;
@@ -1489,67 +1556,83 @@ pub fn run_command<'l>(
             // Error reporting: `withLogging` swallows elaboration
             // failures into the command message log (no exception
             // propagates), so surface the first `error`-severity
-            // message as a LeanError. `MessageLog.toList` (pure) +
-            // `Message.serialize` + `SerialMessage.toString` render
-            // messages with a position prefix, e.g.
-            // `<stdin>:0:0-0:0: error: ...`.
+            // message as a LeanError.
+            //
+            // `Message = BaseMessage MessageData` has a flat layout
+            // stable across 4.25.2..4.33: object fields first in
+            // declaration order (`fileName`, `pos`, `endPos`,
+            // `caption`, `data`), then the scalar bytes
+            // (`keepFullRange`, `severity`, `isSilent`).
+            // `MessageSeverity`: information=0, warning=1, error=2, so
+            // `severity` is the second scalar byte. The scalar offset
+            // passed to `lean_ctor_get_uint8` is relative to the object
+            // field array (just past the 8-byte header), so after 5
+            // object fields (`5 * 8 = 40`) severity sits at
+            // `40 + 1 = 41`. The error text is read from the raw
+            // message's own `data` field (object field 4, a
+            // `MessageData`) and rendered via the version-robust
+            // `MessageData.toString`. Reading the raw message (rather
+            // than a serialized `SerialMessage`) avoids the
+            // serialize/`l_Lean_SerialMessage_toString` shape
+            // disagreement in 4.33.0-rc1.
             extern "C" {
                 #[link_name = "l_Lean_MessageLog_toList"]
                 fn lean_msglog_tolist(a: *mut ffi::lean_object) -> *mut ffi::lean_object;
-                #[link_name = "l_Lean_Message_serialize"]
-                fn lean_message_serialize(
-                    a: *mut ffi::lean_object,
-                    w: *mut ffi::lean_object,
-                ) -> *mut ffi::lean_object;
-                #[link_name = "l_Lean_SerialMessage_toString"]
-                fn lean_serial_to_string(
-                    a: *mut ffi::lean_object,
-                    b: *mut ffi::lean_object,
-                ) -> *mut ffi::lean_object;
+            }
+            /// Read a Lean `String` stored in object field `f` of `o`.
+            unsafe fn field_string(o: *mut ffi::lean_object, f: u32) -> String {
+                let s = ffi::lean_ctor_get(o, f) as *mut ffi::lean_object;
+                if ffi::inline::lean_is_scalar(s) {
+                    return String::new();
+                }
+                let cs = ffi::inline::lean_string_cstr(s as ffi::b_lean_obj_arg);
+                if cs.is_null() {
+                    String::new()
+                } else {
+                    std::ffi::CStr::from_ptr(cs).to_string_lossy().into_owned()
+                }
             }
             let msg_log =
                 std::ptr::read::<u64>((state as *const u64).add(2)) as *mut ffi::lean_object;
             ffi::lean_inc(msg_log);
-            let c = ffi::inline::lean_alloc_closure(
-                lean_msglog_tolist as *mut std::ffi::c_void,
-                1,
-                0,
-            );
+            let c =
+                ffi::inline::lean_alloc_closure(lean_msglog_tolist as *mut std::ffi::c_void, 1, 0);
             let lst = ffi::closure::lean_apply_1(c, msg_log);
             let mut err_msg: Option<String> = None;
             let mut cur = lst;
             while !ffi::inline::lean_is_scalar(cur) && err_msg.is_none() {
                 let m = ffi::lean_ctor_get(cur, 0) as *mut ffi::lean_object;
                 ffi::lean_inc(m);
-                let w = ffi::io::lean_io_mk_world();
-                let c2 = ffi::inline::lean_alloc_closure(
-                    lean_message_serialize as *mut std::ffi::c_void,
-                    2,
-                    0,
-                );
-                let r = ffi::closure::lean_apply_2(c2, m, w);
-                if !ffi::inline::lean_is_scalar(r) && ffi::lean_obj_tag(r) == 0 {
-                    let sm = ffi::lean_ctor_get(r, 0) as *mut ffi::lean_object;
-                    ffi::lean_inc(sm);
-                    ffi::lean_dec(r);
-                    let c3 = ffi::inline::lean_alloc_closure(
-                        lean_serial_to_string as *mut std::ffi::c_void,
-                        2,
-                        0,
-                    );
-                    let s2 = ffi::closure::lean_apply_2(c3, sm, ffi::lean_box(0));
-                    let cs = ffi::inline::lean_string_cstr(s2);
-                    if !cs.is_null() {
-                        let txt =
-                            std::ffi::CStr::from_ptr(cs).to_string_lossy().into_owned();
-                        // Severity markers: `: error: ...` or
-                        // `: error(name): ...` after the position prefix.
-                        if txt.contains(": error") {
-                            err_msg = Some(txt.trim().to_string());
+                let severity = if !ffi::inline::lean_is_scalar(m) {
+                    // Second scalar byte (see layout note above).
+                    ffi::inline::lean_ctor_get_uint8(m as ffi::b_lean_obj_arg, 41)
+                } else {
+                    0
+                };
+                if severity == 2 {
+                    // Read `caption` (String, field 3) and `data`
+                    // (MessageData, field 4) from the raw message and
+                    // render `data` with Lean's real renderer. The raw
+                    // `Message = BaseMessage MessageData` layout (5
+                    // object fields) is stable across 4.25.2..4.33, so
+                    // this does not depend on a serialized
+                    // `SerialMessage`'s field count.
+                    let caption = field_string(m, 3);
+                    let data_md = ffi::lean_ctor_get(m, 4) as *mut ffi::lean_object;
+                    ffi::lean_inc(data_md);
+                    let data = super::metam::extract_message_data(data_md);
+                    ffi::lean_dec(data_md);
+                    err_msg = Some(if caption.is_empty() {
+                        if data.is_empty() {
+                            "command failed".to_string()
+                        } else {
+                            data
                         }
-                    }
-                    ffi::lean_dec(s2);
+                    } else {
+                        format!("{caption}: {data}")
+                    });
                 }
+                ffi::lean_dec(m);
                 cur = ffi::lean_ctor_get(cur, 1) as *mut ffi::lean_object;
             }
             ffi::lean_dec(lst);
@@ -1723,29 +1806,19 @@ unsafe fn mk_command_state<'l>(
     ffi::lean_ctor_set(msg_log, 1, pa);
     ffi::lean_ctor_set(msg_log, 2, ffi::lean_box(1));
     ffi::lean_ctor_set(state, 1, msg_log);
-    // 2: scopes = [ base Scope ] — Scope has 10 object fields + 3 Bool
-    // scalars: header, opts, currNamespace, openDecls, levelNames,
-    // varDecls, varUIds, includedVars, omittedVars, isNoncomputable,
-    // isPublic, isMeta, attrs.
-    let empty_str = ffi::string::lean_mk_string_from_bytes(b"".as_ptr() as *const _, 0);
-    let scope = ffi::lean_alloc_ctor(0, 10, 3);
-    ffi::lean_ctor_set(scope, 0, empty_str);                    // header
-    let opts = ffi::meta::get_KVMapEmpty();                     // opts (empty)
-    ffi::lean_ctor_set(scope, 1, opts);
-    ffi::lean_ctor_set(scope, 2, ffi::lean_box(0));             // currNamespace (anon)
-    ffi::lean_ctor_set(scope, 3, ffi::lean_box(0));             // openDecls []
-    ffi::lean_ctor_set(scope, 4, ffi::lean_box(0));             // levelNames []
-    let empty_arr = ffi::array::lean_mk_empty_array();          // varDecls
-    ffi::lean_ctor_set(scope, 5, empty_arr);
-    let empty_arr2 = ffi::array::lean_mk_empty_array();         // varUIds
-    ffi::lean_ctor_set(scope, 6, empty_arr2);
-    ffi::lean_ctor_set(scope, 7, ffi::lean_box(0));             // includedVars []
-    ffi::lean_ctor_set(scope, 8, ffi::lean_box(0));             // omittedVars []
-    ffi::lean_ctor_set(scope, 9, ffi::lean_box(0));             // attrs []
-    let sb = 10 * 8;
-    ffi::inline::lean_ctor_set_uint8(scope, sb, 0);             // isNoncomputable
-    ffi::inline::lean_ctor_set_uint8(scope, sb + 1, 0);         // isPublic
-    ffi::inline::lean_ctor_set_uint8(scope, sb + 2, 0);         // isMeta
+    // 2: scopes = [ base Scope ]. Use the toolchain's own
+    // `Inhabited Scope.default` (`{ header := "" }`) instead of
+    // hand-building the struct: the `Scope` layout changed across
+    // versions (4.31+ adds `varUIds`/`includedVars`/`omittedVars`/
+    // Bool flags; 4.28+ `opts` is the `Options` struct, not `KVMap`),
+    // and this is exactly the object the frontend's
+    // `elabCommandTopLevel` uses as the `List.head` default for
+    // `state.scopes`, so the layout is always the one the linked
+    // runtime expects.
+    let scope = ffi::meta::get_instInhabitedScope();
+    if scope.is_null() {
+        return Err(LeanError::other("instInhabitedScope default unavailable"));
+    }
     let scopes = ffi::lean_alloc_ctor(1, 2, 0); // List.cons
     ffi::lean_ctor_set(scopes, 0, scope);
     ffi::lean_ctor_set(scopes, 1, ffi::lean_box(0)); // List.nil
@@ -1771,7 +1844,9 @@ unsafe fn mk_command_state<'l>(
     // 7: auxDeclNGen (BSS static DeclNameGenerator)
     let aux = ffi::meta::get_instInhabitedDeclNameGenerator();
     if aux.is_null() {
-        return Err(LeanError::other("instInhabitedDeclNameGenerator unavailable"));
+        return Err(LeanError::other(
+            "instInhabitedDeclNameGenerator unavailable",
+        ));
     }
     ffi::lean_ctor_set(state, 7, aux);
     // 8: infoState = InfoState { enabled := true, assignment := ∅,

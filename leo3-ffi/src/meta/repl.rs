@@ -126,9 +126,49 @@ extern "C" {
 extern "C" {
     /// `Lean.Elab.Command.elabCommandTopLevel` — direct mixed-ABI call.
     /// Arity 4: `(stx, ctx, ref, world)`.
+    ///
+    /// Pre-4.32 ABI: the Lean signature is
+    /// `elabCommandTopLevel (stx : Syntax) : CommandElabM Unit`, with
+    /// `CommandElabM = ReaderT Context (StateRefT State) (EIO Exception)`.
+    ///
+    /// # Safety
+    /// - `stx` must be a valid `Syntax` (standard, consumed)
+    /// - `cmd_ctx` must be a valid `Command.Context` (standard, consumed)
+    /// - `cmd_state_ref` must be a valid `ST.Ref Command.State`
+    ///   (standard, consumed)
+    /// - `world` must be a valid world token
+    #[cfg(not(lean_4_32))]
     #[link_name = "l_Lean_Elab_Command_elabCommandTopLevel"]
     pub fn lean_elab_command_top_level_4(
         stx: lean_obj_arg,
+        cmd_ctx: lean_obj_arg,
+        cmd_state_ref: lean_obj_arg,
+        world: lean_obj_arg,
+    ) -> lean_obj_res;
+}
+
+#[cfg(lean_4_32)]
+extern "C" {
+    /// `Lean.Elab.Command.elabCommandTopLevel` — direct mixed-ABI call.
+    /// Arity 5: `(stx, cmds, ctx, ref, world)`.
+    ///
+    /// Lean >= 4.32 ABI: the signature gained a `cmds : Array Syntax`
+    /// parameter (default `#[]`), listing the commands currently being
+    /// elaborated for `#guard_msgs`/linter bookkeeping. Pass an empty
+    /// array for standalone command execution.
+    ///
+    /// # Safety
+    /// - `stx` must be a valid `Syntax` (standard, consumed)
+    /// - `cmds` must be a valid `Array Syntax` (standard, consumed;
+    ///   `lean_mk_empty_array()` is the standalone-execution value)
+    /// - `cmd_ctx` must be a valid `Command.Context` (standard, consumed)
+    /// - `cmd_state_ref` must be a valid `ST.Ref Command.State`
+    ///   (standard, consumed)
+    /// - `world` must be a valid world token
+    #[link_name = "l_Lean_Elab_Command_elabCommandTopLevel"]
+    pub fn lean_elab_command_top_level_5(
+        stx: lean_obj_arg,
+        cmds: lean_obj_arg,
         cmd_ctx: lean_obj_arg,
         cmd_state_ref: lean_obj_arg,
         world: lean_obj_arg,

@@ -18,25 +18,47 @@ fn add_comm_type<'l>(lean: Lean<'l>) -> LeanResult<LeanBound<'l, LeanExpr>> {
     let nat = LeanExpr::const_(lean, LeanName::from_str(lean, "Nat")?, LeanList::nil(lean)?)?;
     // HAdd.hAdd.{0,0,0} Nat Nat Nat (instHAdd.{0} Nat instAddNat) a b
     let lv0 = LeanLevel::zero(lean)?;
-    let levels = LeanList::cons(lv0.clone().cast(), LeanList::cons(lv0.clone().cast(), LeanList::cons(lv0.cast(), LeanList::nil(lean)?)?)?)?;
+    let levels = LeanList::cons(
+        lv0.clone().cast(),
+        LeanList::cons(
+            lv0.clone().cast(),
+            LeanList::cons(lv0.cast(), LeanList::nil(lean)?)?,
+        )?,
+    )?;
     let hadd = LeanExpr::const_(lean, LeanName::from_components(lean, "HAdd.hAdd")?, levels)?;
-    let inst_hadd = LeanExpr::const_(lean, LeanName::from_components(lean, "instHAdd")?, LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?)?;
-    let inst_add_nat = LeanExpr::const_(lean, LeanName::from_components(lean, "instAddNat")?, LeanList::nil(lean)?)?;
-    let inst = LeanExpr::app(&inst_hadd, &nat)?;   // instHAdd.{0} Nat
+    let inst_hadd = LeanExpr::const_(
+        lean,
+        LeanName::from_components(lean, "instHAdd")?,
+        LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?,
+    )?;
+    let inst_add_nat = LeanExpr::const_(
+        lean,
+        LeanName::from_components(lean, "instAddNat")?,
+        LeanList::nil(lean)?,
+    )?;
+    let inst = LeanExpr::app(&inst_hadd, &nat)?; // instHAdd.{0} Nat
     let inst = LeanExpr::app(&inst, &inst_add_nat)?; // instHAdd.{0} Nat instAddNat
-    let mk_nat_add = |a: LeanBound<'l, LeanExpr>, b: LeanBound<'l, LeanExpr>| -> LeanResult<LeanBound<'l, LeanExpr>> {
-        let f = LeanExpr::app(&hadd, &nat)?;          // HAdd.hAdd Nat
-        let f = LeanExpr::app(&f, &nat)?;             // HAdd.hAdd Nat Nat
-        let f = LeanExpr::app(&f, &nat)?;             // HAdd.hAdd Nat Nat Nat
-        let f = LeanExpr::app(&f, &inst)?;            // ... (instHAdd Nat instAddNat)
-        let f = LeanExpr::app(&f, &a)?;               // ... a
-        LeanExpr::app(&f, &b)                         // ... a b
+    let mk_nat_add = |a: LeanBound<'l, LeanExpr>,
+                      b: LeanBound<'l, LeanExpr>|
+     -> LeanResult<LeanBound<'l, LeanExpr>> {
+        let f = LeanExpr::app(&hadd, &nat)?; // HAdd.hAdd Nat
+        let f = LeanExpr::app(&f, &nat)?; // HAdd.hAdd Nat Nat
+        let f = LeanExpr::app(&f, &nat)?; // HAdd.hAdd Nat Nat Nat
+        let f = LeanExpr::app(&f, &inst)?; // ... (instHAdd Nat instAddNat)
+        let f = LeanExpr::app(&f, &a)?; // ... a
+        LeanExpr::app(&f, &b) // ... a b
     };
     let n = LeanExpr::bvar(lean, 1)?;
     let m = LeanExpr::bvar(lean, 0)?;
     let n_plus_m = mk_nat_add(n.clone(), m.clone())?;
     let m_plus_n = mk_nat_add(m.clone(), n.clone())?;
-    let eq = LeanExpr::mk_eq(lean, LeanList::cons(LeanLevel::one(lean)?.cast(), LeanList::nil(lean)?)?, &nat, &n_plus_m, &m_plus_n)?;
+    let eq = LeanExpr::mk_eq(
+        lean,
+        LeanList::cons(LeanLevel::one(lean)?.cast(), LeanList::nil(lean)?)?,
+        &nat,
+        &n_plus_m,
+        &m_plus_n,
+    )?;
     let inner = LeanExpr::forall(
         LeanName::from_str(lean, "m")?,
         nat.clone(),
@@ -126,8 +148,12 @@ fn test_run_tactic_intro_advances_goal() {
         // The remaining goal can be intro'd again, reusing the threaded
         // Meta.State ref.
         let stx2 = parse_tactic(lean, metam.env(), "intro m")?;
-        let outcome2 =
-            run_tactic(&mut metam, &outcome.goals[0], &stx2, Some(&outcome.meta_state_ref))?;
+        let outcome2 = run_tactic(
+            &mut metam,
+            &outcome.goals[0],
+            &stx2,
+            Some(&outcome.meta_state_ref),
+        )?;
         assert_eq!(outcome2.goals.len(), 1, "second intro leaves one goal");
         Ok(())
     });
@@ -182,17 +208,39 @@ fn test_simp_simple_goal() {
         // ∀ m : Nat, 0 + m = m + 0 (bvar 0 = m)
         let nat = LeanExpr::const_(lean, LeanName::from_str(lean, "Nat")?, LeanList::nil(lean)?)?;
         let lv0 = LeanLevel::zero(lean)?;
-        let levels = LeanList::cons(lv0.clone().cast(), LeanList::cons(lv0.clone().cast(), LeanList::cons(lv0.cast(), LeanList::nil(lean)?)?)?)?;
+        let levels = LeanList::cons(
+            lv0.clone().cast(),
+            LeanList::cons(
+                lv0.clone().cast(),
+                LeanList::cons(lv0.cast(), LeanList::nil(lean)?)?,
+            )?,
+        )?;
         let hadd = LeanExpr::const_(lean, LeanName::from_components(lean, "HAdd.hAdd")?, levels)?;
-        let inst_hadd = LeanExpr::const_(lean, LeanName::from_components(lean, "instHAdd")?, LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?)?;
-        let inst_add_nat = LeanExpr::const_(lean, LeanName::from_components(lean, "instAddNat")?, LeanList::nil(lean)?)?;
+        let inst_hadd = LeanExpr::const_(
+            lean,
+            LeanName::from_components(lean, "instHAdd")?,
+            LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?,
+        )?;
+        let inst_add_nat = LeanExpr::const_(
+            lean,
+            LeanName::from_components(lean, "instAddNat")?,
+            LeanList::nil(lean)?,
+        )?;
         let inst = LeanExpr::app(&inst_hadd, &nat)?;
         let inst = LeanExpr::app(&inst, &inst_add_nat)?;
         // OfNat.ofNat.{0} Nat 0 (instOfNatNat 0) — the full numeral shape
         let lit0 = LeanExpr::lit(lean, LeanLiteral::nat(lean, 0)?)?;
-        let inst_of_nat_nat = LeanExpr::const_(lean, LeanName::from_components(lean, "instOfNatNat")?, LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?)?;
+        let inst_of_nat_nat = LeanExpr::const_(
+            lean,
+            LeanName::from_components(lean, "instOfNatNat")?,
+            LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?,
+        )?;
         let inst0 = LeanExpr::app(&inst_of_nat_nat, &lit0)?;
-        let of_nat = LeanExpr::const_(lean, LeanName::from_components(lean, "OfNat.ofNat")?, LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?)?;
+        let of_nat = LeanExpr::const_(
+            lean,
+            LeanName::from_components(lean, "OfNat.ofNat")?,
+            LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?,
+        )?;
         let zero_nat = LeanExpr::app(&of_nat, &nat)?;
         let zero_nat = LeanExpr::app(&zero_nat, &lit0)?;
         let zero_nat = LeanExpr::app(&zero_nat, &inst0)?;
@@ -214,7 +262,13 @@ fn test_simp_simple_goal() {
             let f = LeanExpr::app(&f, &LeanExpr::bvar(lean, 0)?)?;
             LeanExpr::app(&f, &zero_nat)?
         };
-        let eq = LeanExpr::mk_eq(lean, LeanList::cons(LeanLevel::one(lean)?.cast(), LeanList::nil(lean)?)?, &nat, &zero_m, &m_zero)?;
+        let eq = LeanExpr::mk_eq(
+            lean,
+            LeanList::cons(LeanLevel::one(lean)?.cast(), LeanList::nil(lean)?)?,
+            &nat,
+            &zero_m,
+            &m_zero,
+        )?;
         let ty = LeanExpr::forall(LeanName::from_str(lean, "m")?, nat, eq, BinderInfo::Default)?;
         let goal = metam.mk_goal(&ty)?;
         let mvar = LeanExpr::mvar_id(&goal)?;
@@ -237,16 +291,38 @@ fn test_rfl_m_plus_zero() {
         let mut metam = MetaMContext::new(lean, env)?;
         let nat = LeanExpr::const_(lean, LeanName::from_str(lean, "Nat")?, LeanList::nil(lean)?)?;
         let lv0 = LeanLevel::zero(lean)?;
-        let levels = LeanList::cons(lv0.clone().cast(), LeanList::cons(lv0.clone().cast(), LeanList::cons(lv0.cast(), LeanList::nil(lean)?)?)?)?;
+        let levels = LeanList::cons(
+            lv0.clone().cast(),
+            LeanList::cons(
+                lv0.clone().cast(),
+                LeanList::cons(lv0.cast(), LeanList::nil(lean)?)?,
+            )?,
+        )?;
         let hadd = LeanExpr::const_(lean, LeanName::from_components(lean, "HAdd.hAdd")?, levels)?;
-        let inst_hadd = LeanExpr::const_(lean, LeanName::from_components(lean, "instHAdd")?, LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?)?;
-        let inst_add_nat = LeanExpr::const_(lean, LeanName::from_components(lean, "instAddNat")?, LeanList::nil(lean)?)?;
+        let inst_hadd = LeanExpr::const_(
+            lean,
+            LeanName::from_components(lean, "instHAdd")?,
+            LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?,
+        )?;
+        let inst_add_nat = LeanExpr::const_(
+            lean,
+            LeanName::from_components(lean, "instAddNat")?,
+            LeanList::nil(lean)?,
+        )?;
         let inst = LeanExpr::app(&inst_hadd, &nat)?;
         let inst = LeanExpr::app(&inst, &inst_add_nat)?;
         let lit0 = LeanExpr::lit(lean, LeanLiteral::nat(lean, 0)?)?;
-        let inst_of_nat_nat = LeanExpr::const_(lean, LeanName::from_components(lean, "instOfNatNat")?, LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?)?;
+        let inst_of_nat_nat = LeanExpr::const_(
+            lean,
+            LeanName::from_components(lean, "instOfNatNat")?,
+            LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?,
+        )?;
         let inst0 = LeanExpr::app(&inst_of_nat_nat, &lit0)?;
-        let of_nat = LeanExpr::const_(lean, LeanName::from_components(lean, "OfNat.ofNat")?, LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?)?;
+        let of_nat = LeanExpr::const_(
+            lean,
+            LeanName::from_components(lean, "OfNat.ofNat")?,
+            LeanList::cons(LeanLevel::zero(lean)?.cast(), LeanList::nil(lean)?)?,
+        )?;
         let zero_nat = LeanExpr::app(&of_nat, &nat)?;
         let zero_nat = LeanExpr::app(&zero_nat, &lit0)?;
         let zero_nat = LeanExpr::app(&zero_nat, &inst0)?;
@@ -259,7 +335,13 @@ fn test_rfl_m_plus_zero() {
             let f = LeanExpr::app(&f, &LeanExpr::bvar(lean, 0)?)?;
             LeanExpr::app(&f, &zero_nat)?
         };
-        let eq = LeanExpr::mk_eq(lean, LeanList::cons(LeanLevel::one(lean)?.cast(), LeanList::nil(lean)?)?, &nat, &m_plus_zero, &LeanExpr::bvar(lean, 0)?)?;
+        let eq = LeanExpr::mk_eq(
+            lean,
+            LeanList::cons(LeanLevel::one(lean)?.cast(), LeanList::nil(lean)?)?,
+            &nat,
+            &m_plus_zero,
+            &LeanExpr::bvar(lean, 0)?,
+        )?;
         let ty = LeanExpr::forall(LeanName::from_str(lean, "m")?, nat, eq, BinderInfo::Default)?;
         let goal = metam.mk_goal(&ty)?;
         let mvar = LeanExpr::mvar_id(&goal)?;
@@ -278,6 +360,3 @@ fn test_rfl_m_plus_zero() {
     });
     result.unwrap();
 }
-
-
-

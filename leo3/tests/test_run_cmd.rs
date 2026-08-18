@@ -27,7 +27,10 @@ fn test_run_cmd_axiom_updates_env() {
         let metam = MetaMContext::new(lean, env)?;
         let env2 = run_cmd(lean, &metam, "axiom my_ax : Nat")?;
         let found = LeanEnvironment::find(&env2, &LeanName::from_components(lean, "my_ax")?)?;
-        assert!(found.is_some(), "axiom should be declared after run_command");
+        assert!(
+            found.is_some(),
+            "axiom should be declared after run_command"
+        );
         Ok(())
     });
     result.unwrap();
@@ -72,9 +75,13 @@ fn test_run_cmd_failure_reports_error() {
     let result: LeanResult<()> = leo3::test_with_lean(|lean| {
         let env = import_modules(lean, &["Lean"], 0)?;
         let metam = MetaMContext::new(lean, env)?;
-        let err = run_cmd(lean, &metam, "theorem bad : unknown_constant_xyz = 1 := rfl")
-            .err()
-            .expect("command referencing an unknown constant must fail");
+        let err = run_cmd(
+            lean,
+            &metam,
+            "theorem bad : unknown_constant_xyz = 1 := rfl",
+        )
+        .err()
+        .expect("command referencing an unknown constant must fail");
         let msg = format!("{err}");
         assert!(
             msg.contains("unknown_constant_xyz") || msg.contains("command failed"),
@@ -96,7 +103,8 @@ fn test_run_cmd_failure_does_not_crash_subsequent_calls() {
         }
         // The session stays usable after the failure.
         let env2 = run_cmd(lean, &metam, "axiom my_ax_after_err : Nat")?;
-        let found = LeanEnvironment::find(&env2, &LeanName::from_components(lean, "my_ax_after_err")?)?;
+        let found =
+            LeanEnvironment::find(&env2, &LeanName::from_components(lean, "my_ax_after_err")?)?;
         assert!(found.is_some());
         Ok(())
     });
@@ -140,9 +148,11 @@ fn test_parse_file_commands_splits_and_skips_imports() {
             let env2 = leo3::meta::repl::run_command(lean, &metam, stx)?;
             metam.replace_env(env2);
         }
-        let found = LeanEnvironment::find(&metam.env(), &LeanName::from_components(lean, "file_def")?)?;
+        let found =
+            LeanEnvironment::find(&metam.env(), &LeanName::from_components(lean, "file_def")?)?;
         assert!(found.is_some(), "file_def should be declared");
-        let found = LeanEnvironment::find(&metam.env(), &LeanName::from_components(lean, "file_thm")?)?;
+        let found =
+            LeanEnvironment::find(&metam.env(), &LeanName::from_components(lean, "file_thm")?)?;
         assert!(found.is_some(), "file_thm should be declared");
         Ok(())
     });
@@ -167,13 +177,19 @@ fn test_run_cmd_env_visible_to_tactics() {
         )?)?;
         let mvar = LeanExpr::mvar_id(&goal)?;
         let stx = leo3::meta::repl::parse_tactic(
-            lean, metam.env(), "suffices h : local_base = local_base from True.intro")?;
+            lean,
+            metam.env(),
+            "suffices h : local_base = local_base from True.intro",
+        )?;
         let outcome = run_tactic(&mut metam, &mvar, &stx, None)?;
         assert_eq!(outcome.goals.len(), 1, "suffices should leave one goal");
         // The remaining goal can be closed by rfl.
         let stx2 = leo3::meta::repl::parse_tactic(lean, metam.env(), "rfl")?;
         let outcome2 = run_tactic(&mut metam, &outcome.goals[0], &stx2, None)?;
-        assert!(outcome2.goals.is_empty(), "rfl should close local_base = local_base");
+        assert!(
+            outcome2.goals.is_empty(),
+            "rfl should close local_base = local_base"
+        );
         Ok(())
     });
     result.unwrap();

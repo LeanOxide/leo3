@@ -135,11 +135,11 @@ pub mod tokio_bridge;
 
 // Re-export key types
 pub use err::{KernelExceptionCode, LeanError, LeanResult};
-pub use instance::{LeanBorrowed, LeanBound, LeanRef};
 pub use instance::LeanAny;
+pub use instance::{LeanBorrowed, LeanBound, LeanRef};
+pub use marker::Lean;
 #[cfg(any(feature = "meta", feature = "task"))]
 pub use runtime::run_worker;
-pub use marker::Lean;
 pub use unbound::LeanUnbound;
 
 #[cfg(feature = "macros")]

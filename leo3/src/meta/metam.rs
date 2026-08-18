@@ -739,54 +739,54 @@ impl<'l> MetaMContext<'l> {
         }
     }
 
-/// Sanitize a goal's local context via `LocalContext.sanitizeNames`, like
-/// `Lean.Meta.ppGoal` does before pretty-printing: declarations whose user
-/// names carry macro scopes (hygiene names such as `n._@._hyg.36` that
-/// `induction`/`intro` introduce) are renamed to clean display names
-/// (`n✝`), so the hypothesis names match the real frontend's goal view.
-///
-/// Options come from the session's `Meta.Context` (the `pp.sanitizeNames`
-/// option defaults to `true`). The sanitizer state (`NameSanitizerState`:
-/// options + two empty name maps) is built fresh for each call.
-fn sanitize_local_ctx<'a>(
-    metam: &MetaMContext<'a>,
-    lctx: &LeanBound<'a, LeanAny>,
-) -> LeanResult<LeanBound<'a, LeanAny>> {
-    unsafe {
-        // Options from the Core.Context (field 2, per `CoreContext::mk_default`);
-        // `MetaM.getOptions` reads the same value. `pp.sanitizeNames`
-        // defaults to `true`, so empty options still sanitize.
-        let options = ffi::lean_ctor_get(metam.core_ctx().as_ptr(), 2) as *mut ffi::lean_object;
+    /// Sanitize a goal's local context via `LocalContext.sanitizeNames`, like
+    /// `Lean.Meta.ppGoal` does before pretty-printing: declarations whose user
+    /// names carry macro scopes (hygiene names such as `n._@._hyg.36` that
+    /// `induction`/`intro` introduce) are renamed to clean display names
+    /// (`n✝`), so the hypothesis names match the real frontend's goal view.
+    ///
+    /// Options come from the session's `Meta.Context` (the `pp.sanitizeNames`
+    /// option defaults to `true`). The sanitizer state (`NameSanitizerState`:
+    /// options + two empty name maps) is built fresh for each call.
+    fn sanitize_local_ctx<'a>(
+        metam: &MetaMContext<'a>,
+        lctx: &LeanBound<'a, LeanAny>,
+    ) -> LeanResult<LeanBound<'a, LeanAny>> {
+        unsafe {
+            // Options from the Core.Context (field 2, per `CoreContext::mk_default`);
+            // `MetaM.getOptions` reads the same value. `pp.sanitizeNames`
+            // defaults to `true`, so empty options still sanitize.
+            let options = ffi::lean_ctor_get(metam.core_ctx().as_ptr(), 2) as *mut ffi::lean_object;
 
-        // NameSanitizerState { options, nameStem2Idx := {}, userName2Sanitized := {} }.
-        // Empty `NameMap` = `Std.DTreeMap.empty` = `Cell.nil` = box(1)
-        // (verified against `l_Std_DTreeMap_empty`, which returns box(1)).
-        let state = ffi::lean_alloc_ctor(0, 3, 0);
-        ffi::lean_inc(options);
-        ffi::inline::lean_ctor_set(state, 0, options);
-        ffi::inline::lean_ctor_set(state, 1, ffi::lean_box(1));
-        ffi::inline::lean_ctor_set(state, 2, ffi::lean_box(1));
+            // NameSanitizerState { options, nameStem2Idx := {}, userName2Sanitized := {} }.
+            // Empty `NameMap` = `Std.DTreeMap.empty` = `Cell.nil` = box(1)
+            // (verified against `l_Std_DTreeMap_empty`, which returns box(1)).
+            let state = ffi::lean_alloc_ctor(0, 3, 0);
+            ffi::lean_inc(options);
+            ffi::inline::lean_ctor_set(state, 0, options);
+            ffi::inline::lean_ctor_set(state, 1, ffi::lean_box(1));
+            ffi::inline::lean_ctor_set(state, 2, ffi::lean_box(1));
 
-        // The export consumes both arguments (standard convention); lctx is
-        // borrowed here, so hand it a reference.
-        ffi::lean_inc(lctx.as_ptr());
-        let result = ffi::meta::lean_local_ctx_sanitize_names(lctx.as_ptr(), state);
-        let lctx_new = ffi::lean_ctor_get(result, 0) as *mut ffi::lean_object;
-        ffi::lean_inc(lctx_new);
-        ffi::lean_dec(result);
-        Ok(LeanBound::<LeanAny>::from_owned_ptr(metam.lean(), lctx_new).cast())
+            // The export consumes both arguments (standard convention); lctx is
+            // borrowed here, so hand it a reference.
+            ffi::lean_inc(lctx.as_ptr());
+            let result = ffi::meta::lean_local_ctx_sanitize_names(lctx.as_ptr(), state);
+            let lctx_new = ffi::lean_ctor_get(result, 0) as *mut ffi::lean_object;
+            ffi::lean_inc(lctx_new);
+            ffi::lean_dec(result);
+            Ok(LeanBound::<LeanAny>::from_owned_ptr(metam.lean(), lctx_new).cast())
+        }
     }
-}
 
-/// Get the local hypotheses of a goal as `(user_name, type_pp)` pairs,
-/// together with the goal's pretty-printed type.
-///
-/// Like [`goal_hyps_and_type`], but both the hypothesis types and the
-/// goal type are rendered by Lean's real pretty printer
-/// (`Meta.ppExpr` under the goal's local context), so free variables
-/// appear with their user-facing names and usual notations.
-///
-/// Used by the Repl layer to render goal states.
+    /// Get the local hypotheses of a goal as `(user_name, type_pp)` pairs,
+    /// together with the goal's pretty-printed type.
+    ///
+    /// Like [`goal_hyps_and_type`], but both the hypothesis types and the
+    /// goal type are rendered by Lean's real pretty printer
+    /// (`Meta.ppExpr` under the goal's local context), so free variables
+    /// appear with their user-facing names and usual notations.
+    ///
+    /// Used by the Repl layer to render goal states.
     pub fn goal_hyps_and_type_pp(
         &mut self,
         mvar: &LeanBound<'l, LeanName>,
@@ -838,8 +838,11 @@ fn sanitize_local_ctx<'a>(
                 let tp_raw = ffi::meta::lean_local_decl_type(local_decl.as_ptr());
                 let tp = LeanBound::<LeanAny>::from_owned_ptr(self.lean, tp_raw).cast::<LeanExpr>();
                 // Name.toString (arity-1 curried pure function).
-                let closure =
-                    ffi::inline::lean_alloc_closure(name_to_string as *mut std::ffi::c_void, 1u32, 0);
+                let closure = ffi::inline::lean_alloc_closure(
+                    name_to_string as *mut std::ffi::c_void,
+                    1u32,
+                    0,
+                );
                 let s = ffi::closure::lean_apply_1(closure, un.into_ptr());
                 let s = LeanBound::<crate::types::LeanString>::from_owned_ptr(self.lean, s);
                 let name_str = crate::types::LeanString::cstr(&s)?.to_string();
@@ -1169,7 +1172,9 @@ fn sanitize_local_ctx<'a>(
 /// # Safety
 ///
 /// - `result` must be a valid Lean `Except Exception T` object (consumed)
-pub unsafe fn handle_eio_result(result: *mut ffi::lean_object) -> LeanResult<*mut ffi::lean_object> {
+pub unsafe fn handle_eio_result(
+    result: *mut ffi::lean_object,
+) -> LeanResult<*mut ffi::lean_object> {
     let tag = ffi::lean_obj_tag(result);
     if tag == 0 {
         // Except.ok - extract value
@@ -1237,6 +1242,11 @@ pub unsafe fn handle_eio_result(result: *mut ffi::lean_object) -> LeanResult<*mu
 /// `Tactic 'rfl' failed, n + m = m + n is not definitionally equal to ...`
 /// instead of `<MessageData:lazy><Format:scalar>...`.
 ///
+/// ABI by era: pre-4.26 the export takes a world token and returns
+/// `IO.Result` (ok = tag 0 carrying `(value, world)`); 4.26+ (ST
+/// redesign) erases the singleton world, so the export takes no world
+/// token and returns the rendered `String` directly.
+///
 /// Falls back to the hand-rolled extractor below if the renderer fails
 /// (e.g. `IO.Error`), and to `<MessageData:scalar>` for scalar values.
 ///
@@ -1244,32 +1254,49 @@ pub unsafe fn handle_eio_result(result: *mut ffi::lean_object) -> LeanResult<*mu
 ///
 /// - `msg_data` must be a valid Lean `MessageData` object (borrowed, not consumed)
 /// - the Lean runtime must be initialized (caller runs inside the worker)
-unsafe fn extract_message_data(msg_data: *mut ffi::lean_object) -> String {
+pub(super) unsafe fn extract_message_data(msg_data: *mut ffi::lean_object) -> String {
     if ffi::inline::lean_is_scalar(msg_data) {
         return "<MessageData:scalar>".to_string();
     }
 
     // Real renderer first: `MessageData.toString` (BaseIO String).
-    // Result: `Except (IO.Error × World) (String × World)` — ok = tag 0
-    // with fields `(value, world)` (see `lean_io_result_mk_ok`).
     // The export consumes its argument (standard convention); msg_data is
     // borrowed here, so hand it a reference.
     ffi::lean_inc(msg_data);
-    let world = ffi::io::lean_io_mk_world();
-    let rendered = ffi::meta::lean_message_data_to_string(msg_data, world);
-    let string = if ffi::lean_obj_tag(rendered) == 0 {
-        let str_obj = ffi::lean_ctor_get(rendered, 0) as *mut ffi::lean_object;
-        let c_str = ffi::inline::lean_string_cstr(str_obj);
-        if c_str.is_null() {
-            None
+    #[cfg(not(lean_4_26))]
+    // Pre-4.26: `BaseIO` threads the world token; the export returns
+    // `IO.Result` (`Except (IO.Error × World) (String × World)`) — ok =
+    // tag 0 with fields `(value, world)` (see `lean_io_result_mk_ok`).
+    let rendered = {
+        let world = ffi::io::lean_io_mk_world();
+        ffi::meta::lean_message_data_to_string(msg_data, world)
+    };
+    #[cfg(lean_4_26)]
+    // 4.26+ (ST redesign): `BaseIO String` is `ST RealWorld String` with
+    // the singleton world erased — the export takes no world token and
+    // returns the `String` directly, no `IO.Result` wrapper.
+    let rendered = ffi::meta::lean_message_data_to_string_st(msg_data);
+    let string = {
+        #[cfg(not(lean_4_26))]
+        let str_obj: Option<*mut ffi::lean_object> = if ffi::lean_obj_tag(rendered) == 0 {
+            Some(ffi::lean_ctor_get(rendered, 0) as *mut ffi::lean_object)
         } else {
-            CStr::from_ptr(c_str)
-                .to_str()
-                .ok()
-                .map(|s| s.to_string())
-        }
-    } else {
-        None
+            None
+        };
+        #[cfg(lean_4_26)]
+        let str_obj: Option<*mut ffi::lean_object> = if ffi::inline::lean_is_string(rendered) {
+            Some(rendered)
+        } else {
+            None
+        };
+        str_obj.and_then(|str_obj| {
+            let c_str = ffi::inline::lean_string_cstr(str_obj);
+            if c_str.is_null() {
+                None
+            } else {
+                CStr::from_ptr(c_str).to_str().ok().map(|s| s.to_string())
+            }
+        })
     };
     ffi::lean_dec(rendered);
     if let Some(s) = string {
