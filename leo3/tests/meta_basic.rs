@@ -70,15 +70,25 @@ fn test_core_state_creation() {
             let tag = leo3_ffi::lean_obj_tag(state.as_ptr());
             assert_eq!(tag, 0, "Core.State should have constructor tag 0");
 
-            // Verify it has 8 fields
+            // Verify it has the right number of fields
             // Field 0 should be the environment
             let env_field = leo3_ffi::lean_ctor_get(state.as_ptr(), 0);
             assert!(!env_field.is_null(), "Environment field should not be null");
 
-            // Field 1 should be nextMacroScope (should be 1)
+            // Field 1: nextMacroScope. Matches the real frontend: a fresh
+            // `Core.State` starts at `firstFrontendMacroScope + 1`, and on
+            // Lean >= 4.25 `firstFrontendMacroScope = reservedMacroScope + 1 = 1`,
+            // so the initial value is 2 (not 1).
             let macro_scope = leo3_ffi::lean_ctor_get(state.as_ptr(), 1);
             let macro_scope_val = leo3_ffi::lean_unbox(macro_scope);
-            assert_eq!(macro_scope_val, 1, "nextMacroScope should be 1");
+            #[cfg(lean_4_25)]
+            let expected_macro_scope = 2;
+            #[cfg(not(lean_4_25))]
+            let expected_macro_scope = 1;
+            assert_eq!(
+                macro_scope_val, expected_macro_scope,
+                "nextMacroScope should be {}", expected_macro_scope
+            );
 
             // Field 2 should be NameGenerator (should be a constructor)
             let ngen = leo3_ffi::lean_ctor_get(state.as_ptr(), 2);
@@ -86,11 +96,21 @@ fn test_core_state_creation() {
             let ngen_tag = leo3_ffi::lean_obj_tag(ngen as *mut _);
             assert_eq!(ngen_tag, 0, "NameGenerator should have constructor tag 0");
 
-            // Field 7 should be empty array (snapshotTasks)
-            let snapshot_tasks = leo3_ffi::lean_ctor_get(state.as_ptr(), 7);
+            // Last field should be snapshotTasks (empty Array SnapshotTask).
+            // On Lean >= 4.25 there are 9 fields (idx 8), otherwise 8 fields
+            // (idx 7).
+            #[cfg(lean_4_25)]
+            let snapshot_tasks_idx = 8;
+            #[cfg(not(lean_4_25))]
+            let snapshot_tasks_idx = 7;
+            let snapshot_tasks = leo3_ffi::lean_ctor_get(state.as_ptr(), snapshot_tasks_idx);
             assert!(
                 !snapshot_tasks.is_null(),
                 "snapshotTasks should not be null"
+            );
+            assert_eq!(
+                leo3_ffi::array::lean_array_size(snapshot_tasks), 0,
+                "snapshotTasks should be an empty array"
             );
         }
 
