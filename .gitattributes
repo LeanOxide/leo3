@@ -1,0 +1,5 @@
+# Keep shell scripts LF-only: GitHub's windows-latest runners set
+# core.autocrlf=true globally, so without this anchor actions/checkout
+# checks out .sh files with CRLF and Git Bash scripts break (line-ending
+# \r leaks into variable values and command lines — see actions/checkout#135).
+*.sh text eol=lf
