@@ -123,10 +123,21 @@ cargo llvm-cov report --doctests --lcov --output-path lcov.info
 
 The full-suite line runs through `.github/scripts/cargo-test-full.sh`
 (CI-equivalent): it adds `--no-fail-fast` so one aborted binary cannot mask
-every later binary, and retries `test_eq_proofs` in isolation when it is the
-sole failure and died without a libtest summary — the signature of the Lean
-4.33 vendored-libuv flake (SIGABRT in `uv__epoll_ctl_flush`, W-350).
+every later binary, pins `--test-threads` to 8 (W-360; override with
+`LEAN_TEST_THREADS=N`), and retries `test_eq_proofs` in isolation when it is
+the sole failure and died without a libtest summary — the signature of the
+Lean 4.33 vendored-libuv flake (SIGABRT in `uv__epoll_ctl_flush`, W-350).
 Deterministic failures still fail the run.
+
+**Why the test-thread pin (W-360).** libtest defaults `--test-threads` to the
+host core count (80 on a large runner). At that concurrency the Lean 4.26+
+task manager can hit an upstream worker-scaling race: when a burst of tasks
+is enqueued while every pool worker is asleep, each enqueue only wakes one
+worker instead of scaling the pool, so a task queued behind a long-running
+(never-cancelled) task can starve forever and hang the whole test binary
+(`task_ops_comprehensive` reproduced this deterministically-enough at 80
+threads). Running the suite with a small pinned thread count avoids the
+window; the underlying race is reported upstream.
 
 ## Benchmarks
 

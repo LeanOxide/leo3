@@ -236,10 +236,20 @@ impl TaskPriority {
     /// High priority (tasks with lower numbers run first).
     pub const HIGH: Self = Self(0);
 
-    /// Low priority.
-    pub const LOW: Self = Self(u32::MAX);
+    /// Low priority within the thread pool.
+    ///
+    /// # Lean4 Reference
+    /// Corresponds to Lean's `Task.Priority.max` (the largest in-pool
+    /// priority number). Lower numbers run first, so this is the last
+    /// in-pool priority a task can have before dedicated-thread
+    /// priorities (`DEDICATED` and above).
+    ///
+    /// Note: `u32::MAX` is *not* "lowest priority" — in Lean it is
+    /// `Task.Priority.sync`, which runs the task inline on the calling
+    /// thread (see [`TaskPriority::SYNC`]).
+    pub const LOW: Self = Self(8);
 
-    /// Maximum priority within the thread pool.
+    /// Maximum priority within the thread pool (same as [`TaskPriority::LOW`]).
     ///
     /// # Lean4 Reference
     /// Corresponds to `Task.Priority.max` in Lean4.
@@ -253,6 +263,16 @@ impl TaskPriority {
     /// Tasks spawned with this priority get their own dedicated thread
     /// and don't contend with other tasks for threads in the thread pool.
     pub const DEDICATED: Self = Self(9);
+
+    /// Synchronous (inline) execution: the task runs on the calling thread
+    /// instead of being queued to the task pool.
+    ///
+    /// # Lean4 Reference
+    /// Corresponds to Lean's `Task.Priority.sync` (`u32::MAX` /
+    /// `LEAN_SYNC_PRIO`). `enqueue_core` short-circuits this priority and
+    /// calls the task inline, so the calling thread blocks for the task's
+    /// full duration.
+    pub const SYNC: Self = Self(u32::MAX);
 
     #[inline]
     fn as_lean_obj(self) -> *mut ffi::lean_object {

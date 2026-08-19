@@ -276,8 +276,13 @@ fn test_api_lean_task_future_type() {
 fn test_task_priority_constants() {
     assert_eq!(TaskPriority::DEFAULT, TaskPriority(0));
     assert_eq!(TaskPriority::HIGH, TaskPriority::DEFAULT);
-    assert_eq!(TaskPriority::LOW, TaskPriority(u32::MAX));
+    // LOW is the lowest in-pool priority (Lean `Task.Priority.max` = 8).
+    // W-360: it used to be u32::MAX, which is Lean's *sync* priority and
+    // runs the task inline on the calling thread.
+    assert_eq!(TaskPriority::LOW, TaskPriority(8));
+    assert_eq!(TaskPriority::LOW, TaskPriority::MAX);
     assert_eq!(TaskPriority::MAX, TaskPriority(8));
+    assert_eq!(TaskPriority::SYNC, TaskPriority(u32::MAX));
     assert_eq!(TaskPriority::DEDICATED, TaskPriority(9));
     assert_eq!(TaskPriority::default(), TaskPriority::DEFAULT);
     assert_eq!(TaskPriority(3).0, 3);
@@ -337,7 +342,7 @@ fn test_task_spawn_with_priority() {
     leo3::prepare_freethreaded_lean();
 
     let result: LeanResult<()> = leo3::with_lean(|lean| {
-        // Low priority (default scheduling class).
+        // Lowest in-pool priority (Lean `Task.Priority.max`).
         let closure = LeanClosure::from_fn1(lean, nat_5)?;
         let task: LeanTask<'_, LeanAny> = LeanTask::spawn_with_priority(closure, TaskPriority::LOW);
         let value: LeanBound<'_, LeanNat> = task.get_owned().cast();
@@ -638,12 +643,21 @@ fn test_race_first_completed_wins() {
         // A spawned 1ms task races a cooperative blocker. The blocker can
         // never finish on its own, so the delayed task is the guaranteed
         // winner (the loser is cancelled and exits shortly after).
-        let c1 = LeanClosure::from_fn1(lean, blocking_until_canceled)?;
-        let slow: LeanTask<'_, LeanAny> = LeanTask::spawn(c1);
+        //
+        // W-360: the finite task is spawned FIRST, on purpose. Lean 4.26+'s
+        // task manager scales the pool only while no worker is idle, so a
+        // two-task burst enqueued while the pool is asleep wakes a single
+        // worker that runs the first queued task; if that task never
+        // finishes on its own, everything queued behind it starves forever
+        // (upstream race; see the W-360 upstream report). Spawning the
+        // finite task first keeps the queue drainable in every case: the
+        // race still resolves with the 1ms task winning.
         let c2 = LeanClosure::from_fn1(lean, delayed_nat_31)?;
         let fast: LeanTask<'_, LeanAny> = LeanTask::spawn(c2);
+        let c1 = LeanClosure::from_fn1(lean, blocking_until_canceled)?;
+        let slow: LeanTask<'_, LeanAny> = LeanTask::spawn(c1);
 
-        let winner = race(vec![slow, fast]);
+        let winner = race(vec![fast, slow]);
         let n: LeanBound<'_, LeanNat> = winner.cast();
         assert_eq!(LeanNat::to_usize(&n)?, 31);
         Ok(())
@@ -681,14 +695,19 @@ fn test_race_future_block_on() {
     let result: LeanResult<()> = leo3::with_lean(|lean| {
         // A spawned 1ms task wins over a cooperative blocker (deterministic:
         // the blocker never finishes on its own, so it can only be the loser).
-        let c1 = LeanClosure::from_fn1(lean, blocking_until_canceled)?;
-        let slow: LeanTask<'_, LeanAny> = LeanTask::spawn(c1);
-        let slow_alive = slow.clone();
+        //
+        // W-360: the finite task is spawned FIRST, on purpose — see
+        // `test_race_first_completed_wins` for the reasoning (Lean 4.26+
+        // task-manager scaling race: a never-finishing task dequeued first
+        // starves everything queued behind it).
         let c2 = LeanClosure::from_fn1(lean, delayed_nat_31)?;
         let fast: LeanTask<'_, LeanAny> = LeanTask::spawn(c2);
         let fast_alive = fast.clone();
+        let c1 = LeanClosure::from_fn1(lean, blocking_until_canceled)?;
+        let slow: LeanTask<'_, LeanAny> = LeanTask::spawn(c1);
+        let slow_alive = slow.clone();
 
-        let winner = futures::executor::block_on(race_future(vec![slow, fast]));
+        let winner = futures::executor::block_on(race_future(vec![fast, slow]));
         let n: LeanBound<'_, LeanNat> = winner.cast();
         assert_eq!(LeanNat::to_usize(&n)?, 31);
         // Keep every task alive until its watcher thread has stopped.

@@ -11,6 +11,11 @@
 # single binary stops cargo from running the remaining test binaries, which
 # hides real failures behind the crash (W-344 / W-350).
 #
+# The test threads are pinned to 8 by default (W-360; override with
+# LEAN_TEST_THREADS) so libtest does not run as many threads as the host has
+# cores, which can trigger an upstream Lean 4.26+ task-manager race that
+# hangs a test binary.
+#
 # If the suite fails and the ONLY failing target is `test_eq_proofs`, and it
 # died without printing a libtest summary (i.e. the process was killed by a
 # signal instead of a test assertion failing), that binary is retried in
@@ -26,10 +31,21 @@ set -uo pipefail
 FLAKY_TEST=test_eq_proofs
 FLAKE_RETRY_LIMIT=2
 
+# W-360: libtest's default --test-threads equals the core count (e.g. 80 on a
+# big runner). Under that concurrency the Lean 4.26+ task manager can hit a
+# worker-scaling race (upstream) in which a queued task starves behind a
+# long-running task and the whole test binary hangs. Pin the test-thread
+# count to keep the Lean task pool small; override with LEAN_TEST_THREADS=N.
+TEST_THREADS="${LEAN_TEST_THREADS:-8}"
+TEST_ARGS=()
+if ! printf '%s\n' "$@" | grep -q -- "--test-threads"; then
+  TEST_ARGS=(-- --test-threads "$TEST_THREADS")
+fi
+
 log_file=$(mktemp)
 trap 'rm -f "$log_file"' EXIT
 
-"$@" --no-fail-fast 2>&1 | tee "$log_file"
+"$@" --no-fail-fast ${TEST_ARGS[@]+"${TEST_ARGS[@]}"} 2>&1 | tee "$log_file"
 status=${PIPESTATUS[0]}
 [ "$status" -eq 0 ] && exit 0
 
@@ -65,7 +81,7 @@ fi
 
 echo "::warning::${FLAKY_TEST} aborted without a libtest summary (W-350: Lean 4.33 vendored-libuv flake candidate); retrying up to ${FLAKE_RETRY_LIMIT}x"
 for _ in $(seq "$FLAKE_RETRY_LIMIT"); do
-  if "$@" --test "$FLAKY_TEST"; then
+  if "$@" --test "$FLAKY_TEST" ${TEST_ARGS[@]+"${TEST_ARGS[@]}"}; then
     echo "::warning::${FLAKY_TEST} passed on retry; the original abort was the known W-350 vendored-libuv flake (uv__epoll_ctl_flush assertion in Lean 4.33 libleanshared.so)"
     exit 0
   fi
