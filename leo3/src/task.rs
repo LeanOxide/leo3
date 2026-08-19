@@ -249,7 +249,7 @@ impl TaskPriority {
     /// thread (see [`TaskPriority::SYNC`]).
     pub const LOW: Self = Self(8);
 
-    /// Maximum priority within the thread pool (same as [`TaskPriority::LOW`]).
+    /// Largest priority number within the thread pool (same as [`TaskPriority::LOW`]).
     ///
     /// # Lean4 Reference
     /// Corresponds to `Task.Priority.max` in Lean4.

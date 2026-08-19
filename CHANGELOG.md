@@ -68,6 +68,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   41, `caption` / `data` fields readable) — so a Lean release that
   drifts the layout fails the test loudly instead of letting the FFI
   misread it silently (W-352)
+- `leo3::task::TaskPriority::SYNC`: explicit inline-execution priority
+  (Lean's `Task.Priority.sync`, `u32::MAX`) — the task runs on the calling
+  thread instead of being queued to the task pool
 
 ### Changed
 - **`io` module rewritten against the modern Lean handle ABI** (verified
@@ -172,6 +175,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failures still fail the run. A new `.gitattributes` pins `*.sh` to LF so
   the Windows matrix legs (runner git sets `core.autocrlf=true`) check the
   runner script out byte-identical to the committed LF version.
+- `leo3::task::TaskPriority::LOW` now maps to Lean's `Task.Priority.max`
+  (8, the lowest in-pool priority). The previous value `u32::MAX` is
+  Lean's sync priority, which makes `enqueue_core` run the task inline on
+  the calling thread — `LOW` silently bypassed the task pool (W-360)
 
 ### Changed
 
