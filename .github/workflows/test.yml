@@ -86,4 +86,5 @@ jobs:
                   echo "LEAN_HOME=$LEAN_HOME" >> $GITHUB_ENV
 
             - name: Run ${{ inputs.suite }}
+              shell: bash
               run: ${{ inputs.command }}

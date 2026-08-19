@@ -1462,218 +1462,289 @@ pub fn pp_exprs<'l>(
 // Command execution (run_cmd)
 // ============================================================================
 
-/// Execute a parsed command via `Lean.Elab.Command.elabCommandTopLevel`
-/// (ABI `(stx[, cmds], cmdCtx, cmdStateRef[, world])` — `cmds` from 4.32,
-/// `world` only pre-4.26), returning the updated `Environment` from the
-/// final `Command.State`.
+/// Result of [`run_command_core`]: the updated `Environment` plus, when
+/// the command recorded an `error`-severity message in the command log,
+/// that message and the text the production path renders from it —
+/// `Some` carries both together. The `env` pointer and the `Message`
+/// pointer (when present) carry owned refcounts that the caller must
+/// release.
+struct CommandOutcome {
+    env: *mut ffi::lean_object,
+    error_message: Option<(*mut ffi::lean_object, String)>,
+}
+
+/// Execute a parsed command via `Lean.Elab.Command.elabCommand` (5-arg
+/// direct: `(stx, cmdCtx, cmdStateRef, cmdState, world)`), returning the
+/// updated `Environment` from the final `Command.State` and the first
+/// `error`-severity message recorded in the command log, if any.
+///
+/// # Safety
+///
+/// `stx` must be a valid command syntax object. The returned
+/// `Environment` and `Message` (if any) carry owned refcounts.
+unsafe fn run_command_core<'l>(
+    lean: Lean<'l>,
+    metam: &MetaMContext<'l>,
+    stx: &LeanBound<'l, LeanExpr>,
+) -> LeanResult<CommandOutcome> {
+    let cmd_ctx = mk_command_context(lean, stx.as_ptr())?;
+    let env = metam.env().clone();
+
+    let stx_ptr = {
+        ffi::lean_inc(stx.as_ptr());
+        stx.as_ptr()
+    };
+    crate::runtime::run_worker(move || -> LeanResult<CommandOutcome> {
+        // Must run on the worker thread: elabCommand allocates Lean
+        // objects (olean reading, environment construction), and Lean
+        // objects must not cross minimal-move local heaps.
+        let cmd_state_owned = mk_command_state(&env)?;
+        #[cfg(not(lean_4_26))]
+        let (cmd_state_ref, world) = {
+            // 4.25.2 `lean_st_mk_ref` is the 2-arg export: it consumes
+            // `init` (the ref keeps a reference) and never reads the
+            // world argument (disassembly-verified), returning
+            // `(ref, 1)` — the world token is the immediate unit
+            // constant, so every world inc/dec below is a no-op. The
+            // dummy box only fills the ignored slot; the callee holds
+            // no reference to it, so release it right after the call
+            // (same pattern as the 4.26+ dummy box below).
+            let world_in = ffi::lean_box(0);
+            let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, world_in);
+            let cmd_state_ref = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
+            let world = ffi::lean_ctor_get(ref_result, 1) as *mut ffi::lean_object;
+            ffi::lean_inc(cmd_state_ref);
+            ffi::lean_inc(world);
+            ffi::lean_dec(ref_result);
+            ffi::lean_dec(world_in);
+            (cmd_state_ref, world)
+        };
+        #[cfg(lean_4_26)]
+        let (cmd_state_ref, world) = {
+            // Lean >= 4.26: `lean_st_mk_ref` is a 1-arg C export
+            // returning the ST.Ref directly; the second slot is
+            // ignored by the callee. `elabCommandTopLevel` and
+            // `lean_st_ref_get` likewise dropped the world token
+            // from their C ABIs, so one dummy box fills every
+            // ignored slot and is released once after the read-back.
+            let world = ffi::lean_box(0);
+            (ffi::lean_st_mk_ref(cmd_state_owned, world), world)
+        };
+        // The callee also consumes the ref argument (lean_obj_arg):
+        // keep our own reference so the ref survives the call (same
+        // pattern as run_tactic's "Keep our own references"); it is
+        // released right after the state read-back below.
+        ffi::lean_inc(cmd_state_ref);
+
+        // `elabCommandTopLevel` is the real frontend entry.
+        // Pre-4.32 arity 4: (stx, ctx, ref, world); from 4.32 the
+        // signature gained a leading `cmds : Array Syntax` linter
+        // bookkeeping parameter (default `#[]`), shifting the ABI to
+        // (stx, cmds, ctx, ref, world).
+        #[cfg(lean_4_32)]
+        let result = ffi::meta::repl::lean_elab_command_top_level_5(
+            stx_ptr,
+            ffi::array::lean_mk_empty_array(),
+            cmd_ctx.into_ptr(),
+            cmd_state_ref,
+            world,
+        );
+        #[cfg(not(lean_4_32))]
+        let result = ffi::meta::repl::lean_elab_command_top_level_4(
+            stx_ptr,
+            cmd_ctx.into_ptr(),
+            cmd_state_ref,
+            world,
+        );
+        // On the (rare) exception path the read-back below never
+        // runs, so release the per-call ref and world token here.
+        let pair = match crate::meta::metam::handle_eio_result(result) {
+            Ok(pair) => pair,
+            Err(e) => {
+                ffi::lean_dec(cmd_state_ref);
+                ffi::lean_dec(world);
+                return Err(e);
+            }
+        };
+        ffi::lean_dec(pair);
+
+        // The elaboration pipeline threads the final Command.State
+        // through the ref in place; read it back.
+        #[cfg(lean_4_26)]
+        // Lean >= 4.26: `lean_st_ref_get` returns the value directly.
+        let state = ffi::lean_st_ref_get(cmd_state_ref, world);
+        #[cfg(not(lean_4_26))]
+        let state = {
+            let final_ref = ffi::lean_st_ref_get(cmd_state_ref, world);
+            let state = ffi::lean_ctor_get(final_ref, 0) as *mut ffi::lean_object;
+            ffi::lean_inc(state);
+            ffi::lean_dec(final_ref);
+            state
+        };
+        // The state is read back from the ref: release the per-call
+        // ST ref (the pipeline's final Command.State is now owned by
+        // `state`) and the world token (pre-4.26: the real token;
+        // 4.26+: the dummy that filled the ABI-ignored slots).
+        ffi::lean_dec(cmd_state_ref);
+        ffi::lean_dec(world);
+        // Command.State field 0 = Environment.
+        let env_out = std::ptr::read::<u64>((state as *const u64).add(1)) as *mut ffi::lean_object;
+        ffi::lean_inc(env_out);
+
+        // Error reporting: `withLogging` swallows elaboration
+        // failures into the command message log (no exception
+        // propagates), so scan the log for the first `error`-severity
+        // message, render its text, and keep the raw `Message` object
+        // for callers that inspect the runtime layout.
+        //
+        // `Message = BaseMessage MessageData` has a flat layout
+        // stable across 4.25.2..4.33: object fields first in
+        // declaration order (`fileName`, `pos`, `endPos`,
+        // `caption`, `data`), then the scalar bytes
+        // (`keepFullRange`, `severity`, `isSilent`).
+        // `MessageSeverity`: information=0, warning=1, error=2, so
+        // `severity` is the second scalar byte. The scalar offset
+        // passed to `lean_ctor_get_uint8` is relative to the object
+        // field array (just past the 8-byte header), so after 5
+        // object fields (`5 * 8 = 40`) severity sits at
+        // `40 + 1 = 41`. The error text is read from the raw
+        // message's own `data` field (object field 4, a
+        // `MessageData`) and rendered via the version-robust
+        // `MessageData.toString`. Reading the raw message (rather
+        // than a serialized `SerialMessage`) avoids the
+        // serialize/`l_Lean_SerialMessage_toString` shape
+        // disagreement in 4.33.0-rc1.
+        let error_message = first_error_message(state).map(|m| {
+            let caption = message_field_string(m, 3);
+            let data_md = ffi::lean_ctor_get(m, 4) as *mut ffi::lean_object;
+            ffi::lean_inc(data_md);
+            let data = super::metam::extract_message_data(data_md);
+            ffi::lean_dec(data_md);
+            let text = if caption.is_empty() {
+                if data.is_empty() {
+                    "command failed".to_string()
+                } else {
+                    data
+                }
+            } else {
+                format!("{caption}: {data}")
+            };
+            (m, text)
+        });
+        ffi::lean_dec(state);
+        Ok(CommandOutcome {
+            env: env_out,
+            error_message,
+        })
+    })
+}
+
+/// Execute a parsed command via `Lean.Elab.Command.elabCommand`,
+/// returning the updated `Environment` from the final
+/// `Command.State`.
+///
+/// `withLogging` swallows elaboration failures into the command message
+/// log (no exception propagates), so the first `error`-severity message
+/// is surfaced as a [`LeanError`] instead.
 pub fn run_command<'l>(
     lean: Lean<'l>,
-    metam: &crate::meta::metam::MetaMContext<'l>,
+    metam: &MetaMContext<'l>,
     stx: &LeanBound<'l, LeanExpr>,
 ) -> LeanResult<LeanBound<'l, LeanEnvironment>> {
     unsafe {
-        let cmd_ctx = mk_command_context(lean, stx.as_ptr())?;
-        let env = metam.env().clone();
+        let outcome = run_command_core(lean, metam, stx)?;
+        if let Some((m, msg)) = outcome.error_message {
+            ffi::lean_dec(m);
+            let msg = format!("run_cmd: command failed: {msg}");
+            ffi::lean_dec(outcome.env);
+            return Err(LeanError::other(&msg));
+        }
 
-        let stx_ptr = {
-            ffi::lean_inc(stx.as_ptr());
-            stx.as_ptr()
+        // Note: commands that never touch the environment (`#check`,
+        // `set_option` with no options change, ...) legitimately
+        // return the same environment object — do not reject them;
+        // elaboration failures are surfaced via the message check.
+        Ok(LeanBound::from_owned_ptr(lean, outcome.env))
+    }
+}
+
+/// Test-only (enabled by the `runtime-tests` feature): parse and run a
+/// command, and return the first `error`-severity `Message` recorded in
+/// the command log — the raw object plus the text the production path
+/// renders from it — so tests can assert the runtime `Message` layout
+/// directly. Returns `Ok(None)` when the command records no error.
+#[cfg(feature = "runtime-tests")]
+pub fn test_first_error_message<'l>(
+    lean: Lean<'l>,
+    metam: &MetaMContext<'l>,
+    cmd: &str,
+) -> LeanResult<Option<(LeanBound<'l, LeanAny>, String)>> {
+    let stx = parse_command(lean, metam.env(), cmd)?;
+    unsafe {
+        let outcome = run_command_core(lean, metam, &stx)?;
+        ffi::lean_dec(outcome.env);
+        match outcome.error_message {
+            Some((obj, text)) => Ok(Some((LeanBound::from_owned_ptr(lean, obj), text))),
+            None => Ok(None),
+        }
+    }
+}
+
+/// Scan the message log of a `Command.State` (object field 1) for the
+/// first `error`-severity message and return it with an owned
+/// refcount, or `None` when the log holds no error.
+///
+/// # Safety
+///
+/// `state` must be a valid `Command.State` object; the severity read
+/// relies on the `Message` layout documented in `run_command_core`.
+unsafe fn first_error_message(state: *const ffi::lean_object) -> Option<*mut ffi::lean_object> {
+    extern "C" {
+        #[link_name = "l_Lean_MessageLog_toList"]
+        fn lean_msglog_tolist(a: *mut ffi::lean_object) -> *mut ffi::lean_object;
+    }
+    let msg_log = std::ptr::read::<u64>((state as *const u64).add(2)) as *mut ffi::lean_object;
+    ffi::lean_inc(msg_log);
+    let c = ffi::inline::lean_alloc_closure(lean_msglog_tolist as *mut std::ffi::c_void, 1, 0);
+    let lst = ffi::closure::lean_apply_1(c, msg_log);
+    let mut found: Option<*mut ffi::lean_object> = None;
+    let mut cur = lst;
+    while !ffi::inline::lean_is_scalar(cur) && found.is_none() {
+        let m = ffi::lean_ctor_get(cur, 0) as *mut ffi::lean_object;
+        let severity = if !ffi::inline::lean_is_scalar(m) {
+            // Second scalar byte (see `Message` layout note in
+            // `run_command_core`).
+            ffi::inline::lean_ctor_get_uint8(m as ffi::b_lean_obj_arg, 41)
+        } else {
+            0
         };
-        let result = crate::runtime::run_worker(move || -> LeanResult<*mut ffi::lean_object> {
-            // Must run on the worker thread: elabCommand allocates Lean
-            // objects (olean reading, environment construction), and Lean
-            // objects must not cross minimal-move local heaps.
-            let cmd_state_owned = mk_command_state(&env)?;
-            #[cfg(not(lean_4_26))]
-            let (cmd_state_ref, world) = {
-                // 4.25.2 `lean_st_mk_ref` is the 2-arg export: it consumes
-                // `init` (the ref keeps a reference) and never reads the
-                // world argument (disassembly-verified), returning
-                // `(ref, 1)` — the world token is the immediate unit
-                // constant, so every world inc/dec below is a no-op. The
-                // dummy box only fills the ignored slot; the callee holds
-                // no reference to it, so release it right after the call
-                // (same pattern as the 4.26+ dummy box below).
-                let world_in = ffi::lean_box(0);
-                let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, world_in);
-                let cmd_state_ref = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
-                let world = ffi::lean_ctor_get(ref_result, 1) as *mut ffi::lean_object;
-                ffi::lean_inc(cmd_state_ref);
-                ffi::lean_inc(world);
-                ffi::lean_dec(ref_result);
-                ffi::lean_dec(world_in);
-                (cmd_state_ref, world)
-            };
-            #[cfg(lean_4_26)]
-            let (cmd_state_ref, world) = {
-                // Lean >= 4.26: `lean_st_mk_ref` is a 1-arg C export
-                // returning the ST.Ref directly; the second slot is
-                // ignored by the callee. `elabCommandTopLevel` and
-                // `lean_st_ref_get` likewise dropped the world token
-                // from their C ABIs, so one dummy box fills every
-                // ignored slot and is released once after the read-back.
-                let world = ffi::lean_box(0);
-                (ffi::lean_st_mk_ref(cmd_state_owned, world), world)
-            };
-            // The callee also consumes the ref argument (lean_obj_arg):
-            // keep our own reference so the ref survives the call (same
-            // pattern as run_tactic's "Keep our own references"); it is
-            // released right after the state read-back below.
-            ffi::lean_inc(cmd_state_ref);
+        if severity == 2 {
+            ffi::lean_inc(m);
+            found = Some(m);
+        }
+        cur = ffi::lean_ctor_get(cur, 1) as *mut ffi::lean_object;
+    }
+    ffi::lean_dec(lst);
+    found
+}
 
-            // `elabCommandTopLevel` is the real frontend entry.
-            // Pre-4.32 arity 4: (stx, ctx, ref, world); from 4.32 the
-            // signature gained a leading `cmds : Array Syntax` linter
-            // bookkeeping parameter (default `#[]`), shifting the ABI to
-            // (stx, cmds, ctx, ref, world).
-            #[cfg(lean_4_32)]
-            let result = ffi::meta::repl::lean_elab_command_top_level_5(
-                stx_ptr,
-                ffi::array::lean_mk_empty_array(),
-                cmd_ctx.into_ptr(),
-                cmd_state_ref,
-                world,
-            );
-            #[cfg(not(lean_4_32))]
-            let result = ffi::meta::repl::lean_elab_command_top_level_4(
-                stx_ptr,
-                cmd_ctx.into_ptr(),
-                cmd_state_ref,
-                world,
-            );
-            // On the (rare) exception path the read-back below never
-            // runs, so release the per-call ref and world token here.
-            let pair = match crate::meta::metam::handle_eio_result(result) {
-                Ok(pair) => pair,
-                Err(e) => {
-                    ffi::lean_dec(cmd_state_ref);
-                    ffi::lean_dec(world);
-                    return Err(e);
-                }
-            };
-            ffi::lean_dec(pair);
-
-            // The elaboration pipeline threads the final Command.State
-            // through the ref in place; read it back.
-            #[cfg(lean_4_26)]
-            // Lean >= 4.26: `lean_st_ref_get` returns the value directly.
-            let state = ffi::lean_st_ref_get(cmd_state_ref, world);
-            #[cfg(not(lean_4_26))]
-            let state = {
-                let final_ref = ffi::lean_st_ref_get(cmd_state_ref, world);
-                let state = ffi::lean_ctor_get(final_ref, 0) as *mut ffi::lean_object;
-                ffi::lean_inc(state);
-                ffi::lean_dec(final_ref);
-                state
-            };
-            // The state is read back from the ref: release the per-call
-            // ST ref (the pipeline's final Command.State is now owned by
-            // `state`) and the world token (pre-4.26: the real token;
-            // 4.26+: the dummy that filled the ABI-ignored slots).
-            ffi::lean_dec(cmd_state_ref);
-            ffi::lean_dec(world);
-            // Command.State field 0 = Environment.
-            let env_out =
-                std::ptr::read::<u64>((state as *const u64).add(1)) as *mut ffi::lean_object;
-
-            // Error reporting: `withLogging` swallows elaboration
-            // failures into the command message log (no exception
-            // propagates), so surface the first `error`-severity
-            // message as a LeanError.
-            //
-            // `Message = BaseMessage MessageData` has a flat layout
-            // stable across 4.25.2..4.33: object fields first in
-            // declaration order (`fileName`, `pos`, `endPos`,
-            // `caption`, `data`), then the scalar bytes
-            // (`keepFullRange`, `severity`, `isSilent`).
-            // `MessageSeverity`: information=0, warning=1, error=2, so
-            // `severity` is the second scalar byte. The scalar offset
-            // passed to `lean_ctor_get_uint8` is relative to the object
-            // field array (just past the 8-byte header), so after 5
-            // object fields (`5 * 8 = 40`) severity sits at
-            // `40 + 1 = 41`. The error text is read from the raw
-            // message's own `data` field (object field 4, a
-            // `MessageData`) and rendered via the version-robust
-            // `MessageData.toString`. Reading the raw message (rather
-            // than a serialized `SerialMessage`) avoids the
-            // serialize/`l_Lean_SerialMessage_toString` shape
-            // disagreement in 4.33.0-rc1.
-            extern "C" {
-                #[link_name = "l_Lean_MessageLog_toList"]
-                fn lean_msglog_tolist(a: *mut ffi::lean_object) -> *mut ffi::lean_object;
-            }
-            /// Read a Lean `String` stored in object field `f` of `o`.
-            unsafe fn field_string(o: *mut ffi::lean_object, f: u32) -> String {
-                let s = ffi::lean_ctor_get(o, f) as *mut ffi::lean_object;
-                if ffi::inline::lean_is_scalar(s) {
-                    return String::new();
-                }
-                let cs = ffi::inline::lean_string_cstr(s as ffi::b_lean_obj_arg);
-                if cs.is_null() {
-                    String::new()
-                } else {
-                    std::ffi::CStr::from_ptr(cs).to_string_lossy().into_owned()
-                }
-            }
-            let msg_log =
-                std::ptr::read::<u64>((state as *const u64).add(2)) as *mut ffi::lean_object;
-            ffi::lean_inc(msg_log);
-            let c =
-                ffi::inline::lean_alloc_closure(lean_msglog_tolist as *mut std::ffi::c_void, 1, 0);
-            let lst = ffi::closure::lean_apply_1(c, msg_log);
-            let mut err_msg: Option<String> = None;
-            let mut cur = lst;
-            while !ffi::inline::lean_is_scalar(cur) && err_msg.is_none() {
-                let m = ffi::lean_ctor_get(cur, 0) as *mut ffi::lean_object;
-                ffi::lean_inc(m);
-                let severity = if !ffi::inline::lean_is_scalar(m) {
-                    // Second scalar byte (see layout note above).
-                    ffi::inline::lean_ctor_get_uint8(m as ffi::b_lean_obj_arg, 41)
-                } else {
-                    0
-                };
-                if severity == 2 {
-                    // Read `caption` (String, field 3) and `data`
-                    // (MessageData, field 4) from the raw message and
-                    // render `data` with Lean's real renderer. The raw
-                    // `Message = BaseMessage MessageData` layout (5
-                    // object fields) is stable across 4.25.2..4.33, so
-                    // this does not depend on a serialized
-                    // `SerialMessage`'s field count.
-                    let caption = field_string(m, 3);
-                    let data_md = ffi::lean_ctor_get(m, 4) as *mut ffi::lean_object;
-                    ffi::lean_inc(data_md);
-                    let data = super::metam::extract_message_data(data_md);
-                    ffi::lean_dec(data_md);
-                    err_msg = Some(if caption.is_empty() {
-                        if data.is_empty() {
-                            "command failed".to_string()
-                        } else {
-                            data
-                        }
-                    } else {
-                        format!("{caption}: {data}")
-                    });
-                }
-                ffi::lean_dec(m);
-                cur = ffi::lean_ctor_get(cur, 1) as *mut ffi::lean_object;
-            }
-            ffi::lean_dec(lst);
-            if let Some(msg) = err_msg {
-                let msg = format!("run_cmd: command failed: {msg}");
-                ffi::lean_dec(state);
-                return Err(LeanError::other(&msg));
-            }
-
-            // Note: commands that never touch the environment (`#check`,
-            // `set_option` with no options change, ...) legitimately
-            // return the same environment object — do not reject them;
-            // elaboration failures are surfaced via the message check.
-            ffi::lean_inc(env_out);
-            ffi::lean_dec(state);
-            Ok::<*mut ffi::lean_object, LeanError>(env_out)
-        })?;
-        Ok(LeanBound::from_owned_ptr(lean, result))
+/// Read a Lean `String` stored in object field `f` of `o`, returning an
+/// empty string when the field is a scalar.
+///
+/// # Safety
+///
+/// `o` must be a valid constructor object with more than `f` object
+/// fields.
+unsafe fn message_field_string(o: *mut ffi::lean_object, f: u32) -> String {
+    let s = ffi::lean_ctor_get(o, f) as *mut ffi::lean_object;
+    if ffi::inline::lean_is_scalar(s) {
+        return String::new();
+    }
+    let cs = ffi::inline::lean_string_cstr(s as ffi::b_lean_obj_arg);
+    if cs.is_null() {
+        String::new()
+    } else {
+        std::ffi::CStr::from_ptr(cs).to_string_lossy().into_owned()
     }
 }
 

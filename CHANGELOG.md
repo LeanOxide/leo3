@@ -60,6 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `leo3::prelude` now also re-exports `lean_instance`
 - `LeanByteArray` gained an identity `FromLean` implementation, and
   `LeanString::as_str` provides a length-aware zero-copy view
+- **Runtime layout assertion for Lean `Message`** (cross-toolchain,
+  `runtime-tests` feature): a failing command is run through
+  `run_command`, and the recorded `error`-severity `Message` is
+  asserted directly from the runtime object header (5 object fields,
+  aligned object size 56, `severity` byte 2 at object-relative offset
+  41, `caption` / `data` fields readable) — so a Lean release that
+  drifts the layout fails the test loudly instead of letting the FFI
+  misread it silently (W-352)
 
 ### Changed
 - **`io` module rewritten against the modern Lean handle ABI** (verified
@@ -110,6 +118,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and rendered as `"{caption}: {data}"` (no position prefix), replacing the
   previous fixed-offset read of the serialized `SerialMessage` (which asserted
   on 4.25.2 and misrendered on 4.33.0-rc1).
+- **`run_command` refactored around a shared elaboration core
+  (`run_command_core`)**: the error-message scan is extracted into
+  `first_error_message`, the updated `Environment`'s reference is taken
+  once in the core (a single `lean_inc` when the `Command.State` field is
+  read) and released by each caller on both the success and error paths
+  (net refcount behavior unchanged), and the `runtime-tests`-only test
+  hook `test_first_error_message` reuses the exact production pipeline
+  instead of duplicating it (W-352)
 
 ### Fixed
 - **Task manager initialization race**: `LeanTask::spawn` now initializes
@@ -156,6 +172,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_run_cmd_no_object_leak_across_calls`, standalone binary asserting
   that the base-Environment refcount — and RSS, as a backstop — stay flat
   across 100 `run_command` calls, on 4.25.2 and 4.33)
+- **CI: the full cross-toolchain suite can no longer be masked by a single
+  aborted test binary (W-350)**: the Lean 4.33 `libleanshared.so` statically
+  vendors libuv, which intermittently trips an assertion in
+  `uv__epoll_ctl_flush` under load and SIGABRTs the `test_eq_proofs` binary
+  (a toolchain race, not a leo3 bug). Every full-workspace test job
+  (`Compat / Full Matrix`, `Heavy / Careful`, `Heavy / AddressSanitizer`)
+  now runs through `.github/scripts/cargo-test-full.sh`, which adds
+  `--no-fail-fast` (one abort no longer stops every later binary from
+  running, as in W-344) and retries `test_eq_proofs` in isolation when it
+  is the sole failure and died without a libtest summary — a clean retry
+  turns the run green with a warning annotation, while deterministic
+  failures still fail the run. A new `.gitattributes` pins `*.sh` to LF so
+  the Windows matrix legs (runner git sets `core.autocrlf=true`) check the
+  runner script out byte-identical to the committed LF version.
 
 ### Changed
 
