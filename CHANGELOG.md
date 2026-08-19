@@ -142,6 +142,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at fixed field offsets (assert on 4.25.2, misrender on 4.33.0-rc1); reading
   the raw message fixes both. Also fixes the 4.33 cross test suite aborting
   (SIGABRT) in `test_run_cmd` and killing every subsequent test binary (W-344).
+- `run_command` no longer leaks Lean objects on every call: the per-call
+  `ST.Ref` that carried the post-command state was inc'd once and read back
+  but never dec'd (pinning a full final `Command.State` — Environment /
+  InfoState / MessageLog — on the heap for the lifetime of the session),
+  the initial state held two extra `lean_inc` pins that nothing referenced,
+  and on 4.26+ the `lean_st_mk_ref` world-argument box was allocated but
+  never released. The temporary ref is now released after each call (on all
+  error paths too) and the redundant pins are gone; repeated `run_command`
+  calls keep Lean object counts flat (regression test: 100-iteration
+  object-count stability, 4.25.2 and 4.33)
 
 ### Changed
 

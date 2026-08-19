@@ -1462,9 +1462,10 @@ pub fn pp_exprs<'l>(
 // Command execution (run_cmd)
 // ============================================================================
 
-/// Execute a parsed command via `Lean.Elab.Command.elabCommand` (5-arg
-/// direct: `(stx, cmdCtx, cmdStateRef, cmdState, world)`), returning the
-/// updated `Environment` from the final `Command.State`.
+/// Execute a parsed command via `Lean.Elab.Command.elabCommandTopLevel`
+/// (ABI `(stx[, cmds], cmdCtx, cmdStateRef[, world])` — `cmds` from 4.32,
+/// `world` only pre-4.26), returning the updated `Environment` from the
+/// final `Command.State`.
 pub fn run_command<'l>(
     lean: Lean<'l>,
     metam: &crate::meta::metam::MetaMContext<'l>,
@@ -1497,20 +1498,20 @@ pub fn run_command<'l>(
                 (cmd_state_ref, world)
             };
             #[cfg(lean_4_26)]
-            let (cmd_state_ref, world) = (
-                // Lean >= 4.26: `lean_st_mk_ref` returns the ST.Ref
-                // directly; the second arg is ignored by the callee.
-                ffi::lean_st_mk_ref(cmd_state_owned, ffi::lean_box(0)),
-                ffi::lean_box(0),
-            );
-            // elabCommand consumes the initial Command.State value; the
-            // ref also holds it, so keep extra references to prevent the
-            // elaborated state from being freed under us.
-            ffi::lean_inc(cmd_state_owned);
-            ffi::lean_inc(cmd_state_owned);
+            let (cmd_state_ref, world) = {
+                // Lean >= 4.26: `lean_st_mk_ref` is a 1-arg C export
+                // returning the ST.Ref directly; the second slot is
+                // ignored by the callee. `elabCommandTopLevel` and
+                // `lean_st_ref_get` likewise dropped the world token
+                // from their C ABIs, so one dummy box fills every
+                // ignored slot and is released once after the read-back.
+                let world = ffi::lean_box(0);
+                (ffi::lean_st_mk_ref(cmd_state_owned, world), world)
+            };
             // The callee also consumes the ref argument (lean_obj_arg):
             // keep our own reference so the ref survives the call (same
-            // pattern as run_tactic's "Keep our own references").
+            // pattern as run_tactic's "Keep our own references"); it is
+            // released right after the state read-back below.
             ffi::lean_inc(cmd_state_ref);
 
             // `elabCommandTopLevel` is the real frontend entry.
@@ -1533,7 +1534,16 @@ pub fn run_command<'l>(
                 cmd_state_ref,
                 world,
             );
-            let pair = crate::meta::metam::handle_eio_result(result)?;
+            // On the (rare) exception path the read-back below never
+            // runs, so release the per-call ref and world token here.
+            let pair = match crate::meta::metam::handle_eio_result(result) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    ffi::lean_dec(cmd_state_ref);
+                    ffi::lean_dec(world);
+                    return Err(e);
+                }
+            };
             ffi::lean_dec(pair);
 
             // The elaboration pipeline threads the final Command.State
@@ -1549,6 +1559,12 @@ pub fn run_command<'l>(
                 ffi::lean_dec(final_ref);
                 state
             };
+            // The state is read back from the ref: release the per-call
+            // ST ref (the pipeline's final Command.State is now owned by
+            // `state`) and the world token (pre-4.26: the real token;
+            // 4.26+: the dummy that filled the ABI-ignored slots).
+            ffi::lean_dec(cmd_state_ref);
+            ffi::lean_dec(world);
             // Command.State field 0 = Environment.
             let env_out =
                 std::ptr::read::<u64>((state as *const u64).add(1)) as *mut ffi::lean_object;
