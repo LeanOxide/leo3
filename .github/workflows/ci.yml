@@ -259,7 +259,10 @@ jobs:
       lean: ${{ matrix.lean }}
       save-cache: ${{ github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'CI-save-pr-cache') }}
       suite: Compat / Full Matrix
-      command: cargo test --locked --all-features --workspace
+      # The runner adds --no-fail-fast and shields the known Lean 4.33
+      # vendored-libuv flake (test_eq_proofs SIGABRT in uv__epoll_ctl_flush,
+      # W-350): one aborted binary must not mask every later binary.
+      command: bash .github/scripts/cargo-test-full.sh cargo test --locked --all-features --workspace
 
   heavy-careful:
     name: Heavy / Careful (UB detection)

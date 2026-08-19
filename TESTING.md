@@ -113,13 +113,20 @@ cargo test --manifest-path leo3-ffi-check/Cargo.toml
 
 ```bash
 LEO3_NO_LEAN=1 cargo hack check --feature-powerset --exclude-features runtime-tests --workspace --tests
-cargo test --locked --all-features --workspace
+bash .github/scripts/cargo-test-full.sh cargo test --locked --all-features --workspace
 cargo careful test --locked --all-features --workspace
 RUSTFLAGS='-Zsanitizer=address' cargo test --locked -Zbuild-std --target x86_64-unknown-linux-gnu --all-features --workspace
 cargo llvm-cov --no-report nextest
 cargo llvm-cov --no-report --doc
 cargo llvm-cov report --doctests --lcov --output-path lcov.info
 ```
+
+The full-suite line runs through `.github/scripts/cargo-test-full.sh`
+(CI-equivalent): it adds `--no-fail-fast` so one aborted binary cannot mask
+every later binary, and retries `test_eq_proofs` in isolation when it is the
+sole failure and died without a libtest summary — the signature of the Lean
+4.33 vendored-libuv flake (SIGABRT in `uv__epoll_ctl_flush`, W-350).
+Deterministic failures still fail the run.
 
 ## Benchmarks
 
