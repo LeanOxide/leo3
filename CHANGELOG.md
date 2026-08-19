@@ -158,6 +158,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at fixed field offsets (assert on 4.25.2, misrender on 4.33.0-rc1); reading
   the raw message fixes both. Also fixes the 4.33 cross test suite aborting
   (SIGABRT) in `test_run_cmd` and killing every subsequent test binary (W-344).
+- `run_command` no longer leaks Lean objects on every call: the per-call
+  `ST.Ref` that carried the post-command state was inc'd once and read back
+  but never dec'd (pinning a full final `Command.State` — Environment /
+  InfoState / MessageLog — on the heap for the lifetime of the session),
+  the initial state held two extra `lean_inc` pins that nothing referenced,
+  and the `lean_st_mk_ref` world-argument dummy box (ignored by both the
+  2-arg pre-4.26 export and the 1-arg 4.26+ export) was allocated but
+  never released. The temporary ref is now released after each call (on
+  all error paths too), the redundant pins are gone, and the dummy box is
+  released right after the `mk_ref` call; repeated `run_command` calls
+  keep Lean object counts flat (regression test:
+  `test_run_cmd_no_object_leak_across_calls`, standalone binary asserting
+  that the base-Environment refcount — and RSS, as a backstop — stay flat
+  across 100 `run_command` calls, on 4.25.2 and 4.33)
 - **CI: the full cross-toolchain suite can no longer be masked by a single
   aborted test binary (W-350)**: the Lean 4.33 `libleanshared.so` statically
   vendors libuv, which intermittently trips an assertion in

@@ -1501,32 +1501,39 @@ unsafe fn run_command_core<'l>(
         let cmd_state_owned = mk_command_state(&env)?;
         #[cfg(not(lean_4_26))]
         let (cmd_state_ref, world) = {
-            let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, ffi::lean_box(0));
-            // `lean_st_mk_ref` returns an IO pair `(ref, world)`: use
-            // the REAL world token it produces (like `import_modules`
-            // and `run_tactic` do), not a synthetic box(0).
+            // 4.25.2 `lean_st_mk_ref` is the 2-arg export: it consumes
+            // `init` (the ref keeps a reference) and never reads the
+            // world argument (disassembly-verified), returning
+            // `(ref, 1)` — the world token is the immediate unit
+            // constant, so every world inc/dec below is a no-op. The
+            // dummy box only fills the ignored slot; the callee holds
+            // no reference to it, so release it right after the call
+            // (same pattern as the 4.26+ dummy box below).
+            let world_in = ffi::lean_box(0);
+            let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, world_in);
             let cmd_state_ref = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
             let world = ffi::lean_ctor_get(ref_result, 1) as *mut ffi::lean_object;
             ffi::lean_inc(cmd_state_ref);
             ffi::lean_inc(world);
             ffi::lean_dec(ref_result);
+            ffi::lean_dec(world_in);
             (cmd_state_ref, world)
         };
         #[cfg(lean_4_26)]
-        let (cmd_state_ref, world) = (
-            // Lean >= 4.26: `lean_st_mk_ref` returns the ST.Ref
-            // directly; the second arg is ignored by the callee.
-            ffi::lean_st_mk_ref(cmd_state_owned, ffi::lean_box(0)),
-            ffi::lean_box(0),
-        );
-        // elabCommand consumes the initial Command.State value; the
-        // ref also holds it, so keep extra references to prevent the
-        // elaborated state from being freed under us.
-        ffi::lean_inc(cmd_state_owned);
-        ffi::lean_inc(cmd_state_owned);
+        let (cmd_state_ref, world) = {
+            // Lean >= 4.26: `lean_st_mk_ref` is a 1-arg C export
+            // returning the ST.Ref directly; the second slot is
+            // ignored by the callee. `elabCommandTopLevel` and
+            // `lean_st_ref_get` likewise dropped the world token
+            // from their C ABIs, so one dummy box fills every
+            // ignored slot and is released once after the read-back.
+            let world = ffi::lean_box(0);
+            (ffi::lean_st_mk_ref(cmd_state_owned, world), world)
+        };
         // The callee also consumes the ref argument (lean_obj_arg):
         // keep our own reference so the ref survives the call (same
-        // pattern as run_tactic's "Keep our own references").
+        // pattern as run_tactic's "Keep our own references"); it is
+        // released right after the state read-back below.
         ffi::lean_inc(cmd_state_ref);
 
         // `elabCommandTopLevel` is the real frontend entry.
@@ -1549,7 +1556,16 @@ unsafe fn run_command_core<'l>(
             cmd_state_ref,
             world,
         );
-        let pair = crate::meta::metam::handle_eio_result(result)?;
+        // On the (rare) exception path the read-back below never
+        // runs, so release the per-call ref and world token here.
+        let pair = match crate::meta::metam::handle_eio_result(result) {
+            Ok(pair) => pair,
+            Err(e) => {
+                ffi::lean_dec(cmd_state_ref);
+                ffi::lean_dec(world);
+                return Err(e);
+            }
+        };
         ffi::lean_dec(pair);
 
         // The elaboration pipeline threads the final Command.State
@@ -1565,6 +1581,12 @@ unsafe fn run_command_core<'l>(
             ffi::lean_dec(final_ref);
             state
         };
+        // The state is read back from the ref: release the per-call
+        // ST ref (the pipeline's final Command.State is now owned by
+        // `state`) and the world token (pre-4.26: the real token;
+        // 4.26+: the dummy that filled the ABI-ignored slots).
+        ffi::lean_dec(cmd_state_ref);
+        ffi::lean_dec(world);
         // Command.State field 0 = Environment.
         let env_out = std::ptr::read::<u64>((state as *const u64).add(1)) as *mut ffi::lean_object;
         ffi::lean_inc(env_out);
