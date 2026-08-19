@@ -1486,15 +1486,22 @@ pub fn run_command<'l>(
             let cmd_state_owned = mk_command_state(&env)?;
             #[cfg(not(lean_4_26))]
             let (cmd_state_ref, world) = {
-                let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, ffi::lean_box(0));
-                // `lean_st_mk_ref` returns an IO pair `(ref, world)`: use
-                // the REAL world token it produces (like `import_modules`
-                // and `run_tactic` do), not a synthetic box(0).
+                // 4.25.2 `lean_st_mk_ref` is the 2-arg export: it consumes
+                // `init` (the ref keeps a reference) and never reads the
+                // world argument (disassembly-verified), returning
+                // `(ref, 1)` — the world token is the immediate unit
+                // constant, so every world inc/dec below is a no-op. The
+                // dummy box only fills the ignored slot; the callee holds
+                // no reference to it, so release it right after the call
+                // (same pattern as the 4.26+ dummy box below).
+                let world_in = ffi::lean_box(0);
+                let ref_result = ffi::lean_st_mk_ref(cmd_state_owned, world_in);
                 let cmd_state_ref = ffi::lean_ctor_get(ref_result, 0) as *mut ffi::lean_object;
                 let world = ffi::lean_ctor_get(ref_result, 1) as *mut ffi::lean_object;
                 ffi::lean_inc(cmd_state_ref);
                 ffi::lean_inc(world);
                 ffi::lean_dec(ref_result);
+                ffi::lean_dec(world_in);
                 (cmd_state_ref, world)
             };
             #[cfg(lean_4_26)]

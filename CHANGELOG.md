@@ -147,11 +147,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   but never dec'd (pinning a full final `Command.State` — Environment /
   InfoState / MessageLog — on the heap for the lifetime of the session),
   the initial state held two extra `lean_inc` pins that nothing referenced,
-  and on 4.26+ the `lean_st_mk_ref` world-argument box was allocated but
-  never released. The temporary ref is now released after each call (on all
-  error paths too) and the redundant pins are gone; repeated `run_command`
-  calls keep Lean object counts flat (regression test: 100-iteration
-  object-count stability, 4.25.2 and 4.33)
+  and the `lean_st_mk_ref` world-argument dummy box (ignored by both the
+  2-arg pre-4.26 export and the 1-arg 4.26+ export) was allocated but
+  never released. The temporary ref is now released after each call (on
+  all error paths too), the redundant pins are gone, and the dummy box is
+  released right after the `mk_ref` call; repeated `run_command` calls
+  keep Lean object counts flat (regression test:
+  `test_run_cmd_no_object_leak_across_calls`, standalone binary asserting
+  that the base-Environment refcount — and RSS, as a backstop — stay flat
+  across 100 `run_command` calls, on 4.25.2 and 4.33)
 
 ### Changed
 
