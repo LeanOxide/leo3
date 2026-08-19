@@ -298,7 +298,7 @@ jobs:
         run: echo "$HOME/.elan/bin" >> $GITHUB_PATH
 
       - name: Run tests under cargo-careful
-        run: cargo careful test --locked --all-features --workspace
+        run: bash .github/scripts/cargo-test-full.sh cargo careful test --locked --all-features --workspace
 
   heavy-asan:
     name: Heavy / AddressSanitizer
@@ -329,7 +329,7 @@ jobs:
         env:
           RUSTFLAGS: -Zsanitizer=address
           ASAN_OPTIONS: detect_leaks=0:intercept_tls_get_addr=0:alloc_dealloc_mismatch=0
-        run: cargo test --locked -Zbuild-std --target x86_64-unknown-linux-gnu --all-features --workspace
+        run: bash .github/scripts/cargo-test-full.sh cargo test --locked -Zbuild-std --target x86_64-unknown-linux-gnu --all-features --workspace
 
   smoke-docs:
     name: Smoke / Documentation

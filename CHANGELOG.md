@@ -146,12 +146,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aborted test binary (W-350)**: the Lean 4.33 `libleanshared.so` statically
   vendors libuv, which intermittently trips an assertion in
   `uv__epoll_ctl_flush` under load and SIGABRTs the `test_eq_proofs` binary
-  (a toolchain race, not a leo3 bug). The `Compat / Full Matrix` job now runs
-  through `.github/scripts/cargo-test-full.sh`, which adds `--no-fail-fast`
-  (one abort no longer stops every later binary from running, as in W-344)
-  and retries `test_eq_proofs` in isolation when it is the sole failure and
-  died without a libtest summary — a clean retry turns the run green with a
-  warning annotation, while deterministic failures still fail the run.
+  (a toolchain race, not a leo3 bug). Every full-workspace test job
+  (`Compat / Full Matrix`, `Heavy / Careful`, `Heavy / AddressSanitizer`)
+  now runs through `.github/scripts/cargo-test-full.sh`, which adds
+  `--no-fail-fast` (one abort no longer stops every later binary from
+  running, as in W-344) and retries `test_eq_proofs` in isolation when it
+  is the sole failure and died without a libtest summary — a clean retry
+  turns the run green with a warning annotation, while deterministic
+  failures still fail the run. A new `.gitattributes` pins `*.sh` to LF so
+  the Windows matrix legs (runner git sets `core.autocrlf=true`) check the
+  runner script out byte-identical to the committed LF version.
 
 ### Changed
 

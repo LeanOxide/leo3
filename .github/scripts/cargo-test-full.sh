@@ -50,11 +50,13 @@ esac
 
 # A binary killed by a signal never reaches libtest's "test result:" summary
 # line; a binary whose tests merely fail prints one. Only the former is a
-# flake candidate. The section ends at the next "Running " line so summaries
-# of later binaries (still executed under --no-fail-fast) cannot leak in.
+# flake candidate. The section ends at the next "Running " or "Doc-tests"
+# line so summaries of later targets (still executed under --no-fail-fast)
+# cannot leak in — including doc-tests, which print after every
+# integration test binary.
 section=$(awk -v t="tests/${FLAKY_TEST}.rs" '
   index($0, "Running " t) { f = 1; next }
-  f && $0 ~ /^ *Running / { exit }
+  f && ($0 ~ /^ *Running / || $0 ~ /^ *Doc-tests /) { exit }
   f { print }
 ' "$log_file")
 if printf '%s\n' "$section" | grep -q "test result:"; then
