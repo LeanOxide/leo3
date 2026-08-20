@@ -16,7 +16,7 @@ fn run_cmd<'l>(
     metam: &MetaMContext<'l>,
     cmd: &str,
 ) -> LeanResult<LeanBound<'l, LeanEnvironment>> {
-    let stx = leo3::meta::repl::parse_command(lean, &metam.env(), cmd)?;
+    let stx = leo3::meta::repl::parse_command(lean, metam.env(), cmd)?;
     leo3::meta::repl::run_command(lean, metam, &stx)
 }
 
@@ -149,10 +149,10 @@ fn test_parse_file_commands_splits_and_skips_imports() {
             metam.replace_env(env2);
         }
         let found =
-            LeanEnvironment::find(&metam.env(), &LeanName::from_components(lean, "file_def")?)?;
+            LeanEnvironment::find(metam.env(), &LeanName::from_components(lean, "file_def")?)?;
         assert!(found.is_some(), "file_def should be declared");
         let found =
-            LeanEnvironment::find(&metam.env(), &LeanName::from_components(lean, "file_thm")?)?;
+            LeanEnvironment::find(metam.env(), &LeanName::from_components(lean, "file_thm")?)?;
         assert!(found.is_some(), "file_thm should be declared");
         Ok(())
     });

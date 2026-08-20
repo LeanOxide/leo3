@@ -353,7 +353,7 @@ fn test_rfl_m_plus_zero() {
             let o2 = run_tactic(&mut metam, &o1.goals[0], &stx, Some(&o1.meta_state_ref));
             match o2 {
                 Ok(o) => assert!(o.goals.is_empty(), "{tac} closes m + 0 = m"),
-                Err(e) => assert!(tac == "rfl", "{tac} should succeed"),
+                Err(_) => assert!(tac == "rfl", "{tac} should succeed"),
             }
         }
         Ok(())

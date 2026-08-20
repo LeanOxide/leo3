@@ -351,7 +351,7 @@ pub unsafe fn default_term_context<'l>(
             set_bool(9, 0); // holesAsSyntheticOpaque
             set_bool(10, 1); // checkDeprecated
 
-            return Ok(LeanBound::from_owned_ptr(lean, ctx));
+            Ok(LeanBound::from_owned_ptr(lean, ctx))
         }
         #[cfg(not(lean_4_31))]
         {
@@ -599,13 +599,6 @@ pub fn parse_tactic<'l>(
         }
     }
 }
-
-/// Set Lean's global search path to `sysroot/lib/lean` plus `LEAN_PATH`.
-///
-/// In embedded scenarios the runtime's builtin-initialized search path is
-/// empty (its default uses the *process executable* directory), so callers
-/// must initialize it before importing modules. Idempotent: re-invoking
-/// replaces the path with the same value.
 
 /// Parse a command string using Lean's real parser (`command` category).
 pub fn parse_command<'l>(
@@ -1961,7 +1954,7 @@ unsafe fn mk_command_state<'l>(
     //    1 and writing 8 overwrites the neighboring heap block.
     let trace_state = ffi::lean_alloc_ctor(0, 1, 8);
     ffi::lean_ctor_set(trace_state, 0, pa);
-    ffi::lean_ctor_set_uint64(trace_state, 1 * 8, 0);
+    ffi::lean_ctor_set_uint64(trace_state, 8, 0);
     ffi::lean_ctor_set(state, 9, trace_state);
     // 10: snapshotTasks = #[] (empty Array)
     let empty_arr = ffi::array::lean_mk_empty_array();

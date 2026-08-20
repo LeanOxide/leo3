@@ -82,7 +82,7 @@ fn test_goal_hyps_and_type_pp_after_intro() {
         let outcome = run_tactic(&mut metam, &mvar, &stx, None)?;
         let g = &outcome.goals[0];
         let (hyps, ty_pp) = metam.goal_hyps_and_type_pp(g)?;
-        eprintln!("HYP0: {:?}", hyps.get(0));
+        eprintln!("HYP0: {:?}", hyps.first());
         eprintln!("HYP1: {:?}", hyps.get(1));
         eprintln!("TY-PP: {ty_pp}");
         assert_eq!(hyps.len(), 2, "expected n and m hypotheses");
