@@ -27,12 +27,14 @@ static ENV_INIT: Once = Once::new();
 ///
 /// Delegates to the full official initialization sequence (which covers
 /// `Init.Prelude`), so no module is ever initialized twice.
+#[cfg(feature = "meta")]
 #[inline]
 pub(crate) fn ensure_prelude_initialized() {
     ensure_environment_initialized();
 }
 
 /// Ensure `Lean.Expr` is initialized.
+#[cfg(feature = "meta")]
 #[inline]
 pub(crate) fn ensure_expr_initialized() {
     ensure_environment_initialized();

@@ -113,6 +113,10 @@ unsafe fn unpack_option_local_decl(
     }
 }
 
+/// A goal's local hypotheses as `(user_name, type_dbg)` pairs, together
+/// with the goal's (instantiated) type.
+type GoalHypsAndType<'l> = (Vec<(String, String)>, LeanBound<'l, LeanExpr>);
+
 impl<'l> MetaMContext<'l> {
     /// Create a new `MetaMContext` from an environment.
     ///
@@ -692,7 +696,7 @@ impl<'l> MetaMContext<'l> {
     pub fn goal_hyps_and_type(
         &mut self,
         mvar: &LeanBound<'l, LeanName>,
-    ) -> LeanResult<(Vec<(String, String)>, LeanBound<'l, LeanExpr>)> {
+    ) -> LeanResult<GoalHypsAndType<'l>> {
         crate::runtime::ensure_meta_initialized();
         let gexpr = LeanExpr::mvar(self.lean, mvar.clone())?;
         let ty = self.infer_type(&gexpr)?;
@@ -1225,14 +1229,6 @@ pub unsafe fn handle_eio_result(
     Err(LeanError::exception(is_internal, &message))
 }
 
-/// Best-effort extraction of a human-readable string from Lean's `MessageData`.
-///
-/// `MessageData` is a complex inductive type. This function handles the most
-/// common cases:
-/// - `ofFormat` (tag 0): checks for `Format.text` (tag 0) containing a string
-/// - `ofExpr` (tag 4): uses `lean_expr_dbg_to_string` for a debug representation
-/// - `withContext` (tag 6): recurses into the inner MessageData
-/// - `tagged` (tag 8): recurses into the inner MessageData
 /// Render a `MessageData` to a human-readable string.
 ///
 /// Uses Lean's real message renderer (`MessageData.toString : BaseIO
@@ -1350,7 +1346,7 @@ unsafe fn extract_message_data_fallback(msg_data: *mut ffi::lean_object) -> Stri
             extract_message_data(inner)
         }
         // withContext (3) / withNamingContext (4) / nest (5): field 1 is msg.
-        3 | 4 | 5 => {
+        3..=5 => {
             let inner = ffi::lean_ctor_get(msg_data, 1) as *mut ffi::lean_object;
             extract_message_data(inner)
         }
@@ -1487,22 +1483,6 @@ mod tests {
         let obj = ffi::lean_alloc_ctor(1, 2, 0);
         ffi::lean_ctor_set(obj, 0, id);
         ffi::lean_ctor_set(obj, 1, msg_data);
-        obj
-    }
-
-    /// Build `MessageData.ofFormat fmt` — on 4.25 this is
-    /// `ofFormatWithInfos ⟨fmt, ∅⟩` (tag 0, 1 field wrapping a 2-field
-    /// `FormatWithInfos` struct).
-    unsafe fn mk_msg_data_of_format(fmt: *mut ffi::lean_object) -> *mut ffi::lean_object {
-        // FormatWithInfos { fmt, infos := ∅ } — ctor tag 0, 2 object fields
-        let fwi = ffi::lean_alloc_ctor(0, 2, 0);
-        ffi::lean_ctor_set(fwi, 0, fmt);
-        // InfoPerPos is a PersistentHashMap; the empty value is the static
-        // singleton (rc 0, no inc needed — dec is a no-op).
-        let infos = ffi::meta::get_PersistentHashMapEmpty();
-        ffi::lean_ctor_set(fwi, 1, infos);
-        let obj = ffi::lean_alloc_ctor(0, 1, 0);
-        ffi::lean_ctor_set(obj, 0, fwi);
         obj
     }
 

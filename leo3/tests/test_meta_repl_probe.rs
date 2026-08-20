@@ -47,18 +47,18 @@ fn probe_import_variants() {
         eprintln!("[probe2] search path set");
         // Variant A: empty imports
         match import_modules(lean, &[], 0) {
-            Ok(env) => eprintln!("[probe2] empty imports OK"),
+            Ok(_) => eprintln!("[probe2] empty imports OK"),
             Err(e) => eprintln!("[probe2] empty imports ERR: {e}"),
         }
         // Variant B: bogus module name — distinguishes Import-array
         // construction from Init data loading.
         match import_modules(lean, &["BogusModule"], 0) {
-            Ok(env) => eprintln!("[probe2] Bogus OK"),
+            Ok(_) => eprintln!("[probe2] Bogus OK"),
             Err(e) => eprintln!("[probe2] Bogus ERR: {e}"),
         }
         // Variant C: real Init
         match import_modules(lean, &["Init"], 0) {
-            Ok(env) => eprintln!("[probe2] Init OK"),
+            Ok(_) => eprintln!("[probe2] Init OK"),
             Err(e) => eprintln!("[probe2] Init ERR: {e}"),
         }
         Ok(())
