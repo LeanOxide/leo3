@@ -634,9 +634,10 @@ impl MetaContext {
     /// Manually construct a Meta.Context for Lean >= 4.25.
     ///
     /// In Lean >= 4.25, field 0 is `ConfigWithKey` (wraps Config + key UInt64).
-    /// Layout: ctor tag 0, 7 object fields + 3 scalar bytes on Lean 4.25–4.30,
-    /// 4 scalar bytes on Lean 4.31+ (`cacheInferType`, default true; verified
-    /// against the `Meta/Basic.lean` source of v4.25.2 and v4.33.0).
+    /// Layout: ctor tag 0, 7 object fields + 3 scalar bytes on Lean 4.25–4.27,
+    /// 4 scalar bytes on Lean 4.28+ (`cacheInferType`, default true; verified
+    /// against the `Meta/Basic.lean` sources of v4.25.2, v4.27.0, v4.28.0,
+    /// v4.30.0 and v4.33.0).
     ///
     /// Object fields:
     /// 0. configWithKey: ConfigWithKey (ctor 0, 1 obj field [Config], 8 scalar bytes [key: UInt64])
@@ -647,23 +648,23 @@ impl MetaContext {
     /// 5. synthPendingDepth: Nat (0)
     /// 6. canUnfold?: Option ... (none)
     ///
-    /// Scalar fields (3 bytes on 4.25–4.30, 4 on 4.31+):
+    /// Scalar fields (3 bytes on 4.25–4.27, 4 on 4.28+):
     /// offset 0: trackZetaDelta (Bool) = false
     /// offset 1: univApprox (Bool) = false
     /// offset 2: inTypeClassResolution (Bool) = false
-    /// offset 3: cacheInferType (Bool) = true (Lean 4.31+ only)
+    /// offset 3: cacheInferType (Bool) = true (Lean 4.28+ only)
     #[cfg(lean_4_25)]
     fn mk_default_manual_v425_plus<'l>(lean: Lean<'l>) -> LeanResult<LeanBound<'l, Self>> {
         unsafe {
-            #[cfg(lean_4_31)]
+            #[cfg(lean_4_28)]
             let ctx = ffi::lean_alloc_ctor(0, 7, 4);
-            #[cfg(not(lean_4_31))]
+            #[cfg(not(lean_4_28))]
             let ctx = ffi::lean_alloc_ctor(0, 7, 3);
 
             // field 0: ConfigWithKey — ctor 0, 1 obj field (Config), 8 scalar bytes (key: UInt64)
             let cwk = ffi::lean_alloc_ctor(0, 1, 8);
-            // Config: 0 obj fields, 18 scalar bytes
-            let config = ffi::lean_alloc_ctor(0, 0, 18);
+            // Config: 0 obj fields, 19 scalar bytes (zetaHave present since 4.25)
+            let config = ffi::lean_alloc_ctor(0, 0, 19);
             let base = ffi::inline::lean_ctor_scalar_cptr(config);
             *base.add(0) = 0; // foApprox = false
             *base.add(1) = 0; // ctxApprox = false
@@ -683,6 +684,7 @@ impl MetaContext {
             *base.add(15) = 1; // zeta = true
             *base.add(16) = 1; // zetaDelta = true
             *base.add(17) = 1; // zetaUnused = true
+            *base.add(18) = 1; // zetaHave = true
             ffi::lean_ctor_set(cwk, 0, config);
             ffi::lean_ctor_set_uint64(cwk, ctor_scalar_offset(1, 0), 0); // key = 0
             ffi::lean_ctor_set(ctx, 0, cwk);
@@ -729,8 +731,8 @@ impl MetaContext {
             ffi::inline::lean_ctor_set_uint8(ctx, ctor_scalar_offset(7, 1), 0);
             // Scalar offset 2: inTypeClassResolution (Bool) = false
             ffi::inline::lean_ctor_set_uint8(ctx, ctor_scalar_offset(7, 2), 0);
-            // Scalar offset 3 (Lean 4.31+): cacheInferType (Bool) = true
-            #[cfg(lean_4_31)]
+            // Scalar offset 3 (Lean 4.28+): cacheInferType (Bool) = true
+            #[cfg(lean_4_28)]
             ffi::inline::lean_ctor_set_uint8(ctx, ctor_scalar_offset(7, 3), 1);
 
             Ok(LeanBound::from_owned_ptr(lean, ctx))

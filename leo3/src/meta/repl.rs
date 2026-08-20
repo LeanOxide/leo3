@@ -274,14 +274,16 @@ unsafe fn empty_name_map() -> *mut ffi::lean_object {
 }
 
 /// Construct a default `Lean.Elab.Term.Context` (all fields at their Lean
-/// defaults), matching the target Lean version's field layout:
-/// 8 object fields + 11 Bool scalars on Lean 4.31+, 7 + 11 on 4.25–4.30
-/// (verified against the `TermElabM.lean` source of v4.25.2 and v4.33.0;
-/// the 4.31 change: the `autoBoundImplicits : PersistentArray` object
-/// became `autoBoundImplicitContext : Option AutoBoundImplicitContext`
-/// and `fixedTermElabs : Array FixedTermElabRef` was appended, while the
-/// `autoBoundImplicit : Bool` scalar was removed and `isMetaSection : Bool`
-/// added — so the scalar count stays 11).
+/// defaults), matching the target Lean version's field layout (verified
+/// against the `TermElabM.lean` source of each version):
+/// - Lean < 4.27 (4.25.x, 4.26.x): 7 object fields + 11 Bool scalars
+///   (`autoBoundImplicits : PersistentArray` object, `autoBoundImplicit` scalar).
+/// - Lean 4.27–4.28: 8 object fields + 9 Bool scalars (`autoBoundImplicits`
+///   became `autoBoundImplicitContext : Option AutoBoundImplicitContext`,
+///   `fixedTermElabs : Array FixedTermElabRef` was appended, and
+///   `autoBoundImplicit : Bool` was removed).
+/// - Lean 4.29+: 8 object fields + 11 Bool scalars (the 4.27–4.28 object
+///   layout plus `isMetaSection` and `checkDeprecated` scalars).
 ///
 /// # Safety
 ///
@@ -291,9 +293,9 @@ pub unsafe fn default_term_context<'l>(
 ) -> LeanResult<LeanBound<'l, crate::instance::LeanAny>> {
     crate::runtime::ensure_meta_initialized();
     unsafe {
-        #[cfg(lean_4_31)]
+        #[cfg(lean_4_29)]
         {
-            // Term.Context (Lean 4.31+): 8 object fields followed by
+            // Term.Context (Lean 4.29+): 8 object fields followed by
             // 11 scalar (Bool) bytes, per Lean's object-first ctor layout.
             // Object fields (declaration order): declName?, macroStack,
             // autoBoundImplicitContext, autoBoundImplicitForbidden,
@@ -353,11 +355,55 @@ pub unsafe fn default_term_context<'l>(
 
             Ok(LeanBound::from_owned_ptr(lean, ctx))
         }
-        #[cfg(not(lean_4_31))]
+        #[cfg(all(lean_4_27, not(lean_4_29)))]
         {
-            // Term.Context (Lean 4.25): 7 object fields followed by
+            // Term.Context (Lean 4.27–4.28): 8 object fields followed by
+            // 9 scalar (Bool) bytes. Same object layout as 4.29+, but the
+            // `isMetaSection` and `checkDeprecated` scalars do not exist
+            // yet. Object fields (declaration order): declName?, macroStack,
+            // autoBoundImplicitContext, autoBoundImplicitForbidden,
+            // sectionVars, sectionFVars, tacSnap?, fixedTermElabs.
+            const NUM_OBJ_FIELDS: u32 = 8;
+            let ctx = ffi::lean_alloc_ctor(0, NUM_OBJ_FIELDS, 9);
+            let set_obj = |i: u32, v: *mut ffi::lean_object| ffi::inline::lean_ctor_set(ctx, i, v);
+            let scalar_base = NUM_OBJ_FIELDS * std::mem::size_of::<*mut ffi::lean_object>() as u32;
+            let set_bool = |scalar_idx: u32, v: u8| {
+                ffi::inline::lean_ctor_set_uint8(ctx, scalar_base + scalar_idx, v)
+            };
+
+            set_obj(0, ffi::inline::lean_box(0)); // declName? = none
+            set_obj(1, ffi::inline::lean_box(0)); // macroStack = []
+            set_obj(2, ffi::inline::lean_box(0)); // autoBoundImplicitContext = none
+            set_obj(
+                3,
+                ffi::inline::lean_alloc_closure(
+                    lean_expr_is_sort as *mut std::ffi::c_void,
+                    1u32,
+                    0,
+                ),
+            ); // autoBoundImplicitForbidden (never-called 1-arg bool fn)
+            set_obj(4, empty_name_map()); // sectionVars = {}
+            set_obj(5, empty_name_map()); // sectionFVars = {}
+            set_obj(6, ffi::inline::lean_box(0)); // tacSnap? = none
+            set_obj(7, persistent_array_empty()); // fixedTermElabs = #[]
+
+            // Scalar bytes (declaration order, all Bool).
+            set_bool(0, 1); // mayPostpone
+            set_bool(1, 1); // errToSorry
+            set_bool(2, 1); // implicitLambda
+            set_bool(3, 1); // heedElabAsElim
+            set_bool(4, 0); // isNoncomputableSection
+            set_bool(5, 0); // ignoreTCFailures
+            set_bool(6, 0); // inPattern
+            set_bool(7, 1); // saveRecAppSyntax
+            set_bool(8, 0); // holesAsSyntheticOpaque
+
+            return Ok(LeanBound::from_owned_ptr(lean, ctx));
+        }
+        #[cfg(not(lean_4_27))]
+        {
+            // Term.Context (Lean < 4.27): 7 object fields followed by
             // 11 scalar (Bool) bytes, per Lean's object-first ctor layout.
-            // Object fields (declaration order): declName?, macroStack,
             // autoBoundImplicits, autoBoundImplicitForbidden, sectionVars,
             // sectionFVars, tacSnap?.
             // Scalar bytes (declaration order): mayPostpone, errToSorry,
@@ -1868,14 +1914,23 @@ unsafe fn mk_command_context<'l>(
     Ok(LeanBound::from_owned_ptr(lean, ctx))
 }
 
-/// Build a `Lean.Elab.Command.State` (v4.25 layout, 8 object fields) from an
-/// environment.
+/// Build a `Lean.Elab.Command.State` from an environment.
+///
+/// Layout: 11 object fields on Lean 4.25–4.33
+/// (env, messages, scopes, usedQuotCtxts, nextMacroScope, maxRecDepth,
+/// ngen, auxDeclNGen, infoState, traceState, snapshotTasks), plus a
+/// 12th object field `prevLinterStates : Option (Task (Array
+/// LinterState))` (default `none`) appended in Lean 4.34 — verified
+/// against the `Command.lean` sources of v4.25.2, v4.28.0, v4.30.0,
+/// v4.31.0, v4.32.0, v4.33.0 and the 4.34-nightly commit 23393b95.
 unsafe fn mk_command_state<'l>(
     env: &LeanBound<'l, LeanEnvironment>,
 ) -> LeanResult<*mut ffi::lean_object> {
-    // Command.State has 11 object fields on v4.25:
-    // env, messages, scopes, usedQuotCtxts, nextMacroScope, maxRecDepth,
-    // ngen, auxDeclNGen, infoState, traceState, snapshotTasks.
+    // Command.State: 11 object fields on Lean 4.25–4.33, 12 on 4.34+
+    // (the 4.34 field `prevLinterStates` is appended last).
+    #[cfg(lean_4_34)]
+    let state = ffi::lean_alloc_ctor(0, 12, 0);
+    #[cfg(not(lean_4_34))]
     let state = ffi::lean_alloc_ctor(0, 11, 0);
     // 0: env
     let env_ptr = env.as_ptr();
@@ -1959,5 +2014,8 @@ unsafe fn mk_command_state<'l>(
     // 10: snapshotTasks = #[] (empty Array)
     let empty_arr = ffi::array::lean_mk_empty_array();
     ffi::lean_ctor_set(state, 10, empty_arr);
+    // 11: prevLinterStates (Option ...) = none (Lean 4.34+ only)
+    #[cfg(lean_4_34)]
+    ffi::lean_ctor_set(state, 11, ffi::lean_box(0));
     Ok(state)
 }
