@@ -278,12 +278,13 @@ unsafe fn empty_name_map() -> *mut ffi::lean_object {
 /// against the `TermElabM.lean` source of each version):
 /// - Lean < 4.27 (4.25.x, 4.26.x): 7 object fields + 11 Bool scalars
 ///   (`autoBoundImplicits : PersistentArray` object, `autoBoundImplicit` scalar).
-/// - Lean 4.27–4.28: 8 object fields + 9 Bool scalars (`autoBoundImplicits`
+/// - Lean 4.27–4.28: 8 object fields + 10 Bool scalars (`autoBoundImplicits`
 ///   became `autoBoundImplicitContext : Option AutoBoundImplicitContext`,
 ///   `fixedTermElabs : Array FixedTermElabRef` was appended, and
-///   `autoBoundImplicit : Bool` was removed).
-/// - Lean 4.29+: 8 object fields + 11 Bool scalars (the 4.27–4.28 object
-///   layout plus `isMetaSection` and `checkDeprecated` scalars).
+///   `autoBoundImplicit : Bool` was removed; `checkDeprecated` was already
+///   present since 4.25).
+/// - Lean 4.29+: 8 object fields + 11 Bool scalars (the 4.27–4.28 layout
+///   plus the `isMetaSection` scalar).
 ///
 /// # Safety
 ///
@@ -358,13 +359,14 @@ pub unsafe fn default_term_context<'l>(
         #[cfg(all(lean_4_27, not(lean_4_29)))]
         {
             // Term.Context (Lean 4.27–4.28): 8 object fields followed by
-            // 9 scalar (Bool) bytes. Same object layout as 4.29+, but the
-            // `isMetaSection` and `checkDeprecated` scalars do not exist
-            // yet. Object fields (declaration order): declName?, macroStack,
-            // autoBoundImplicitContext, autoBoundImplicitForbidden,
-            // sectionVars, sectionFVars, tacSnap?, fixedTermElabs.
+            // 10 scalar (Bool) bytes. Same object layout as 4.29+, but the
+            // `isMetaSection` scalar does not exist yet (`checkDeprecated`
+            // has existed since 4.25). Object fields (declaration order):
+            // declName?, macroStack, autoBoundImplicitContext,
+            // autoBoundImplicitForbidden, sectionVars, sectionFVars,
+            // tacSnap?, fixedTermElabs.
             const NUM_OBJ_FIELDS: u32 = 8;
-            let ctx = ffi::lean_alloc_ctor(0, NUM_OBJ_FIELDS, 9);
+            let ctx = ffi::lean_alloc_ctor(0, NUM_OBJ_FIELDS, 10);
             let set_obj = |i: u32, v: *mut ffi::lean_object| ffi::inline::lean_ctor_set(ctx, i, v);
             let scalar_base = NUM_OBJ_FIELDS * std::mem::size_of::<*mut ffi::lean_object>() as u32;
             let set_bool = |scalar_idx: u32, v: u8| {
@@ -397,8 +399,9 @@ pub unsafe fn default_term_context<'l>(
             set_bool(6, 0); // inPattern
             set_bool(7, 1); // saveRecAppSyntax
             set_bool(8, 0); // holesAsSyntheticOpaque
+            set_bool(9, 1); // checkDeprecated
 
-            return Ok(LeanBound::from_owned_ptr(lean, ctx));
+            Ok(LeanBound::from_owned_ptr(lean, ctx))
         }
         #[cfg(not(lean_4_27))]
         {

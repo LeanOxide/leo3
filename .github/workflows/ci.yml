@@ -264,6 +264,22 @@ jobs:
       # W-350): one aborted binary must not mask every later binary.
       command: bash .github/scripts/cargo-test-full.sh cargo test --locked --all-features --workspace
 
+  compat-manual-meta-defaults:
+    name: Compat / Manual Meta Defaults (Linux)
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'CI-build-full')
+    uses: ./.github/workflows/test.yml
+    with:
+      os: ubuntu-latest
+      lean: stable
+      save-cache: ${{ github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'CI-save-pr-cache') }}
+      suite: Compat / Manual Meta Defaults
+      # `LEO3_FORCE_MANUAL_META_DEFAULTS=1` forces the hand-built
+      # Core.Context / Core.State / Meta.Context / Meta.State fallbacks
+      # (otherwise only hit on Windows when a BSS symbol is missing), so
+      # every layout change to those constructors is actually exercised
+      # on Linux. Covers lean 4.25-4.34 layout gates in `meta/context.rs`.
+      command: 'LEO3_FORCE_MANUAL_META_DEFAULTS=1 cargo test --locked -p leo3 --all-features --test test_meta_repl --test test_run_cmd --test test_metam --test test_tactic --test test_infer_type --test test_is_def_eq --test test_type_checking --test meta_context_comprehensive'
+
   heavy-careful:
     name: Heavy / Careful (UB detection)
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'CI-build-full')
