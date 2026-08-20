@@ -44,14 +44,19 @@
 //! far above allocator/GC noise and far below any gross per-call
 //! growth.
 //!
-//! ## Known residual (tracked separately, not asserted here)
+//! ## Known residual (tracked in W-359, not asserted here)
 //!
-//! On 4.33 the runtime itself retains per-command state in a frontend
-//! global registry (pre-existing, present on the parent commit):
-//! `axiom` commands grow RSS by ~20 KiB/call with the base-env rc flat,
-//! and the per-call environment objects keep ~5 extra references after
-//! all calls finish. That growth is Lean-side, independent of the
-//! W-351 plumbing fix, and is tracked in its own issue.
+//! On 4.33 (and other 4.26+ frontends), per-command state is retained in
+//! the Lean session: RSS grows ~26-86 KiB/call depending on command
+//! kind (base-env rc flat), and per-call environment objects keep ~5
+//! extra references after all calls finish. W-359 ruled out the stock
+//! frontend as the cause — vanilla 4.33.0-rc1 in the identical loop is
+//! clean at ~0.2-0.4 KiB/call, and 4.25.2 shows no env-level retention
+//! even under the leo3 runtime — so the retention needs a 4.26+
+//! frontend combined with the leo3 task-manager/worker context, and the
+//! fix belongs on the leo3 side. See W-359 and its probes
+//! (`test_w359_registry_probe.rs`, `test_w359_finalize_probe.rs`,
+//! `tests/data/w359_vanilla.lean`).
 
 #![cfg(all(
     feature = "meta",
@@ -104,7 +109,7 @@ fn test_run_cmd_no_object_leak_across_calls() {
         let metam = MetaMContext::new(lean, env)?;
         let env_ptr = metam.env().as_ptr();
         let run = |cmd: &str| -> LeanResult<()> {
-            let stx = leo3::meta::repl::parse_command(lean, &metam.env(), cmd)?;
+            let stx = leo3::meta::repl::parse_command(lean, metam.env(), cmd)?;
             leo3::meta::repl::run_command(lean, &metam, &stx).map(|_| ())
         };
         // Warm up: first calls pay one-time costs (module cache,

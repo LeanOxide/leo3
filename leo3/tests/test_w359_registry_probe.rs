@@ -1,7 +1,7 @@
 //! W-359 experimental probe: per-`run_command` frontend registry growth on
 //! 4.26+ (measured on 4.33.0-rc1).
 //!
-//! Diagnostic, not a regression assertion. Two probes:
+//! Diagnostic, not a regression assertion. Five probes:
 //!
 //! `probe_per_call_env_retention` — for `run_command("axiom X_N : Nat")`
 //! calls that all start from the same base environment, measures the
@@ -10,10 +10,31 @@
 //! `checked` via `lean_task_get` releases references, and RSS growth.
 //!
 //! `probe_command_kind_bisection` — RSS slope per command kind
-//! (`#check` / `axiom` / `def` / `set_option`) to localize the growth to
-//! the `addDecl` path, then finalizes the Lean task manager and re-reads
-//! the per-call env refcounts to test whether the task manager's global
-//! task registry is the retainer.
+//! (`#check` / `axiom` / `def`) to localize the growth to the `addDecl`
+//! path, plus per-call env refcounts.
+//!
+//! `probe_drop_canary` — drops all per-call envs and re-reads the
+//! refcounts of one per-call env's subtree (`checked` task, its
+//! `m_value`, kernel env, base `VisibilityMap`), isolating which objects
+//! a global still pins.
+//!
+//! `probe_task_canary` / `probe_promise_canary` — raw task-manager
+//! canaries (no frontend): a completed mapped task and a resolved
+//! promise, testing whether the runtime retains finished tasks or their
+//! values.
+//!
+//! The mid-process `lean_finalize_task_manager()` re-read experiment
+//! lives in the standalone binary `test_w359_finalize_probe.rs`:
+//! finalization is process-global and one-way, so it must not share a
+//! process with the probes above.
+//!
+//! Layout guard: the frontend probes read 4.26+ `Environment` internals
+//! by raw pointer. On toolchains with a different frontend layout (e.g.
+//! v4.20.0, no `checked` field) they print a reason and skip instead of
+//! reading garbage.
+//!
+//! Vanilla (no leo3) comparison: `tests/data/w359_vanilla.lean` (same
+//! loop, per-call envs dropped each iteration, on the stock toolchain).
 //!
 //! Run with `--nocapture` to see the diagnostics.
 
@@ -51,6 +72,41 @@ fn task_state(t: *const leo3::ffi::object::lean_object) -> u8 {
     unsafe { leo3::ffi::closure::lean_io_get_task_state_core(t) }
 }
 
+/// Layout guard for the frontend probes: they read 4.26+
+/// `Environment` internals (the `checked` task at object field 2, task
+/// words, ...) by raw pointer, which is UB on toolchains with a
+/// different frontend layout (e.g. v4.20.0 has no `checked` field).
+/// Returns `false` (printing why) when the env does not match the
+/// assumed layout: 8 object fields, struct tag 0 (the `isExporting`
+/// scalar is not counted in `m_other`).
+fn frontend_env_layout_ok(e: *const leo3::ffi::object::lean_object, probe: &str) -> bool {
+    leo3::run_worker(|| unsafe {
+        if (*e).m_other == 8 && (*e).m_tag == 0 {
+            true
+        } else {
+            eprintln!(
+                "[w359] {probe}: skip — frontend Environment has \
+                 m_other={} m_tag={}; assumed 8/0 (4.26+ layout with the \
+                 `checked` task at object field 2)",
+                (*e).m_other,
+                (*e).m_tag
+            );
+            false
+        }
+    })
+}
+
+/// 4.33 task-state codes (lean.h `LEAN_TASK_STATE_*`, matching
+/// `IO.TaskState`): 0 = waiting, 1 = running, 2 = finished.
+fn task_state_name(s: u8) -> &'static str {
+    match s {
+        0 => "waiting",
+        1 => "running",
+        2 => "finished",
+        _ => "unknown",
+    }
+}
+
 type Env<'l> = LeanBound<'l, LeanEnvironment>;
 
 #[test]
@@ -61,8 +117,11 @@ fn probe_per_call_env_retention() {
         let env = import_modules(lean, &["Lean"], 0)?;
         let metam = MetaMContext::new(lean, env)?;
         let base_ptr = metam.env().as_ptr();
+        if !frontend_env_layout_ok(base_ptr, "probe_per_call_env_retention") {
+            return Ok(());
+        }
         let run = |cmd: &str| -> LeanResult<Env<'_>> {
-            let stx = leo3::meta::repl::parse_command(lean, &metam.env(), cmd)?;
+            let stx = leo3::meta::repl::parse_command(lean, metam.env(), cmd)?;
             leo3::meta::repl::run_command(lean, &metam, &stx)
         };
 
@@ -71,7 +130,7 @@ fn probe_per_call_env_retention() {
             run(&format!("axiom W{i} : Nat"))?;
         }
 
-        let rss_before = leo3::run_worker(|| rss_bytes());
+        let rss_before = leo3::run_worker(rss_bytes);
         let mut envs: Vec<Env<'_>> = Vec::with_capacity(ITERS as usize);
         for i in 0..ITERS {
             let e = run(&format!("axiom X{i} : Nat"))?;
@@ -81,7 +140,7 @@ fn probe_per_call_env_retention() {
             }
             envs.push(e);
         }
-        let rss_after = leo3::run_worker(|| rss_bytes());
+        let rss_after = leo3::run_worker(rss_bytes);
 
         let (rcs, states): (Vec<i32>, Vec<u8>) = leo3::run_worker(|| unsafe {
             let mut rcs = Vec::with_capacity(envs.len());
@@ -96,9 +155,15 @@ fn probe_per_call_env_retention() {
         let base_rc = leo3::run_worker(|| unsafe { (*base_ptr).m_rc });
         let (min_rc, max_rc) = (rcs.iter().min(), rcs.iter().max());
         let distinct_states: std::collections::BTreeSet<u8> = states.iter().copied().collect();
+        let state_names: Vec<&str> = distinct_states
+            .iter()
+            .copied()
+            .map(task_state_name)
+            .collect();
         eprintln!(
             "[w359] after {ITERS} axioms: base rc={base_rc}; per-call env rc \
-             min={min_rc:?} max={max_rc:?}; distinct checked-task states: {distinct_states:?}"
+             min={min_rc:?} max={max_rc:?}; distinct checked-task states: \
+             {distinct_states:?} ({state_names:?})"
         );
         let rss_growth = rss_after.saturating_sub(rss_before);
         eprintln!(
@@ -113,13 +178,14 @@ fn probe_per_call_env_retention() {
             for e in &envs {
                 let p = e.as_ptr();
                 let t = checked_task(p as *const _);
-                let v = leo3::ffi::closure::lean_task_get(t as leo3::ffi::b_lean_obj_arg);
-                leo3::ffi::lean_dec(v as *mut leo3::ffi::object::lean_object);
+                // `lean_task_get` borrows the result (`b_lean_obj_res`);
+                // dec'ing it would underflow each per-call kernel env's rc.
+                leo3::ffi::closure::lean_task_get(t as leo3::ffi::b_lean_obj_arg);
                 out.push((*p).m_rc);
             }
             out
         });
-        let rss_pumped = leo3::run_worker(|| rss_bytes());
+        let rss_pumped = leo3::run_worker(rss_bytes);
         let (min2, max2) = (pumped_rcs.iter().min(), pumped_rcs.iter().max());
         eprintln!(
             "[w359] after draining checked tasks: per-call env rc min={min2:?} \
@@ -142,8 +208,11 @@ fn probe_bisection_inner<'l>(lean: Lean<'l>) -> LeanResult<()> {
     let env = import_modules(lean, &["Lean"], 0)?;
     let metam = MetaMContext::new(lean, env)?;
     let base_ptr = metam.env().as_ptr();
+    if !frontend_env_layout_ok(base_ptr, "probe_command_kind_bisection") {
+        return Ok(());
+    }
     let run = |cmd: &str| -> LeanResult<Env<'l>> {
-        let stx = leo3::meta::repl::parse_command(lean, &metam.env(), cmd)?;
+        let stx = leo3::meta::repl::parse_command(lean, metam.env(), cmd)?;
         leo3::meta::repl::run_command(lean, &metam, &stx)
     };
 
@@ -155,7 +224,7 @@ fn probe_bisection_inner<'l>(lean: Lean<'l>) -> LeanResult<()> {
 
     let phase =
         |name: &str, make: &dyn Fn(u32) -> String, keep_envs: bool| -> (u64, Vec<Env<'l>>) {
-            let rss0 = leo3::run_worker(|| rss_bytes());
+            let rss0 = leo3::run_worker(rss_bytes);
             let mut envs = Vec::new();
             let mut ptrs: Vec<*mut leo3::ffi::object::lean_object> = Vec::new();
             for i in 0..ITERS {
@@ -170,8 +239,11 @@ fn probe_bisection_inner<'l>(lean: Lean<'l>) -> LeanResult<()> {
                 }
                 ptrs.push(p);
             }
-            let distinct = ptrs.iter().copied().collect::<std::collections::BTreeSet<_>>();
-            let rss1 = leo3::run_worker(|| rss_bytes());
+            let distinct = ptrs
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>();
+            let rss1 = leo3::run_worker(rss_bytes);
             let growth = rss1.saturating_sub(rss0);
             eprintln!(
                 "[w359] {name}: {ITERS} calls, RSS growth {growth} bytes (~{} KiB/call), \
@@ -206,29 +278,20 @@ fn probe_bisection_inner<'l>(lean: Lean<'l>) -> LeanResult<()> {
          def min={dmin:?} max={dmax:?}"
     );
 
-    // Experiment: finalize the Lean task manager and re-read.
-    eprintln!("[w359] finalizing task manager ...");
-    leo3::run_worker(|| unsafe {
-        leo3::ffi::closure::lean_finalize_task_manager();
-    });
-    let (amin2, amax2) = rc_of(&ax_envs);
-    let (dmin2, dmax2) = rc_of(&def_envs);
-    let rss_final = leo3::run_worker(|| rss_bytes());
-    eprintln!(
-        "[w359] after task-manager finalization: axiom rc min={amin2:?} max={amax2:?}; \
-         def rc min={dmin2:?} max={dmax2:?}; RSS now {rss_final}"
-    );
+    // The `lean_finalize_task_manager()` re-read experiment lives in the
+    // standalone binary `test_w359_finalize_probe.rs`: finalization is a
+    // process-global, one-way operation and must not share a process with
+    // the other probes (in-flight tasks would race it; process-level
+    // measurements would contaminate each other under --test-threads=8).
     Ok(())
 }
 
 /// Field accessor for the 4.33 frontend `Environment` object.
-fn env_field(env: *const leo3::ffi::object::lean_object, i: u32) -> *mut leo3::ffi::object::lean_object {
+fn env_field(
+    env: *const leo3::ffi::object::lean_object,
+    i: u32,
+) -> *mut leo3::ffi::object::lean_object {
     unsafe { leo3::ffi::lean_ctor_get(env, i) as *mut leo3::ffi::object::lean_object }
-}
-
-/// `lean_task` layout (4.33 lean.h): header (8) + m_value (8) + m_imp (8).
-fn task_finished(t: *const leo3::ffi::object::lean_object) -> bool {
-    unsafe { !(* (t as *const *mut leo3::ffi::object::lean_object).add(1) ).is_null() }
 }
 
 /// Decisive retention test: every per-call `Environment` `env_i` produced by
@@ -243,6 +306,9 @@ fn probe_drop_canary() {
     leo3::test_with_lean(|lean: Lean<'_>| -> LeanResult<()> {
         let env0 = import_modules(lean, &["Lean"], 0)?;
         let metam = MetaMContext::new(lean, env0)?;
+        if !frontend_env_layout_ok(metam.env().as_ptr(), "probe_drop_canary") {
+            return Ok(());
+        }
         let (k0, header, fields, k0_rc_init) = leo3::run_worker(|| unsafe {
             let e0 = metam.env().as_ptr();
             let h = e0 as *const u64;
@@ -253,7 +319,10 @@ fn probe_drop_canary() {
                 (*e0).m_tag,
             );
             let mut fields = Vec::new();
-            for i in 0..10usize {
+            // Read exactly the object fields (`m_other` of them) — reading
+            // beyond them would overflow the object (8 fields on 4.33; the
+            // trailing scalar word is not an object field).
+            for i in 0..(*e0).m_other as usize {
                 fields.push(h.add(1 + i).read_unaligned());
             }
             let vm0 = env_field(e0, 0); // VisibilityMap shared by base
@@ -263,7 +332,7 @@ fn probe_drop_canary() {
             "[w359-drop] E0 header (rc,cs,other,tag)={header:?}; raw fields={fields:?}; VM-rc={k0_rc_init}"
         );
         let run = |cmd: &str| -> LeanResult<Env<'_>> {
-            let stx = leo3::meta::repl::parse_command(lean, &metam.env(), cmd)?;
+            let stx = leo3::meta::repl::parse_command(lean, metam.env(), cmd)?;
             leo3::meta::repl::run_command(lean, &metam, &stx)
         };
 
@@ -274,7 +343,7 @@ fn probe_drop_canary() {
         let rc_of = |p: *const leo3::ffi::object::lean_object| {
             leo3::run_worker(|| unsafe { (*p).m_rc })
         };
-        let rss = || leo3::run_worker(|| rss_bytes());
+        let rss = || leo3::run_worker(rss_bytes);
 
         let k0_rc_warm = rc_of(k0);
         let rss0 = rss();
@@ -290,7 +359,8 @@ fn probe_drop_canary() {
         let audit = leo3::run_worker(|| unsafe {
             let p = e.as_ptr();
             let h = p as *const u64;
-            let fields: Vec<u64> = (0..10usize).map(|i| h.add(1 + i).read_unaligned()).collect();
+            let fields: Vec<u64> =
+                (0..(*p).m_other as usize).map(|i| h.add(1 + i).read_unaligned()).collect();
             let header = ((*p).m_rc, (*p).m_other, (*p).m_tag);
             let t_checked = env_field(p, 2);
             let t_reals = env_field(p, 7);
@@ -325,17 +395,23 @@ fn probe_drop_canary() {
 
         // Safe drop: keep observer refs to env_10's per-call subtree —
         // the env object itself, its `checked` task (f2), that task's
-        // `m_value` (a pure task wrapping the per-call kernel env), the
-        // kernel env, the per-call base `VisibilityMap` (f0) and the
-        // kernel env in its `private` slot — so their refcounts can be
-        // read after all `envs` are dropped. This mirrors the REPL
-        // scenario where per-call envs are discarded by the caller.
+        // `m_value` (the per-call kernel env itself on 4.33; see the
+        // printed tag), the kernel env, the per-call base `VisibilityMap`
+        // (f0) and the kernel env in its `private` slot — so their
+        // refcounts can be read after all `envs` are dropped. This
+        // mirrors the REPL scenario where per-call envs are discarded by
+        // the caller.
         let held = leo3::run_worker(|| unsafe {
             let p = e.as_ptr();
             let t10 = env_field(p, 2);
             let v10 = *(t10 as *const *mut leo3::ffi::object::lean_object).add(1);
-            // `m_value` is a Finished pure task (tag 252) wrapping the
-            // per-call kernel env; fall back to the raw value otherwise.
+            // `m_value` is the per-call kernel env itself on 4.33:
+            // `modifyCheckedAsync` does `checked := checked.map f`, so a
+            // Finished map task's `m_value` is the kernel env, not a
+            // nested task. The tag-252 (LeanTask) unwrap below is
+            // defensive for toolchains that wrap the value in a pure
+            // task; the printed tag shows which case occurred.
+            let v10_tag = if v10.is_null() { -1 } else { (*v10).m_tag as i32 };
             let k10 = if !v10.is_null() && (*v10).m_tag == 252 {
                 *(v10 as *const *mut leo3::ffi::object::lean_object).add(1)
             } else {
@@ -352,10 +428,19 @@ fn probe_drop_canary() {
                     leo3::ffi::lean_inc(q);
                 }
             }
-            (p, t10, v10, k10, vm10, k0p)
+            (p, t10, v10, k10, vm10, k0p, v10_tag)
         });
 
         let rss_held = rss();
+        eprintln!(
+            "[w359-drop] env_10 checked-task m_value tag={}: {}",
+            held.6,
+            if held.6 == 252 {
+                "tag 252 = LeanTask: unwrapped the inner value as the kernel env"
+            } else {
+                "no task wrapper: m_value is the kernel env directly"
+            }
+        );
         drop(envs);
         std::thread::yield_now();
 
@@ -387,13 +472,12 @@ fn probe_drop_canary() {
              VM.private kernel-env rc={} (2=clean, 3=retained)",
             dropped.0, dropped.1, dropped.2, dropped.3, dropped.4, dropped.5
         );
+        let freed = rss_held as i64 - dropped.6 as i64;
+        let retained = rss1 as i64 - rss0 as i64 - freed;
         eprintln!(
             "[w359-drop] RSS held={} -> dropped={} (freed {} bytes on drop; \
              ~{} KiB/call retained by a global afterwards)",
-            rss_held,
-            dropped.6,
-            rss_held as i64 - dropped.6 as i64,
-            (N as i64 * 20480).saturating_sub(rss_held as i64 - dropped.6 as i64) / N as i64 / 1024
+            rss_held, dropped.6, freed, retained / N as i64 / 1024
         );
         leo3::run_worker(|| unsafe {
             for q in [held.0, held.1, held.2, held.3, held.4, held.5] {
@@ -464,7 +548,9 @@ unsafe fn mk_identity_closure(
         .write(w359_identity as *mut std::os::raw::c_void); // m_fun @8
     (c as *mut u16).add(8).write(2); // m_arity @16
     (c as *mut u16).add(9).write(1); // m_num_fixed @18
-    (c as *mut *mut leo3::ffi::object::lean_object).add(3).write(upvalue); // m_objs[0] @24
+    (c as *mut *mut leo3::ffi::object::lean_object)
+        .add(3)
+        .write(upvalue); // m_objs[0] @24
     leo3::ffi::lean_inc(upvalue);
     c
 }
@@ -485,13 +571,8 @@ fn probe_task_canary() {
                         let d = fresh_mt(); // upvalue canary (observer ref, held to the end)
                         let cl = mk_identity_closure(d); // closure takes its own ref on `d`
                         let t_pure = leo3::ffi::closure::lean_task_pure(s);
-                        let _t_map = leo3::ffi::closure::lean_task_map_core(
-                            cl,
-                            t_pure,
-                            0,
-                            sync,
-                            false,
-                        );
+                        let _t_map =
+                            leo3::ffi::closure::lean_task_map_core(cl, t_pure, 0, sync, false);
                         // Block until Finished. `lean_task_get` borrows both the
                         // task and the result (`b_obj_arg`/`b_obj_res`), so our
                         // reference to the mapped task must be released explicitly:
@@ -508,16 +589,14 @@ fn probe_task_canary() {
                     // from transient worker-frame retention.
                     let end = s_vals.len();
                     let count = |s: &[*mut leo3::ffi::object::lean_object],
-                                d: &[*mut leo3::ffi::object::lean_object]| -> (u32, u32) {
+                                 d: &[*mut leo3::ffi::object::lean_object]|
+                     -> (u32, u32) {
                         (
                             s.iter().filter(|q| (*(**q)).m_rc.abs() > 1).count() as u32,
                             d.iter().filter(|q| (*(**q)).m_rc.abs() > 1).count() as u32,
                         )
                     };
-                    let (kt1, kc1) = count(
-                        &s_vals[base..end],
-                        &d_vals[base..end],
-                    );
+                    let (kt1, kc1) = count(&s_vals[base..end], &d_vals[base..end]);
                     for _ in 0..10 {
                         let s = fresh_mt();
                         leo3::ffi::lean_inc(s);
@@ -532,10 +611,7 @@ fn probe_task_canary() {
                         leo3::ffi::lean_dec(d);
                     }
                     std::thread::sleep(std::time::Duration::from_millis(200));
-                    let (kt2, kc2) = count(
-                        &s_vals[base..end],
-                        &d_vals[base..end],
-                    );
+                    let (kt2, kc2) = count(&s_vals[base..end], &d_vals[base..end]);
                     eprintln!(
                         "[w359-task-canary] sync={sync} {N} mapTasks (no task refs kept): \
                          task-value retained: immediate={kt1} after-flush={kt2} \
@@ -562,14 +638,28 @@ fn probe_promise_canary() {
             unsafe {
                 let canary = fresh_mt();
                 leo3::ffi::lean_inc(canary); // observer ref, kept to the end
-                // 4.33: `Promise α` IS the runtime `lean_promise_object`
-                // ({ m_header, m_result : Task α }) — not a ctor wrapper.
+                                             // 4.33: `Promise α` IS the runtime `lean_promise_object`
+                                             // ({ m_header, m_result : Task α }) — not a ctor wrapper.
                 let p = leo3::ffi::closure::lean_io_promise_new(leo3::ffi::io::lean_io_mk_world());
                 let tag_p = (*p).m_tag;
+                // Layout guard: reading `m_result` below assumes the
+                // `lean_promise_object` layout (tag 244 = LeanPromise on
+                // 4.33); skip on toolchains with a different promise
+                // object instead of reading garbage.
+                if tag_p != 244 {
+                    eprintln!(
+                        "[w359-promise-canary] skip — promise object tag is \
+                         {tag_p} (assumed 244 = LeanPromise)"
+                    );
+                    leo3::ffi::lean_dec(p);
+                    leo3::ffi::lean_dec(canary);
+                    return Ok(());
+                }
                 let m_result = *(p as *const *mut leo3::ffi::object::lean_object).add(1);
                 let t_p = leo3::ffi::closure::lean_io_promise_result_opt(p);
                 leo3::ffi::lean_inc(t_p); // observer ref
-                // Consumes `canary`; may or may not consume `p` (4.33 ABI).
+                                          // Consumes `canary`; borrows `p` (verified against 4.33's
+                                          // libleanshared: p's rc stays 1 through result_opt/resolve).
                 let r = leo3::ffi::closure::lean_io_promise_resolve(
                     canary,
                     p,
@@ -579,26 +669,21 @@ fn probe_promise_canary() {
                 if (r as usize) & 1 == 0 {
                     leo3::ffi::lean_dec(r);
                 }
-                // The runtime zeroes `m_rc` before freeing, so 0 here means
-                // the C resolve consumed `p` (we must not dec it again).
-                let rc_p = (*p).m_rc;
                 // Blocks until Finished; the returned value is borrowed.
                 let _res = leo3::ffi::closure::lean_task_get(t_p);
                 let rc_t = (*t_p).m_rc;
                 let rc_c = (*canary).m_rc;
                 eprintln!(
-                    "[w359-promise-canary] held: p tag={tag_p} rc={rc_p} \
-                     (0=C consumed it, 1=we still own it) m_result same-as-t_p={}\
+                    "[w359-promise-canary] held: p tag={tag_p} m_result same-as-t_p={}\
                      t_p rc={rc_t} (3=p+us+observer clean) canary={rc_c} \
                      (2=us + task result clean)",
                     std::ptr::eq(m_result, t_p)
                 );
-                // Drop every ref we own: t_p (2x) and p when we own it.
+                // Drop every ref we own: t_p (2x) and p (we own the
+                // promise; `lean_io_promise_resolve` borrows it).
                 leo3::ffi::lean_dec(t_p);
                 leo3::ffi::lean_dec(t_p);
-                if rc_p == 1 {
-                    leo3::ffi::lean_dec(p);
-                }
+                leo3::ffi::lean_dec(p);
                 std::thread::yield_now();
                 let rc_c2 = (*canary).m_rc;
                 eprintln!(

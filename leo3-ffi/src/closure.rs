@@ -355,7 +355,8 @@ extern "C" {
     ///
     /// # Safety
     /// - `t` must be a valid task object
-    ///   Returns: 0 = running, 1 = finished, 2 = aborted
+    ///   Returns: 0 = waiting, 1 = running, 2 = finished
+    ///   (`LEAN_TASK_STATE_WAITING/RUNNING/FINISHED` in lean.h)
     pub fn lean_io_get_task_state_core(t: b_lean_obj_arg) -> u8;
 
 }
