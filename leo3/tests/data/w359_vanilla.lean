@@ -13,6 +13,10 @@ The benchmark runs as a top-level command so it can capture the current
 Loop semantics: each iteration's output environment is DROPPED
 immediately (`discard`), mirroring the REPL/caller behavior; only the
 fixed base env is kept alive across the loop.
+Sampling note: the ~64 KiB one-time elaboration warm-up happens during
+the VERIFY call above and is not counted in the measured growth
+(`rss0` is sampled after it), so a raw first-call measurement is
+~64 KiB higher than the numbers printed below.
 -/
 import Lean
 

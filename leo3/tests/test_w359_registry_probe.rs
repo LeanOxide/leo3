@@ -295,11 +295,12 @@ fn env_field(
 }
 
 /// Decisive retention test: every per-call `Environment` `env_i` produced by
-/// `addDecl` shares `base` (object field 0) with the imported env's kernel
-/// environment `K0` (`addConstAsync` updates `checked`/`allRealizations`/
-/// `asyncConstsMap` but not `base`). `K0` itself is never freed while the
-/// imported env is alive, so its refcount is a safe canary for whether the
-/// per-call envs survive after we drop our Rust references.
+/// `addDecl` shares `base` (object field 0, the base `VisibilityMap`) with
+/// the imported env's base (`addConstAsync` updates `checked`/
+/// `allRealizations`/`asyncConstsMap` but not `base`). That `VisibilityMap`
+/// is never freed while the imported env is alive, so its refcount is a
+/// safe canary for whether the per-call envs survive after we drop our
+/// Rust references.
 #[test]
 fn probe_drop_canary() {
     const N: u32 = 100;
@@ -309,7 +310,8 @@ fn probe_drop_canary() {
         if !frontend_env_layout_ok(metam.env().as_ptr(), "probe_drop_canary") {
             return Ok(());
         }
-        let (k0, header, fields, k0_rc_init) = leo3::run_worker(|| unsafe {
+        let (base_vm, header, fields, base_vm_rc_init) =
+            leo3::run_worker(|| unsafe {
             let e0 = metam.env().as_ptr();
             let h = e0 as *const u64;
             let header = (
@@ -325,11 +327,11 @@ fn probe_drop_canary() {
             for i in 0..(*e0).m_other as usize {
                 fields.push(h.add(1 + i).read_unaligned());
             }
-            let vm0 = env_field(e0, 0); // VisibilityMap shared by base
+            let vm0 = env_field(e0, 0); // base VisibilityMap (shared with per-call envs)
             (vm0, header, fields, (*vm0).m_rc)
         });
         eprintln!(
-            "[w359-drop] E0 header (rc,cs,other,tag)={header:?}; raw fields={fields:?}; VM-rc={k0_rc_init}"
+            "[w359-drop] E0 header (rc,cs,other,tag)={header:?}; raw fields={fields:?}; VM-rc={base_vm_rc_init}"
         );
         let run = |cmd: &str| -> LeanResult<Env<'_>> {
             let stx = leo3::meta::repl::parse_command(lean, metam.env(), cmd)?;
@@ -345,13 +347,13 @@ fn probe_drop_canary() {
         };
         let rss = || leo3::run_worker(rss_bytes);
 
-        let k0_rc_warm = rc_of(k0);
+        let base_vm_rc_warm = rc_of(base_vm);
         let rss0 = rss();
         let mut envs: Vec<Env<'_>> = Vec::with_capacity(N as usize);
         for i in 0..N {
             envs.push(run(&format!("axiom A{i} : Nat"))?);
         }
-        let k0_rc_held = rc_of(k0);
+        let base_vm_rc_held = rc_of(base_vm);
         let rss1 = rss();
         // Audit one per-call env's task fields before the drop.
         let e = &envs[10];
@@ -388,7 +390,7 @@ fn probe_drop_canary() {
         );
 
         eprintln!(
-            "[w359-drop] before drop: E0-base-VM rc {k0_rc_warm} -> {k0_rc_held}; \
+            "[w359-drop] before drop: E0-base-VM rc {base_vm_rc_warm} -> {base_vm_rc_held}; \
              RSS {rss0} -> {rss1} (+{} bytes over {N} calls)",
             rss1.saturating_sub(rss0)
         );
@@ -418,17 +420,17 @@ fn probe_drop_canary() {
                 v10
             };
             let vm10 = env_field(p, 0);
-            let k0p = if vm10.is_null() {
+            let vm_priv = if vm10.is_null() {
                 vm10
             } else {
                 env_field(vm10, 0)
             };
-            for q in [p, t10, v10, k10, vm10, k0p] {
+            for q in [p, t10, v10, k10, vm10, vm_priv] {
                 if !q.is_null() {
                     leo3::ffi::lean_inc(q);
                 }
             }
-            (p, t10, v10, k10, vm10, k0p, v10_tag)
+            (p, t10, v10, k10, vm10, vm_priv, v10_tag)
         });
 
         let rss_held = rss();
