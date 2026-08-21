@@ -211,7 +211,8 @@ impl CoreContext {
     /// Create empty Options
     ///
     /// Uses the `Inhabited Options` instance from the Lean runtime.
-    /// Falls back to `KVMap.empty` if the symbol is not available (Windows).
+    /// Falls back to a manual construction if the symbol is not available
+    /// (Windows) or `LEO3_FORCE_MANUAL_META_DEFAULTS` is set.
     ///
     /// Requires: `ensure_meta_initialized()` must have been called.
     fn mk_empty_options<'l>(lean: Lean<'l>) -> LeanResult<LeanBound<'l, LeanExpr>> {
@@ -225,13 +226,31 @@ impl CoreContext {
                     return Ok(LeanBound::from_owned_ptr(lean, options));
                 }
             }
-            // Fallback: KVMap.empty (always exported on Windows)
-            let kvmap = ffi::meta::get_KVMapEmpty();
-            if kvmap.is_null() {
-                return Err(crate::LeanError::null_pointer("KVMap.empty"));
+            // Manual fallback. Options erases to different shapes per version
+            // (verified against `src/Lean/Data/Options.lean` and the compiled
+            // symbols):
+            // - Lean < 4.28: `Options := KVMap` (= `RBMap Name DataValue`),
+            //   and `RBMap.empty` erases to the tagged scalar box(0)
+            //   (`l_Lean_RBMap_empty` is `mov $1,%eax; ret`).
+            // - Lean 4.28+: `structure Options { map : NameMap DataValue,
+            //   hasTrace : Bool }` = ctor (0, 1, 1): field 0 = box(1) (the
+            //   empty NameMap = `DTreeMap.empty`, whose single `root` field
+            //   erases to the `.empty` leaf ctor — tag 1, confirmed against
+            //   `l_Std_DTreeMap_empty` (`mov $3,%eax; ret`) and the BSS
+            //   `l_Lean_Options_empty` object: { +0x8 = 0x3, hasTrace = 0 }),
+            //   scalar byte = hasTrace false.
+            #[cfg(lean_4_28)]
+            {
+                let opts = ffi::lean_alloc_ctor(0, 1, 1);
+                // DTreeMap.empty erases to the tagged scalar box(1) (0x3).
+                ffi::lean_ctor_set(opts, 0, ffi::lean_box(1));
+                ffi::inline::lean_ctor_set_uint8(opts, ctor_scalar_offset(1, 0), 0);
+                Ok(LeanBound::from_owned_ptr(lean, opts))
             }
-            ffi::lean_inc(kvmap);
-            Ok(LeanBound::from_owned_ptr(lean, kvmap))
+            #[cfg(not(lean_4_28))]
+            {
+                Ok(LeanBound::from_owned_ptr(lean, ffi::lean_box(0)))
+            }
         }
     }
 
@@ -634,9 +653,10 @@ impl MetaContext {
     /// Manually construct a Meta.Context for Lean >= 4.25.
     ///
     /// In Lean >= 4.25, field 0 is `ConfigWithKey` (wraps Config + key UInt64).
-    /// Layout: ctor tag 0, 7 object fields + 3 scalar bytes on Lean 4.25–4.30,
-    /// 4 scalar bytes on Lean 4.31+ (`cacheInferType`, default true; verified
-    /// against the `Meta/Basic.lean` source of v4.25.2 and v4.33.0).
+    /// Layout: ctor tag 0, 7 object fields + 3 scalar bytes on Lean 4.25–4.27,
+    /// 4 scalar bytes on Lean 4.28+ (`cacheInferType`, default true; verified
+    /// against the `Meta/Basic.lean` sources of v4.25.2, v4.27.0, v4.28.0,
+    /// v4.30.0 and v4.33.0).
     ///
     /// Object fields:
     /// 0. configWithKey: ConfigWithKey (ctor 0, 1 obj field [Config], 8 scalar bytes [key: UInt64])
@@ -647,23 +667,29 @@ impl MetaContext {
     /// 5. synthPendingDepth: Nat (0)
     /// 6. canUnfold?: Option ... (none)
     ///
-    /// Scalar fields (3 bytes on 4.25–4.30, 4 on 4.31+):
+    /// Scalar fields (3 bytes on 4.25–4.27, 4 on 4.28+):
     /// offset 0: trackZetaDelta (Bool) = false
     /// offset 1: univApprox (Bool) = false
     /// offset 2: inTypeClassResolution (Bool) = false
-    /// offset 3: cacheInferType (Bool) = true (Lean 4.31+ only)
+    /// offset 3: cacheInferType (Bool) = true (Lean 4.28+ only)
     #[cfg(lean_4_25)]
     fn mk_default_manual_v425_plus<'l>(lean: Lean<'l>) -> LeanResult<LeanBound<'l, Self>> {
         unsafe {
-            #[cfg(lean_4_31)]
+            #[cfg(lean_4_28)]
             let ctx = ffi::lean_alloc_ctor(0, 7, 4);
-            #[cfg(not(lean_4_31))]
+            #[cfg(not(lean_4_28))]
             let ctx = ffi::lean_alloc_ctor(0, 7, 3);
 
             // field 0: ConfigWithKey — ctor 0, 1 obj field (Config), 8 scalar bytes (key: UInt64)
             let cwk = ffi::lean_alloc_ctor(0, 1, 8);
-            // Config: 0 obj fields, 18 scalar bytes
-            let config = ffi::lean_alloc_ctor(0, 0, 18);
+            // Config: 0 obj fields — 19 scalar bytes on Lean 4.25–4.33
+            // (zetaHave present since 4.25), 20 on 4.34+ (lean4 #14323
+            // appends `canUnfoldPredicateConfig : CanUnfoldPredicateConfig`
+            // = .default, 1 byte).
+            #[cfg(lean_4_34)]
+            let config = ffi::lean_alloc_ctor(0, 0, 20);
+            #[cfg(not(lean_4_34))]
+            let config = ffi::lean_alloc_ctor(0, 0, 19);
             let base = ffi::inline::lean_ctor_scalar_cptr(config);
             *base.add(0) = 0; // foApprox = false
             *base.add(1) = 0; // ctxApprox = false
@@ -683,6 +709,12 @@ impl MetaContext {
             *base.add(15) = 1; // zeta = true
             *base.add(16) = 1; // zetaDelta = true
             *base.add(17) = 1; // zetaUnused = true
+            *base.add(18) = 1; // zetaHave = true
+                               // byte 19 (Lean 4.34+): canUnfoldPredicateConfig = .default
+            #[cfg(lean_4_34)]
+            {
+                *base.add(19) = 0;
+            }
             ffi::lean_ctor_set(cwk, 0, config);
             ffi::lean_ctor_set_uint64(cwk, ctor_scalar_offset(1, 0), 0); // key = 0
             ffi::lean_ctor_set(ctx, 0, cwk);
@@ -729,8 +761,8 @@ impl MetaContext {
             ffi::inline::lean_ctor_set_uint8(ctx, ctor_scalar_offset(7, 1), 0);
             // Scalar offset 2: inTypeClassResolution (Bool) = false
             ffi::inline::lean_ctor_set_uint8(ctx, ctor_scalar_offset(7, 2), 0);
-            // Scalar offset 3 (Lean 4.31+): cacheInferType (Bool) = true
-            #[cfg(lean_4_31)]
+            // Scalar offset 3 (Lean 4.28+): cacheInferType (Bool) = true
+            #[cfg(lean_4_28)]
             ffi::inline::lean_ctor_set_uint8(ctx, ctor_scalar_offset(7, 3), 1);
 
             Ok(LeanBound::from_owned_ptr(lean, ctx))
@@ -979,7 +1011,11 @@ impl MetaState {
 
     /// Create an empty MetavarContext.
     ///
-    /// Lean 4.20 MetavarContext stores three Nat counters followed by six PersistentHashMaps.
+    /// MetavarContext stores the Nat counters followed by the PersistentHashMaps.
+    /// Lean <= 4.30: 9 object fields — 3 × Nat (depth, levelAssignDepth,
+    /// mvarCounter) + 6 maps. Lean 4.31+: 10 object fields — the LMVarId
+    ///    state was split out (`lmvarCounter`, `lDecls`; see `MetavarContext.lean`
+    ///    of v4.31.0–v4.33.0 and 23393b95), so 4 × Nat + 6 maps.
     unsafe fn mk_empty_metavar_context() -> LeanResult<*mut ffi::lean_object> {
         if !force_manual_meta_defaults() {
             let mctx_bss = ffi::meta::get_instInhabitedMetavarContext();
@@ -989,14 +1025,32 @@ impl MetaState {
                 return Ok(mctx_bss);
             }
         }
+        #[cfg(lean_4_31)]
+        let mctx = ffi::lean_alloc_ctor(0, 10, 0);
+        #[cfg(not(lean_4_31))]
         let mctx = ffi::lean_alloc_ctor(0, 9, 0);
-        ffi::lean_ctor_set(mctx, 0, ffi::lean_box(0));
-        ffi::lean_ctor_set(mctx, 1, ffi::lean_box(0)); // levelAssignDepth
-        ffi::lean_ctor_set(mctx, 2, ffi::lean_box(0)); // mvarCounter
-        let phm_empty = ffi::meta::get_PersistentHashMapEmpty();
-        for i in 3..9u32 {
-            ffi::lean_inc(phm_empty);
-            ffi::lean_ctor_set(mctx, i, phm_empty);
+        #[cfg(lean_4_31)]
+        {
+            ffi::lean_ctor_set(mctx, 0, ffi::lean_box(0)); // depth
+            ffi::lean_ctor_set(mctx, 1, ffi::lean_box(0)); // levelAssignDepth
+            ffi::lean_ctor_set(mctx, 2, ffi::lean_box(0)); // lmvarCounter
+            ffi::lean_ctor_set(mctx, 3, ffi::lean_box(0)); // mvarCounter
+            let phm_empty = ffi::meta::get_PersistentHashMapEmpty();
+            for i in 4..10u32 {
+                ffi::lean_inc(phm_empty);
+                ffi::lean_ctor_set(mctx, i, phm_empty);
+            }
+        }
+        #[cfg(not(lean_4_31))]
+        {
+            ffi::lean_ctor_set(mctx, 0, ffi::lean_box(0)); // depth
+            ffi::lean_ctor_set(mctx, 1, ffi::lean_box(0)); // levelAssignDepth
+            ffi::lean_ctor_set(mctx, 2, ffi::lean_box(0)); // mvarCounter
+            let phm_empty = ffi::meta::get_PersistentHashMapEmpty();
+            for i in 3..9u32 {
+                ffi::lean_inc(phm_empty);
+                ffi::lean_ctor_set(mctx, i, phm_empty);
+            }
         }
         Ok(mctx)
     }

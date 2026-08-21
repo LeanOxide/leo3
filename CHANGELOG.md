@@ -131,6 +131,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of duplicating it (W-352)
 
 ### Fixed
+- **Mid-suite test crashes on cross toolchains (W-357)**: several
+  version-gated layout bugs in the hand-built elaborator contexts:
+  - `Lean.Elab.Term.Context` was built with the 4.25/4.26 layout
+    (7 object fields + 11 Bool scalars) on every Lean < 4.31. The layout
+    changed in **4.27** (`autoBoundImplicits : PersistentArray` became
+    `autoBoundImplicitContext : Option AutoBoundImplicitContext` and
+    `fixedTermElabs : Array FixedTermElabRef` was appended → 8 objects),
+    and **4.29** added the `isMetaSection` scalar (`checkDeprecated`,
+    present since 4.25, was already there): 8 + 10 scalars on 4.27–4.28,
+    8 + 11 on 4.29+ (verified against the `TermElabM.lean` source of
+    every release from v4.25.2 through the 4.34-nightly commit
+    23393b95, and cross-checked against the stage0-generated C:
+    `lean_alloc_ctor(0, 8, 10)` on 4.28/4.29). On 4.27–4.30 the 11
+    scalar bytes were written over the `fixedTermElabs` object pointer,
+    so the first incref of that field SIGSEGV'd every `run_tactic` call
+    (`test_meta_repl` on 4.28.0 / 4.30.0). `default_term_context` now
+    has one branch per layout: < 4.27 (7 + 11), 4.27–4.28 (8 + 10),
+    4.29+ (8 + 11).
+  - `Lean.Elab.Command.State` gained a 12th object field in **4.34**
+    (`prevLinterStates : Option (Task (Array LinterState))`, default
+    `none`); `mk_command_state` allocated 11 fields, so the linter
+    bookkeeping in `elabCommandTopLevel` wrote the field out of bounds,
+    corrupting the adjacent mimalloc block and SIGSEGV'ing the next
+    unrelated allocation (`test_run_cmd` on 4.34-nightly). The field is
+    now initialized on `lean_4_34`+ (verified against `Command.lean`
+    v4.25.2…v4.33.0 + 4.34-nightly: 11 fields on 4.25–4.33, 12 on 4.34).
+  - The manual `Meta.Context` fallback (Windows / missing-BSS path)
+    gated the `cacheInferType` scalar on 4.31, but Lean added it in
+    **4.28** (7 objects + 3 scalars on 4.25–4.27, + 4 on 4.28+), and its
+    hand-built `Meta.Config` was missing the `zetaHave` byte (present
+    since 4.25: 19 scalar bytes, not 18). Both are now version-correct
+    (`Meta/Basic.lean` v4.25.2…v4.33.0).
+  - `MetaMContext::set_local_context` (the Linux hot path behind
+    `with_local_context`, used by every tactic-side
+    `infer_type` / `whnf` / `is_def_eq` / `checked_assign`) had the same
+    `cacheInferType` mis-gate: it built its scoped `Meta.Context` with
+    3 scalar bytes on Lean 4.28–4.30, leaving the 4th byte (read by
+    `Meta.inferType` on every call) uninitialized. Gated on 4.28 like
+    the fallback above.
+  - The manual `Meta.Config` now allocates **20** scalar bytes on Lean
+    4.34+ (`canUnfoldPredicateConfig : CanUnfoldPredicateConfig`, 1
+    byte, appended by lean4 #14323 / commit `47cd72d8fb20` in the
+    4.34-nightly tree; `Context.canUnfold?` → `customCanUnfoldPredicate?`
+    is a rename with the same position, so only the byte count changes).
+    4.25–4.33 stay at 19 (`Meta/Basic.lean` v4.25.2…v4.33.0 + 23393b95).
+  - The manual/default fallbacks that `LEO3_FORCE_MANUAL_META_DEFAULTS`
+    (and the Windows missing-BSS path) rely on were never executed on
+    Linux, and two of them were wrong. Now exercised and fixed:
+    - `Core.Context.options`: the forced path returned `box(0)` (KVMap
+      guess). On Lean 4.28+ `Options` is `structure { map : NameMap
+      DataValue, hasTrace : Bool }` (`Data/Options.lean`) — ctor (0,1,1)
+      with field 0 = `DTreeMap.empty` (which erases to the tagged scalar
+      `box(1)`, confirmed via `l_Std_DTreeMap_empty` → `mov $3,%eax;ret`
+      and the BSS `l_Lean_Options_empty` object bytes); ≤ 4.27 it stays
+      `box(0)` (`Options := KVMap`, `RBMap.empty` erases).
+    - `MetavarContext`: the manual 9-field shape (3 boxed Nats + 6
+      PersistentHashMaps) is right for ≤ 4.30, but 4.31 split out the
+      LMVarId state (`lmvarCounter`, `lDecls`; `MetavarContext.lean` of
+      v4.31.0…v4.33.0 + 23393b95) → 4 Nats + 6 maps. The manual
+      construction is now 10 object fields on `lean_4_31`+; the old
+      shape crashed `MetavarContext.addExprMVarDecl` (bogus big-Nat).
 - **Task manager initialization race**: `LeanTask::spawn` now initializes
   Lean's task manager exactly once under a lock (previously the manager was
   created lazily by Lean's runtime, and concurrent first spawns could queue
