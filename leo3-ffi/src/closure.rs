@@ -370,28 +370,40 @@ extern "C" {
 // `LEAN_EXPORT` and can be called directly.
 
 extern "C" {
-    /// Create a new unresolved promise (IO-wrapped).
+    /// Create a new unresolved promise.
     ///
-    /// Returns `IO (Except IO.Error (Promise α))`.
-    /// The `obj_arg` parameter is the RealWorld token (consumed).
+    /// Lean < 4.26: returns `IO (Except IO.Error (Promise α))`. The
+    /// `obj_arg` parameter is the RealWorld token (consumed).
+    ///
+    /// Lean >= 4.26: the IO wrapper was removed — the function takes no
+    /// arguments and returns the raw promise object directly.
     ///
     /// # Safety
     /// - Lean task manager must be initialized
+    #[cfg(not(lean_4_26))]
     pub fn lean_io_promise_new(world: lean_obj_arg) -> lean_obj_res;
+    #[cfg(lean_4_26)]
+    pub fn lean_io_promise_new() -> lean_obj_res;
 
-    /// Resolve a promise with a value (IO-wrapped).
+    /// Resolve a promise with a value.
     ///
-    /// Returns `IO (Except IO.Error Unit)`.
+    /// Lean < 4.26: returns `IO (Except IO.Error Unit)`. `world` is the
+    /// RealWorld token (consumed).
+    ///
+    /// Lean >= 4.26: no `world` parameter; the returned value is the raw
+    /// unit scalar, not an `IO` result.
     ///
     /// # Safety
     /// - `value` is consumed (ownership transferred to the promise)
     /// - `promise` is borrowed
-    /// - `world` is the RealWorld token (consumed)
+    #[cfg(not(lean_4_26))]
     pub fn lean_io_promise_resolve(
         value: lean_obj_arg,
         promise: b_lean_obj_arg,
         world: lean_obj_arg,
     ) -> lean_obj_res;
+    #[cfg(lean_4_26)]
+    pub fn lean_io_promise_resolve(value: lean_obj_arg, promise: b_lean_obj_arg) -> lean_obj_res;
 
     /// Get the task associated with a promise.
     ///

@@ -109,20 +109,19 @@ impl<'l, T> LeanPromise<'l, T> {
     /// the IO operation fails.
     pub fn new(lean: Lean<'l>) -> LeanResult<Self> {
         let result_ptr = with_worker(move || unsafe {
-            // In Lean < 4.27, lean_io_promise_new returns IO (Except IO.Error (Promise α)),
-            // i.e. an IO result wrapper. In Lean >= 4.27, it returns the raw promise directly
-            // (the function is just a jmp to lean_promise_new).
-            let world = ffi::io::lean_io_mk_world();
-            let result = ffi::closure::lean_io_promise_new(world);
-
-            #[cfg(lean_4_27)]
+            #[cfg(lean_4_26)]
             {
-                // Lean >= 4.27: result is the raw promise object
+                // Lean >= 4.26: lean_io_promise_new takes no arguments and
+                // returns the raw promise object directly (no IO wrapping).
+                let result = ffi::closure::lean_io_promise_new();
                 Ok::<_, LeanError>(result)
             }
-            #[cfg(not(lean_4_27))]
+            #[cfg(not(lean_4_26))]
             {
-                // Lean < 4.27: result is IO (Except IO.Error (Promise α))
+                // Lean < 4.26: lean_io_promise_new returns
+                // IO (Except IO.Error (Promise α)).
+                let world = ffi::io::lean_io_mk_world();
+                let result = ffi::closure::lean_io_promise_new(world);
                 if ffi::io::lean_io_result_is_ok(result) {
                     Ok(ffi::io::lean_io_result_take_value(result))
                 } else {
@@ -156,21 +155,20 @@ impl<'l, T> LeanPromise<'l, T> {
         let value_ptr = value.into_ptr();
         let promise_ptr = self.as_ptr();
         with_worker(move || unsafe {
-            // In Lean < 4.27, lean_io_promise_resolve returns IO (Except IO.Error Unit).
-            // In Lean >= 4.27, it calls lean_promise_resolve and returns lean_box(0).
-            let world = ffi::io::lean_io_mk_world();
-            // value is consumed, promise is borrowed
-            let result = ffi::closure::lean_io_promise_resolve(value_ptr, promise_ptr, world);
-
-            #[cfg(lean_4_27)]
+            #[cfg(lean_4_26)]
             {
-                // Lean >= 4.27: returns lean_box(0) (unit scalar), no IO wrapping
+                // Lean >= 4.26: no world argument; returns lean_box(0)
+                // (unit scalar), no IO wrapping.
+                let result = ffi::closure::lean_io_promise_resolve(value_ptr, promise_ptr);
                 let _ = result;
                 Ok(())
             }
-            #[cfg(not(lean_4_27))]
+            #[cfg(not(lean_4_26))]
             {
-                // Lean < 4.27: result is IO (Except IO.Error Unit)
+                // Lean < 4.26: result is IO (Except IO.Error Unit).
+                let world = ffi::io::lean_io_mk_world();
+                // value is consumed, promise is borrowed
+                let result = ffi::closure::lean_io_promise_resolve(value_ptr, promise_ptr, world);
                 if ffi::io::lean_io_result_is_ok(result) {
                     ffi::lean_dec(result);
                     Ok(())
