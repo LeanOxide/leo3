@@ -83,14 +83,20 @@ unsafe fn set_importing_flag(importing: bool) {
         return;
     };
     let value = ffi::inline::lean_box(importing as usize);
-    #[cfg(not(lean_4_35))]
+    // Lean ≤ 4.25: 3-arg export `(r, v, world)`.
+    #[cfg(not(lean_4_26))]
     {
         let world = ffi::io::lean_io_mk_world();
         let result = ffi::lean_st_ref_set(reference, value, world);
         ffi::lean_dec(result);
     }
-    // Lean ≥ 4.35: `lean_st_ref_set` was renamed to `lean_st_ref_put` and
-    // the IO world token was dropped from the C API.
+    // Lean 4.26–4.34: the IO world token was dropped from the C API.
+    #[cfg(all(lean_4_26, not(lean_4_35)))]
+    {
+        let result = ffi::lean_st_ref_set(reference, value);
+        ffi::lean_dec(result);
+    }
+    // Lean ≥ 4.35: `lean_st_ref_set` was renamed to `lean_st_ref_put`.
     #[cfg(lean_4_35)]
     {
         let result = ffi::lean_st_ref_put(reference, value);

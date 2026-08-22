@@ -194,19 +194,20 @@ extern "C" {
     ) -> lean_obj_res;
 }
 
-#[cfg(not(lean_4_31))]
+#[cfg(not(lean_4_26))]
 extern "C" {
     /// `Format.pretty : Format → Nat → Nat → Nat → String` — render a
     /// `Format` to a string with the given width / indent / starting
     /// column.
     ///
-    /// Version note: in Lean ≤ 4.30 the function lives in the root
-    /// `Format` namespace and is exported under the C name
-    /// `lean_format_pretty` (`@[export]`). From 4.31 it moved to
-    /// `Std.Format` without the export attribute, so its mangled name is
-    /// `l_Std_Format_pretty` (verified against v4.20.0 / v4.25.2 for the
-    /// old name and v4.31.0 / v4.32.2 / v4.33.0 for the new). Same
-    /// 4-arg signature in both.
+    /// Version note: in Lean ≤ 4.25 the function carries
+    /// `@[export lean_format_pretty]`. In 4.26 the attribute was dropped
+    /// (same ST-redesign / zero-cost-BaseIO commit that reworked the
+    /// `st_ref` C API), so the mangled default export
+    /// `l_Std_Format_pretty` (module `Std.Format`, the namespace it has
+    /// always had) is exported instead — verified against the v4.20.0 /
+    /// v4.25.2 binaries for the old name and the v4.26.0 / v4.33.0 /
+    /// v4.34.0-rc1 binaries for the new. Same 4-arg signature in both.
     #[link_name = "lean_format_pretty"]
     pub fn lean_format_pretty(
         fmt: lean_obj_arg,
@@ -216,10 +217,10 @@ extern "C" {
     ) -> lean_obj_res;
 }
 
-#[cfg(lean_4_31)]
+#[cfg(lean_4_26)]
 extern "C" {
     /// `Std.Format.pretty : Format → Nat → Nat → Nat → String` (Lean
-    /// ≥ 4.31; same 4-arg signature, new mangled name).
+    /// ≥ 4.26; same 4-arg signature, mangled default export name).
     #[link_name = "l_Std_Format_pretty"]
     pub fn lean_format_pretty(
         fmt: lean_obj_arg,

@@ -998,7 +998,7 @@ pub fn run_tactic<'l>(
                 }
                 #[cfg(lean_4_26)]
                 {
-                    ffi::lean_st_mk_ref(metam_meta_state_ptr, ffi::lean_box(0))
+                    ffi::lean_st_mk_ref(metam_meta_state_ptr)
                 }
             };
             #[cfg(not(lean_4_26))]
@@ -1013,12 +1013,8 @@ pub fn run_tactic<'l>(
                 (r, w)
             };
             #[cfg(lean_4_26)]
-            let (core_state_ref, world) = {
-                (
-                    ffi::lean_st_mk_ref(core_state_ptr, ffi::lean_box(0)),
-                    ffi::lean_box(0),
-                )
-            };
+            let (core_state_ref, world) =
+                { (ffi::lean_st_mk_ref(core_state_ptr), ffi::lean_box(0)) };
             // Keep our own references so the refs survive the callee's dec.
             ffi::lean_inc(meta_state_ref);
             ffi::lean_inc(core_state_ref);
@@ -1040,13 +1036,12 @@ pub fn run_tactic<'l>(
                 #[cfg(lean_4_26)]
                 {
                     // Lean >= 4.26 (ST redesign): the C ABI dropped the
-                    // world token, so `lean_st_ref_get` returns the value
-                    // directly and the extra `world` arg is ignored by the
-                    // callee. Decoding the return as the old
-                    // `(value, world)` pair would read `field 0` of the
-                    // state itself (e.g. Core.State's `env`) and corrupt
-                    // the session.
-                    ffi::lean_st_ref_get(r, world)
+                    // world token, so `lean_st_ref_get` is a 1-arg export
+                    // returning the value directly. Decoding the return as
+                    // the old `(value, world)` pair would read `field 0` of
+                    // the state itself (e.g. Core.State's `env`) and
+                    // corrupt the session.
+                    ffi::lean_st_ref_get(r)
                 }
                 #[cfg(not(lean_4_26))]
                 {
@@ -1261,7 +1256,7 @@ pub fn pp_goal<'l>(
             r
         };
         #[cfg(lean_4_26)]
-        let meta_state_ref = ffi::lean_st_mk_ref(meta_state_ptr, ffi::lean_box(0));
+        let meta_state_ref = ffi::lean_st_mk_ref(meta_state_ptr);
         #[cfg(not(lean_4_26))]
         let (core_state_ref, world) = {
             let world_in = ffi::lean_box(0);
@@ -1274,10 +1269,7 @@ pub fn pp_goal<'l>(
             (r, w)
         };
         #[cfg(lean_4_26)]
-        let (core_state_ref, world) = (
-            ffi::lean_st_mk_ref(core_state_ptr, ffi::lean_box(0)),
-            ffi::lean_box(0),
-        );
+        let (core_state_ref, world) = (ffi::lean_st_mk_ref(core_state_ptr), ffi::lean_box(0));
         // Keep our own references so the refs survive the callee's dec; we
         // release them after the call (ppGoal is read-only).
         ffi::lean_inc(meta_state_ref);
@@ -1408,7 +1400,7 @@ pub fn pp_exprs<'l>(
             r
         };
         #[cfg(lean_4_26)]
-        let meta_state_ref = ffi::lean_st_mk_ref(meta_state_ptr, ffi::lean_box(0));
+        let meta_state_ref = ffi::lean_st_mk_ref(meta_state_ptr);
         #[cfg(not(lean_4_26))]
         let (core_state_ref, world) = {
             let world_in = ffi::lean_box(0);
@@ -1421,10 +1413,7 @@ pub fn pp_exprs<'l>(
             (r, w)
         };
         #[cfg(lean_4_26)]
-        let (_core_state_ref, _world) = (
-            ffi::lean_st_mk_ref(core_state_ptr, ffi::lean_box(0)),
-            ffi::lean_box(0),
-        );
+        let (_core_state_ref, _world) = (ffi::lean_st_mk_ref(core_state_ptr), ffi::lean_box(0));
         let mut out: Vec<*mut ffi::lean_object> = Vec::with_capacity(e_ptrs.len());
         for e_ptr in e_ptrs {
             // Pre-increment the shared refs; the callee consumes these.
@@ -1558,13 +1547,13 @@ unsafe fn run_command_core<'l>(
         #[cfg(lean_4_26)]
         let (cmd_state_ref, world) = {
             // Lean >= 4.26: `lean_st_mk_ref` is a 1-arg C export
-            // returning the ST.Ref directly; the second slot is
-            // ignored by the callee. `elabCommandTopLevel` and
-            // `lean_st_ref_get` likewise dropped the world token
-            // from their C ABIs, so one dummy box fills every
-            // ignored slot and is released once after the read-back.
+            // returning the ST.Ref directly, and `lean_st_ref_get`
+            // is 1-arg with no world token. The only world slot left
+            // is the Lean-level one at the tail of
+            // `elabCommandTopLevel`, so the dummy box exists solely to
+            // fill that slot and is released once after the read-back.
             let world = ffi::lean_box(0);
-            (ffi::lean_st_mk_ref(cmd_state_owned, world), world)
+            (ffi::lean_st_mk_ref(cmd_state_owned), world)
         };
         // The callee also consumes the ref argument (lean_obj_arg):
         // keep our own reference so the ref survives the call (same
@@ -1608,7 +1597,7 @@ unsafe fn run_command_core<'l>(
         // through the ref in place; read it back.
         #[cfg(lean_4_26)]
         // Lean >= 4.26: `lean_st_ref_get` returns the value directly.
-        let state = ffi::lean_st_ref_get(cmd_state_ref, world);
+        let state = ffi::lean_st_ref_get(cmd_state_ref);
         #[cfg(not(lean_4_26))]
         let state = {
             let final_ref = ffi::lean_st_ref_get(cmd_state_ref, world);
@@ -1620,7 +1609,8 @@ unsafe fn run_command_core<'l>(
         // The state is read back from the ref: release the per-call
         // ST ref (the pipeline's final Command.State is now owned by
         // `state`) and the world token (pre-4.26: the real token;
-        // 4.26+: the dummy that filled the ABI-ignored slots).
+        // 4.26+: the dummy that fills the `elabCommandTopLevel`
+        // tail slot).
         ffi::lean_dec(cmd_state_ref);
         ffi::lean_dec(world);
         // Command.State field 0 = Environment.

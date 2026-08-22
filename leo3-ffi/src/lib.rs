@@ -314,32 +314,58 @@ extern "C" {
 // ============================================================================
 
 extern "C" {
-    /// Create a new ST reference
+    /// Create a new ST reference (Lean ≤ 4.25)
     ///
     /// # Safety
     /// - `v` is the initial value (consumed)
     /// - `w` is the IO world token (consumed)
+    #[cfg(not(lean_4_26))]
     pub fn lean_st_mk_ref(v: lean_obj_arg, w: lean_obj_arg) -> lean_obj_res;
 
-    /// Get the value from an ST reference
+    /// Create a new ST reference (Lean 4.26+: the world token was dropped
+    /// from the C API; the ST.Ref is returned directly)
+    ///
+    /// # Safety
+    /// - `v` is the initial value (consumed)
+    #[cfg(lean_4_26)]
+    pub fn lean_st_mk_ref(v: lean_obj_arg) -> lean_obj_res;
+
+    /// Get the value from an ST reference (Lean ≤ 4.25)
     ///
     /// # Safety
     /// - `r` must be a valid ST ref object
     /// - `w` is the IO world token (consumed)
+    #[cfg(not(lean_4_26))]
     pub fn lean_st_ref_get(r: b_lean_obj_arg, w: lean_obj_arg) -> lean_obj_res;
 
-    /// Set the value of an ST reference (Lean ≤ 4.34)
+    /// Get the value from an ST reference (Lean 4.26+: the world token was
+    /// dropped from the C API; the value is returned directly)
+    ///
+    /// # Safety
+    /// - `r` must be a valid ST ref object
+    #[cfg(lean_4_26)]
+    pub fn lean_st_ref_get(r: b_lean_obj_arg) -> lean_obj_res;
+
+    /// Set the value of an ST reference (Lean ≤ 4.25)
     ///
     /// # Safety
     /// - `r` must be a valid ST ref object
     /// - `v` is the new value (consumed)
     /// - `w` is the IO world token (consumed)
-    #[cfg(not(lean_4_35))]
+    #[cfg(not(lean_4_26))]
     pub fn lean_st_ref_set(r: b_lean_obj_arg, v: lean_obj_arg, w: lean_obj_arg) -> lean_obj_res;
 
+    /// Set the value of an ST reference (Lean 4.26–4.34: the world token
+    /// was dropped from the C API)
+    ///
+    /// # Safety
+    /// - `r` must be a valid ST ref object
+    /// - `v` is the new value (consumed)
+    #[cfg(all(lean_4_26, not(lean_4_35)))]
+    pub fn lean_st_ref_set(r: b_lean_obj_arg, v: lean_obj_arg) -> lean_obj_res;
+
     /// Set the value of an ST reference (Lean ≥ 4.35: `lean_st_ref_set`
-    /// was renamed to `lean_st_ref_put` and the IO world token was
-    /// dropped from the C API)
+    /// was renamed to `lean_st_ref_put`)
     ///
     /// # Safety
     /// - `r` must be a valid ST ref object
@@ -347,20 +373,44 @@ extern "C" {
     #[cfg(lean_4_35)]
     pub fn lean_st_ref_put(r: b_lean_obj_arg, v: lean_obj_arg) -> lean_obj_res;
 
-    /// Reset an ST reference (set to default/zero value)
+    /// Take the value out of an ST reference, resetting it to null
+    /// (Lean ≤ 4.25). The exported C symbol is `lean_st_ref_take` on
+    /// every supported version: Lean's ≤ 4.34 header declares it as
+    /// `lean_st_ref_reset`, but the runtime has exported `take` since the
+    /// 2020 ST primitive rename and never exported the header name.
     ///
     /// # Safety
     /// - `r` must be a valid ST ref object
     /// - `w` is the IO world token (consumed)
-    pub fn lean_st_ref_reset(r: b_lean_obj_arg, w: lean_obj_arg) -> lean_obj_res;
+    #[cfg(not(lean_4_26))]
+    pub fn lean_st_ref_take(r: b_lean_obj_arg, w: lean_obj_arg) -> lean_obj_res;
+
+    /// Take the value out of an ST reference, resetting it to null
+    /// (Lean 4.26+: the world token was dropped from the C API)
+    ///
+    /// # Safety
+    /// - `r` must be a valid ST ref object
+    #[cfg(lean_4_26)]
+    pub fn lean_st_ref_take(r: b_lean_obj_arg) -> lean_obj_res;
 
     /// Swap the value of an ST reference, returning the old value
+    /// (Lean ≤ 4.25)
     ///
     /// # Safety
     /// - `r` must be a valid ST ref object
     /// - `v` is the new value (consumed)
     /// - `w` is the IO world token (consumed)
+    #[cfg(not(lean_4_26))]
     pub fn lean_st_ref_swap(r: b_lean_obj_arg, v: lean_obj_arg, w: lean_obj_arg) -> lean_obj_res;
+
+    /// Swap the value of an ST reference, returning the old value
+    /// (Lean 4.26+: the world token was dropped from the C API)
+    ///
+    /// # Safety
+    /// - `r` must be a valid ST ref object
+    /// - `v` is the new value (consumed)
+    #[cfg(lean_4_26)]
+    pub fn lean_st_ref_swap(r: b_lean_obj_arg, v: lean_obj_arg) -> lean_obj_res;
 }
 
 // ============================================================================
