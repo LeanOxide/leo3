@@ -451,7 +451,7 @@ pub unsafe fn default_term_context<'l>(
             set_bool(9, 0); // holesAsSyntheticOpaque
             set_bool(10, 1); // checkDeprecated
 
-            return Ok(LeanBound::from_owned_ptr(lean, ctx));
+            Ok(LeanBound::from_owned_ptr(lean, ctx))
         }
     }
 }
