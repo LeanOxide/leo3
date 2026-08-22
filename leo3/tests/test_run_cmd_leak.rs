@@ -61,7 +61,8 @@
 #![cfg(all(
     feature = "meta",
     feature = "runtime-tests",
-    not(target_os = "windows")
+    not(target_os = "windows"),
+    lean_4_25
 ))]
 
 use leo3::meta::*;

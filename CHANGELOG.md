@@ -131,6 +131,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of duplicating it (W-352)
 
 ### Fixed
+- **Windows LNK2019 `l_Lean_Elab_Tactic_tacticElabAttribute` (W-356)**: the
+  import libraries bundled with official Windows dists (`<stem>.dll.a` under
+  `lib/lean/`) can lag the DLL export tables shipped in `bin/` — in Lean
+  4.33.0 the symbol is exported by `libleanshared_1.dll`, but the bundled
+  chain does not provide it, so the MSVC link fails. The build script now
+  parses each Lean DLL's PE export directory (including forwarded exports)
+  and regenerates import libraries with the rustc-bundled `rust-lld`,
+  cached under `~/.cache/leo3` keyed by DLL path+size+mtime; the bundled
+  import libs remain the fallback when regeneration is not possible
+- **v4.20.0 compat reds (W-356)**: the `runTactic` / `ppGoal` repl bridge
+  uses the Lean 4.25+ elaborator ABI, so it is now gated on `lean_4_25`
+  (module, FFI re-exports, and the dependent tests). The `nextMacroScope`
+  test expectation for Lean < 4.25 was wrong — the initial scope is 2 on
+  every supported version (verified in the v4.20 and v4.25.2 sources), so
+  the test no longer special-cases it
+- **Nightly `lean_st_ref_set` removal (W-356)**: Lean 4.35 renamed
+  `lean_st_ref_set` to `lean_st_ref_put` and dropped the IO world token
+  from the ST ref C API; the declaration and the importing-flag writer are
+  now version-gated on `lean_4_35`
 - **Mid-suite test crashes on cross toolchains (W-357)**: several
   version-gated layout bugs in the hand-built elaborator contexts:
   - `Lean.Elab.Term.Context` was built with the 4.25/4.26 layout

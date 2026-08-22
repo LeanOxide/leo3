@@ -915,6 +915,26 @@ pub fn emit_no_lean_dynamic_lookup_link_arg() {
     }
 }
 
+/// Fallback link artifact for a Lean DLL when the import libraries cannot
+/// be regenerated from the live export tables (W-356): prefer the
+/// dist-bundled import library (`<stem>.dll.a` under `lib/lean/`); when
+/// that is missing, the DLL itself (MSVC `link.exe` generates an import
+/// library for it, `lld-link` does not).
+fn windows_lean_link_artifact(config: &LeanConfig, stem: &str) -> Option<String> {
+    let import_lib = format!("{stem}.dll.a");
+    if config.lean_lib_dir.join(&import_lib).exists() {
+        return Some(import_lib);
+    }
+    let dll_name = format!("{stem}.dll");
+    let bin_dir = config.lean_home.join("bin");
+    for dir in [bin_dir, config.lean_lib_dir.clone()] {
+        if dir.join(&dll_name).exists() {
+            return Some(dll_name);
+        }
+    }
+    None
+}
+
 pub fn emit_link_config(config: &LeanConfig) {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
@@ -924,6 +944,7 @@ pub fn emit_link_config(config: &LeanConfig) {
     );
 
     if target_os == "windows" {
+        // Official dists (and elan toolchains) keep the DLLs in `bin/`.
         let bin_dir = config.lean_home.join("bin");
         println!("cargo:rustc-link-search=native={}", bin_dir.display());
     }
@@ -950,16 +971,47 @@ pub fn emit_link_config(config: &LeanConfig) {
     };
 
     if target_os == "windows" {
-        if has_init_shared {
-            println!("cargo:rustc-link-lib=dylib:+verbatim=libInit_shared.dll.a");
+        // Preferred: regenerate the import libraries from the Lean DLLs'
+        // live export tables, because the dist-bundled import libs can lag
+        // the DLLs (W-356: Lean 4.33.0's bundled `libleanshared.dll.a`
+        // chain misses `l_Lean_Elab_Tactic_tacticElabAttribute` → LNK2019).
+        match crate::windows_lean_imports::regenerate(config) {
+            Some(generated) => {
+                println!(
+                    "cargo:rustc-link-search=native={}",
+                    generated.search_dir.display()
+                );
+                for (_, lib_name) in &generated.libs {
+                    // Verbatim the generated import library's exact file
+                    // name: build-script link libs only reach the final
+                    // link through rlib metadata, and only verbatim names
+                    // are resolved to a file path there (plain names are
+                    // passed to the linker as `-l`, which rust-lld-based
+                    // cross linking ignores). The name matches a file only
+                    // in `search_dir`, so resolution is unambiguous.
+                    println!("cargo:rustc-link-lib=dylib:+verbatim={lib_name}");
+                }
+            }
+            None => {
+                // Fallback: the dist-bundled import libraries. Optional
+                // split-DLL companions are linked only when shipped.
+                for stem in ["libInit_shared", "libleanshared_2", "libleanshared_1"] {
+                    if let Some(artifact) = windows_lean_link_artifact(config, stem) {
+                        println!("cargo:rustc-link-lib=dylib:+verbatim={artifact}");
+                    }
+                }
+                // `libleanshared` is mandatory: emit the import lib
+                // unconditionally when neither the DLL nor its import lib
+                // is found, so the link fails with the usual "file not
+                // found" diagnostic instead of silently skipping it.
+                match windows_lean_link_artifact(config, "libleanshared") {
+                    Some(artifact) => {
+                        println!("cargo:rustc-link-lib=dylib:+verbatim={artifact}");
+                    }
+                    None => println!("cargo:rustc-link-lib=dylib:+verbatim=libleanshared.dll.a"),
+                }
+            }
         }
-        if has_leanshared_2 {
-            println!("cargo:rustc-link-lib=dylib:+verbatim=libleanshared_2.dll.a");
-        }
-        if has_leanshared_1 {
-            println!("cargo:rustc-link-lib=dylib:+verbatim=libleanshared_1.dll.a");
-        }
-        println!("cargo:rustc-link-lib=dylib:+verbatim=libleanshared.dll.a");
     } else {
         if has_init_shared {
             println!("cargo:rustc-link-lib=dylib=Init_shared");

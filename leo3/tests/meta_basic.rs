@@ -76,15 +76,12 @@ fn test_core_state_creation() {
             assert!(!env_field.is_null(), "Environment field should not be null");
 
             // Field 1: nextMacroScope. Matches the real frontend: a fresh
-            // `Core.State` starts at `firstFrontendMacroScope + 1`, and on
-            // Lean >= 4.25 `firstFrontendMacroScope = reservedMacroScope + 1 = 1`,
-            // so the initial value is 2 (not 1).
+            // `Core.State` starts at `firstFrontendMacroScope + 1`. Both on
+            // Lean >= 4.25 and on 4.20 `reservedMacroScope = 0`, so
+            // `firstFrontendMacroScope = 1` and the initial value is 2.
             let macro_scope = leo3_ffi::lean_ctor_get(state.as_ptr(), 1);
             let macro_scope_val = leo3_ffi::lean_unbox(macro_scope);
-            #[cfg(lean_4_25)]
             let expected_macro_scope = 2;
-            #[cfg(not(lean_4_25))]
-            let expected_macro_scope = 1;
             assert_eq!(
                 macro_scope_val, expected_macro_scope,
                 "nextMacroScope should be {}",

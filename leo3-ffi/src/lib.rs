@@ -328,13 +328,24 @@ extern "C" {
     /// - `w` is the IO world token (consumed)
     pub fn lean_st_ref_get(r: b_lean_obj_arg, w: lean_obj_arg) -> lean_obj_res;
 
-    /// Set the value of an ST reference
+    /// Set the value of an ST reference (Lean ≤ 4.34)
     ///
     /// # Safety
     /// - `r` must be a valid ST ref object
     /// - `v` is the new value (consumed)
     /// - `w` is the IO world token (consumed)
+    #[cfg(not(lean_4_35))]
     pub fn lean_st_ref_set(r: b_lean_obj_arg, v: lean_obj_arg, w: lean_obj_arg) -> lean_obj_res;
+
+    /// Set the value of an ST reference (Lean ≥ 4.35: `lean_st_ref_set`
+    /// was renamed to `lean_st_ref_put` and the IO world token was
+    /// dropped from the C API)
+    ///
+    /// # Safety
+    /// - `r` must be a valid ST ref object
+    /// - `v` is the new value (consumed)
+    #[cfg(lean_4_35)]
+    pub fn lean_st_ref_put(r: b_lean_obj_arg, v: lean_obj_arg) -> lean_obj_res;
 
     /// Reset an ST reference (set to default/zero value)
     ///

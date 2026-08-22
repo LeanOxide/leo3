@@ -9,6 +9,9 @@ mod errors;
 #[cfg(feature = "resolve-config")]
 #[path = "src/impl_.rs"]
 mod impl_;
+#[cfg(feature = "resolve-config")]
+#[path = "src/windows_lean_imports.rs"]
+mod windows_lean_imports;
 
 fn main() {
     #[cfg(feature = "resolve-config")]
