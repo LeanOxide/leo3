@@ -643,6 +643,9 @@ fn probe_promise_canary() {
                 leo3::ffi::lean_inc(canary); // observer ref, kept to the end
                                              // 4.33: `Promise α` IS the runtime `lean_promise_object`
                                              // ({ m_header, m_result : Task α }) — not a ctor wrapper.
+                #[cfg(lean_4_26)]
+                let p = leo3::ffi::closure::lean_io_promise_new();
+                #[cfg(not(lean_4_26))]
                 let p = leo3::ffi::closure::lean_io_promise_new(leo3::ffi::io::lean_io_mk_world());
                 let tag_p = (*p).m_tag;
                 // Layout guard: reading `m_result` below assumes the
@@ -663,12 +666,16 @@ fn probe_promise_canary() {
                 leo3::ffi::lean_inc(t_p); // observer ref
                                           // Consumes `canary`; borrows `p` (verified against 4.33's
                                           // libleanshared: p's rc stays 1 through result_opt/resolve).
+                #[cfg(lean_4_26)]
+                let r = leo3::ffi::closure::lean_io_promise_resolve(canary, p);
+                #[cfg(not(lean_4_26))]
                 let r = leo3::ffi::closure::lean_io_promise_resolve(
                     canary,
                     p,
                     leo3::ffi::io::lean_io_mk_world(),
                 );
-                // Result is `BaseIO Unit`: dec only when it is a heap object.
+                // Lean >= 4.26: `r` is the raw unit scalar (never dec'd);
+                // Lean < 4.26: `r` is IO-wrapped unit, dec only when heap.
                 if (r as usize) & 1 == 0 {
                     leo3::ffi::lean_dec(r);
                 }

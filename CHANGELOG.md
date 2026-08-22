@@ -131,6 +131,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of duplicating it (W-352)
 
 ### Fixed
+- **v4.26.0 Promise/Task SIGSEGV/SIGABRT (W-376)**: the same 4.26 runtime
+  rewrite that dropped the `RealWorld` token from the IO primitives
+  (see W-375) also unwrapped the promise C API — `lean_io_promise_new`
+  is now argument-free and returns the raw promise object, and
+  `lean_io_promise_resolve` no longer takes a `world` token and returns
+  the raw unit scalar (verified against the v4.25.2 vs v4.26.0 sources).
+  The version gate that selected the raw-promise path was `lean_4_27`,
+  so on v4.26.0 the `lean_4_26` build took the `IO`-wrapped path,
+  misread the raw promise as a failed `IO` result, and
+  `Promise::resolve` handed the unit scalar back as if it were an
+  `IO` result — the resulting bad reference corrupted the worker thread
+  and aborted the test process. The FFI declarations and the
+  `LeanPromise::new` / `LeanPromise::resolve` code paths are now gated on
+  `lean_4_26`; the `test_w359_registry_probe` promise canary uses the
+  same gate
 - **Windows LNK2019 `l_Lean_Elab_Tactic_tacticElabAttribute` (W-356)**: the
   import libraries bundled with official Windows dists (`<stem>.dll.a` under
   `lib/lean/`) can lag the DLL export tables shipped in `bin/` — in Lean
