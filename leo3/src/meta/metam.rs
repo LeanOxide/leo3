@@ -428,18 +428,22 @@ impl<'l> MetaMContext<'l> {
         self.lean
     }
 
+    #[cfg(lean_4_25)]
     pub(crate) fn core_ctx(&self) -> &LeanBound<'l, CoreContext> {
         &self.core_ctx
     }
 
+    #[cfg(lean_4_25)]
     pub(crate) fn core_state(&self) -> &LeanBound<'l, CoreState> {
         &self.core_state
     }
 
+    #[cfg(lean_4_25)]
     pub(crate) fn meta_ctx(&self) -> &LeanBound<'l, MetaContext> {
         &self.meta_ctx
     }
 
+    #[cfg(lean_4_25)]
     pub(crate) fn meta_state(&self) -> &LeanBound<'l, MetaState> {
         &self.meta_state
     }
@@ -453,6 +457,7 @@ impl<'l> MetaMContext<'l> {
     /// block into mimalloc's freelist and corrupt the heap. Increment before
     /// the swap so the old state keeps one extra reference (a harmless leak
     /// for statics; for heap states it just leaks one ref).
+    #[cfg(lean_4_25)]
     pub(crate) fn update_states(
         &mut self,
         new_meta_state: LeanBound<'l, crate::instance::LeanAny>,
@@ -752,6 +757,7 @@ impl<'l> MetaMContext<'l> {
     /// Options come from the session's `Meta.Context` (the `pp.sanitizeNames`
     /// option defaults to `true`). The sanitizer state (`NameSanitizerState`:
     /// options + two empty name maps) is built fresh for each call.
+    #[cfg(lean_4_25)]
     fn sanitize_local_ctx<'a>(
         metam: &MetaMContext<'a>,
         lctx: &LeanBound<'a, LeanAny>,
@@ -791,6 +797,7 @@ impl<'l> MetaMContext<'l> {
     /// appear with their user-facing names and usual notations.
     ///
     /// Used by the Repl layer to render goal states.
+    #[cfg(lean_4_25)]
     pub fn goal_hyps_and_type_pp(
         &mut self,
         mvar: &LeanBound<'l, LeanName>,

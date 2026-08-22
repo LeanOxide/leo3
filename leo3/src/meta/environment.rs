@@ -76,7 +76,7 @@ impl LeanEnvironment {
         // initialization phase before importing; do the same here (the call
         // is idempotent) so an empty environment can be created without a
         // prior import.
-        crate::meta::repl::finalize_initialization();
+        crate::runtime::finalize_initialization();
         let env_ptr = with_worker(move || unsafe {
             let world = ffi::io::lean_io_mk_world();
             let io_result = ffi::environment::lean_mk_empty_environment(trust_level, world);

@@ -128,23 +128,17 @@ unsafe fn ensure_core_builtin_tactics(lean: Lean<'_>) -> LeanResult<()> {
     Ok(())
 }
 
-/// Mark the end of the initialization phase (mirrors the lean CLI calling
-/// `lean_io_mark_end_initialization` after processing the input file).
-/// Safe to call repeatedly.
-pub fn finalize_initialization() {
-    static FINALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !FINALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        unsafe {
-            ffi::lean_io_mark_end_initialization();
-        }
-    }
-}
+// `finalize_initialization` lives in `crate::runtime` (it is
+// version-independent: `LeanEnvironment::empty` needs it on every supported
+// Lean version, not only on the `lean_4_25`-gated repl layer); re-export it
+// here so the historical `repl::finalize_initialization` path keeps working.
 use crate::instance::{LeanAny, LeanBound};
 use crate::marker::Lean;
 use crate::meta::environment::LeanEnvironment;
 use crate::meta::expr::LeanExpr;
 use crate::meta::metam::MetaMContext;
 use crate::meta::name::LeanName;
+pub use crate::runtime::finalize_initialization;
 use leo3_ffi as ffi;
 
 /// Fully apply a curried Lean function (closed over `args`) and return its

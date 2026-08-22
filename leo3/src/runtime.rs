@@ -63,6 +63,7 @@ pub(crate) fn ensure_environment_initialized() {
         ffi::initialize_library_core_module();
         ffi::initialize_library_module();
         ffi::initialize_constructions_module();
+        #[cfg(lean_4_25)]
         {
             extern "C" {
                 #[link_name = "l_Lean_Elab_Tactic_tacticElabAttribute"]
@@ -136,6 +137,24 @@ pub(crate) fn ensure_environment_initialized() {
 #[inline]
 pub(crate) fn ensure_meta_initialized() {
     ensure_environment_initialized();
+}
+
+/// Mark the end of the initialization phase (mirrors the lean CLI calling
+/// `lean_io_mark_end_initialization` after processing the input file).
+/// Safe to call repeatedly.
+///
+/// Version-independent: `lean_io_mark_end_initialization` is part of Lean's
+/// public C API on every supported version, so this lives here (not in the
+/// `lean_4_25`-gated `repl` module) — `LeanEnvironment::empty` needs it on
+/// all versions.
+#[cfg(feature = "meta")]
+pub fn finalize_initialization() {
+    static FINALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !FINALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        unsafe {
+            ffi::lean_io_mark_end_initialization();
+        }
+    }
 }
 
 /// Wrapper to force `Send` on types that cross the worker-thread channel.

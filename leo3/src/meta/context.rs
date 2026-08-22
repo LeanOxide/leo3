@@ -316,7 +316,7 @@ impl CoreState {
     /// This creates a minimal Core.State suitable for running MetaM computations.
     /// All fields except the environment are set to sensible defaults:
     /// - env: from parameter
-    /// - nextMacroScope: firstFrontendMacroScope + 1 (= 1)
+    /// - nextMacroScope: firstFrontendMacroScope + 1 (= 2)
     /// - ngen: new NameGenerator
     /// - All other fields: empty
     ///
