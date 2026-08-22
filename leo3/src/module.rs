@@ -83,9 +83,19 @@ unsafe fn set_importing_flag(importing: bool) {
         return;
     };
     let value = ffi::inline::lean_box(importing as usize);
-    let world = ffi::io::lean_io_mk_world();
-    let result = ffi::lean_st_ref_set(reference, value, world);
-    ffi::lean_dec(result);
+    #[cfg(not(lean_4_35))]
+    {
+        let world = ffi::io::lean_io_mk_world();
+        let result = ffi::lean_st_ref_set(reference, value, world);
+        ffi::lean_dec(result);
+    }
+    // Lean ≥ 4.35: `lean_st_ref_set` was renamed to `lean_st_ref_put` and
+    // the IO world token was dropped from the C API.
+    #[cfg(lean_4_35)]
+    {
+        let result = ffi::lean_st_ref_put(reference, value);
+        ffi::lean_dec(result);
+    }
 }
 
 unsafe fn try_decode_error_string<'l>(
