@@ -147,9 +147,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every supported version (verified in the v4.20 and v4.25.2 sources), so
   the test no longer special-cases it
 - **Nightly `lean_st_ref_set` removal (W-356)**: Lean 4.35 renamed
-  `lean_st_ref_set` to `lean_st_ref_put` and dropped the IO world token
-  from the ST ref C API; the declaration and the importing-flag writer are
-  now version-gated on `lean_4_35`
+  `lean_st_ref_set` to `lean_st_ref_put` (the IO world token had already
+  been dropped from the ST ref C API in 4.26 — see W-375 below); the
+  declaration and the importing-flag writer are now version-gated on
+  `lean_4_35`
+- **v4.26.x `Format.pretty` link break (W-375)**: the same 4.26 commit that
+  dropped the world token also dropped `@[export lean_format_pretty]`,
+  so `lean_format_pretty` is gone from the exports of every release
+  from v4.26.0 on (verified against the binaries of v4.25.2 vs
+  v4.26.0 / v4.27.0 / v4.30.0 / v4.33.0 / v4.34.0-rc1). The
+  `lean_format_pretty` / `l_Std_Format_pretty` gate is now
+  `lean_4_26` instead of `lean_4_31` — v4.26–4.30 linked a symbol that
+  does not exist, so the v4.26.x leg (and anything on 4.27–4.30) failed
+  to build the `pp_goal` test binary
+- **ST ref FFI world-token boundary (W-375)**: the C runtime dropped the
+  IO world token from the entire `st_ref` family (`lean_st_mk_ref`,
+  `lean_st_ref_get`, `lean_st_ref_set`, `lean_st_ref_swap`, and the
+  take/reset export) in **v4.26.0**, not in 4.35 (verified against the
+  `lean.h` headers and exported symbols of v4.20.0, v4.25.2, v4.26.0,
+  v4.33.0, v4.34.0-rc1, and 4.35.0-nightly). The Rust declarations
+  (2-arg `mk_ref` / `get`, 3-arg `set` / `swap`, 2-arg reset) disagreed
+  with the real C signatures on 4.26–4.34 and the call sites
+  compensated with dummy world boxes. The declarations and call sites
+  are now gated on the real boundary (`lean_4_26`; `lean_st_ref_put`
+  from `lean_4_35`). The reset declaration now also binds the real
+  exported symbol `lean_st_ref_take` — the ≤ 4.34 header declares it as
+  `lean_st_ref_reset`, but the runtime has exported `take` since the
+  2020 ST primitive rename and never exported the header name
 - **Mid-suite test crashes on cross toolchains (W-357)**: several
   version-gated layout bugs in the hand-built elaborator contexts:
   - `Lean.Elab.Term.Context` was built with the 4.25/4.26 layout

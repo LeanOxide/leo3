@@ -234,9 +234,11 @@ impl<'l> MetaMContext<'l> {
 
             #[cfg(lean_4_26)]
             let (core_state_ref, world2) = {
-                let core_state_ref = ffi::lean_st_mk_ref(core_state_ptr, ffi::lean_box(0));
-                // In Lean 4.26+, lean_st_mk_ref returns the ST.Ref directly.
-                // The second arg is ignored by the runtime but we pass it for ABI compat.
+                // In Lean 4.26+, lean_st_mk_ref is a 1-arg export that
+                // returns the ST.Ref directly. `world2` is the dummy
+                // token for `lean_meta_metam_run`'s world parameter
+                // (ignored by the 4.26+ export it forwards to).
+                let core_state_ref = ffi::lean_st_mk_ref(core_state_ptr);
                 let world2 = ffi::lean_box(0);
                 (core_state_ref, world2)
             };
