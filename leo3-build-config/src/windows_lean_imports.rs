@@ -150,6 +150,11 @@ pub fn regenerate(config: &LeanConfig) -> Option<GeneratedImportLibs> {
         }
         libs.push((dll_name.clone(), lib_name));
     }
+    // No usable exports anywhere: handing back an empty lib set would
+    // emit no link libraries at all, so fall back to the bundled ones.
+    if libs.is_empty() {
+        return None;
+    }
     // Keep link order.
     libs.sort_by_key(|(dll_name, _)| {
         LEAN_DLL_STEMS
