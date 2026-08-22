@@ -7,6 +7,7 @@
 
 pub mod errors;
 pub mod impl_;
+pub mod windows_lean_imports;
 
 use errors::cargo_warn;
 use std::env;
