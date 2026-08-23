@@ -131,6 +131,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of duplicating it (W-352)
 
 ### Fixed
+- **`smoke-docs` job red since 2026-08-13 (broken rustdoc intra-doc link)**:
+  `a25e55c` added a `[crate::meta::repl::run_command]` link to
+  `MetaMContext::replace_env`'s doc, but `mod repl` is `#[cfg(lean_4_25)]`-gated,
+  so under `LEO3_NO_LEAN=1` (the smoke-docs configuration) the target does not
+  exist and `cargo doc -D warnings` fails — main has been red on the job
+  since. The reference is now plain code text. Two same-class links that CI
+  never exercised (they only fail the with-Lean doc build) are fixed too:
+  `goal_hyps_and_type_pp`'s sibling-method link is `Self::`-qualified, and
+  `ensure_search_path`'s doc no longer links the private `discover_sysroot`
 - **v4.26.0 Promise/Task SIGSEGV/SIGABRT (W-376)**: the same 4.26 runtime
   rewrite that dropped the `RealWorld` token from the IO primitives
   (see W-375) also unwrapped the promise C API — `lean_io_promise_new`
