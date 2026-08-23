@@ -172,6 +172,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and regenerates import libraries with the rustc-bundled `rust-lld`,
   cached under `~/.cache/leo3` keyed by DLL path+size+mtime; the bundled
   import libs remain the fallback when regeneration is not possible
+- **Windows runtime init panic `tacticElabAttribute not initialized after
+  initialize_Lean` (W-387)**: the next layer of the W-356 root-cause chain.
+  Linking now passes (regenerated import libs), and `initialize_Lean` returns
+  OK, yet the runtime canary at `leo3/src/runtime.rs` still saw
+  `l_Lean_Elab_Tactic_tacticElabAttribute` as null/scalar on `windows-latest`
+  for every Lean version (v4.26.0, stable, nightly) — while the identical
+  init sequence is green on ubuntu. The canary (and
+  `repl::register_builtin_tactic`) read the BSS global through a raw Rust
+  `extern static` import. Rust `extern static` imports are unreliable for
+  Windows DLL **data** symbols (the established fact documented in
+  `leo3-ffi`, why every other BSS global in the crate is read through
+  `win_bss::lookup_bss_global` = `GetProcAddress` + deref): the raw import
+  reads null/stale even though `initialize_Lean` correctly set the DLL's
+  global (same Lean C init code that works on Linux). Both sites now read
+  the global via the new cross-platform `ffi::meta::get_tacticElabAttribute`
+  accessor (extern static on non-Windows, `GetProcAddress` + deref on
+  Windows), and the canary's panic message now reports the raw value read so
+  a future recurrence self-diagnoses (null ⇒ symbol not exported or init
+  chain did not run; scalar ⇒ unexpected encoding). Layer determination:
+  not a stale import lib (link resolves + DLL loads), not a toolchain
+  mismatch (all versions fail identically) — it is the data-symbol import
+  form. The existing `windows-latest` × {stable, v4.26.0} legs of
+  `compat-runtime-matrix` regression-protect the fix.
 - **v4.20.0 compat reds (W-356)**: the `runTactic` / `ppGoal` repl bridge
   uses the Lean 4.25+ elaborator ABI, so it is now gated on `lean_4_25`
   (module, FFI re-exports, and the dependent tests). The `nextMacroScope`

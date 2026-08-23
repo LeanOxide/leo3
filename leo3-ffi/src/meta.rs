@@ -506,6 +506,14 @@ extern "C" {
     /// default for `state.scopes`, so it is guaranteed to be the correct
     /// layout for the linked toolchain version.
     pub static l_Lean_Elab_Command_instInhabitedScope_default: *mut lean_object;
+    /// `Lean.Elab.Tactic.tacticElabAttribute` — the `@[tactic]` attribute
+    /// extension table (BSS static), set during `initialize_Lean`.
+    ///
+    /// Gated on `lean_4_25` to match the runtime canary that validates it
+    /// (W-387). Read via `get_tacticElabAttribute`, never as a raw
+    /// `extern static` on Windows (see W-387).
+    #[cfg(lean_4_25)]
+    pub static l_Lean_Elab_Tactic_tacticElabAttribute: *mut lean_object;
 }
 
 // ============================================================================
@@ -729,6 +737,14 @@ bss_accessor!(/// Get the default `Lean.Elab.Command.Scope`
     /// frontend's `elabCommandTopLevel` uses as the `List.head` default
     /// for `state.scopes`.
     pub fn get_instInhabitedScope() -> l_Lean_Elab_Command_instInhabitedScope_default);
+
+#[cfg(lean_4_25)]
+bss_accessor!(/// Get the `@[tactic]` attribute extension (`tacticElabAttribute`).
+    ///
+    /// BSS static set during `initialize_Lean`. On Windows this MUST be read
+    /// via `GetProcAddress` + deref (see `win_bss`) — a raw `extern static`
+    /// import reads null/stale for DLL data symbols (W-387).
+    pub fn get_tacticElabAttribute() -> l_Lean_Elab_Tactic_tacticElabAttribute);
 
 #[inline]
 fn force_manual_meta_defaults() -> bool {

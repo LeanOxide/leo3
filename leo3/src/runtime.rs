@@ -65,12 +65,19 @@ pub(crate) fn ensure_environment_initialized() {
         ffi::initialize_constructions_module();
         #[cfg(lean_4_25)]
         {
-            extern "C" {
-                #[link_name = "l_Lean_Elab_Tactic_tacticElabAttribute"]
-                static tactic_attr: *mut ffi::lean_object;
-            }
+            // W-387: read via the reliable cross-platform accessor. On
+            // Windows a raw `extern static` import of this DLL data symbol
+            // reads null/stale (Rust extern-static imports are unreliable
+            // for Windows DLL data symbols), which made this canary panic
+            // even though `initialize_Lean` had set the DLL's global. The
+            // accessor routes Windows through `GetProcAddress` + deref.
+            let tactic_attr = ffi::meta::get_tacticElabAttribute();
             if tactic_attr.is_null() || ffi::inline::lean_is_scalar(tactic_attr) {
-                panic!("tacticElabAttribute not initialized after initialize_Lean");
+                panic!(
+                    "tacticElabAttribute not initialized after initialize_Lean \
+                     (read {tactic_attr:#p}; null => symbol not exported or \
+                     init chain did not run, scalar => unexpected encoding)"
+                );
             }
         }
         // Ensure builtin tactic registrations exist (the Lean module
