@@ -364,6 +364,19 @@ jobs:
           LEO3_NO_LEAN: 1
           RUSTDOCFLAGS: -D warnings --cfg docsrs
 
+  smoke-docs-lean:
+    uses: ./.github/workflows/test.yml
+    with:
+      os: ubuntu-latest
+      lean: stable
+      save-cache: ${{ github.ref == 'refs/heads/main' || contains(github.event.pull_request.labels.*.name, 'CI-save-pr-cache') }}
+      suite: Smoke / Documentation (with Lean)
+      # Symmetric to `smoke-docs` but with a real Lean toolchain: no-Lean
+      # mode compiles out the Lean-gated modules, so their doc comments
+      # (e.g. `metam.rs` sibling-method links, `repl.rs` private-item links)
+      # are never checked there. Broken intra-doc links go red here (W-383).
+      command: RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo doc --locked --workspace --no-deps --all-features
+
   coverage:
     name: Heavy / Coverage
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'CI-build-full')
@@ -510,6 +523,7 @@ jobs:
       - heavy-careful
       - heavy-asan
       - smoke-docs
+      - smoke-docs-lean
       - coverage
     runs-on: ubuntu-latest
     steps:
