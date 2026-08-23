@@ -762,7 +762,7 @@ fn sysroot_from_lib_dir(lib_dir: &str) -> Option<String> {
 /// Ensure Lean's search path reflects the current `LEAN_PATH` + sysroot,
 /// so module imports resolve `.olean` files. Safe to call repeatedly.
 ///
-/// The sysroot comes from [`discover_sysroot`] (`LEAN_SYSROOT`, then the
+/// The sysroot comes from `discover_sysroot` (`LEAN_SYSROOT`, then the
 /// linked toolchain, then `lean --print-prefix`). If it points at a
 /// different library directory than the one the binary was built
 /// against, this fails with an explicit error: loading `.olean` files

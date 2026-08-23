@@ -400,7 +400,7 @@ impl<'l> MetaMContext<'l> {
     }
 
     /// Replace the context's environment (e.g. with the output of
-    /// [`crate::meta::repl::run_command`]).
+    /// `crate::meta::repl::run_command`).
     ///
     /// Tactic elaboration reads constants from `Core.State.env` (field 0),
     /// so the new environment must be threaded there too — otherwise
@@ -793,7 +793,7 @@ impl<'l> MetaMContext<'l> {
     /// Get the local hypotheses of a goal as `(user_name, type_pp)` pairs,
     /// together with the goal's pretty-printed type.
     ///
-    /// Like [`goal_hyps_and_type`], but both the hypothesis types and the
+    /// Like [`Self::goal_hyps_and_type`], but both the hypothesis types and the
     /// goal type are rendered by Lean's real pretty printer
     /// (`Meta.ppExpr` under the goal's local context), so free variables
     /// appear with their user-facing names and usual notations.
