@@ -35,9 +35,12 @@ unsafe fn register_builtin_tactic(
             value: *mut ffi::lean_object,
             world: *mut ffi::lean_object,
         ) -> *mut ffi::lean_object;
-        #[link_name = "l_Lean_Elab_Tactic_tacticElabAttribute"]
-        static tactic_attr: *mut ffi::lean_object;
     }
+    // W-387: read the attribute via the reliable cross-platform accessor.
+    // On Windows a raw `extern static` import of this DLL data symbol reads
+    // null/stale, which would pass a null `attr` to `addBuiltin`. The accessor
+    // routes Windows through `GetProcAddress` + deref.
+    let tactic_attr = ffi::meta::get_tacticElabAttribute();
     let key_obj = LeanName::from_str(lean, key)?;
     let decl_obj = LeanName::from_str(lean, decl_name)?;
     let value = ffi::inline::lean_alloc_closure(fn_ptr, arity, 0);
