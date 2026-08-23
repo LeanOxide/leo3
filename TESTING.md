@@ -10,7 +10,7 @@ For the higher-level maintenance workflow, pair this guide with
 
 | Tier | Purpose | Typical jobs | Default trigger |
 | --- | --- | --- | --- |
-| Smoke | Fast formatting / compile / feature-surface regressions | `rustfmt`, `clippy`, `msrv`, `no-lean`, minimal + optional feature surface, docs | Every PR and push |
+| Smoke | Fast formatting / compile / feature-surface regressions | `rustfmt`, `clippy`, `msrv`, `no-lean`, minimal + optional feature surface, docs (no-Lean + with-Lean) | Every PR and push |
 | Runtime | Focused Lean-backed integration coverage | core runtime, async/tokio, macro runtime, FFI layout check | Every PR and push |
 | Examples | End-to-end Lean↔Rust template projects build and run | `examples` (lake-integration + class-integration on Linux and macOS, Lean v4.30.0; also verifies committed codegen output is fresh) | Every PR and push |
 | API | PR-only compatibility guard | semver checks | Pull requests |
@@ -70,6 +70,7 @@ LEO3_NO_LEAN=1 cargo test --locked -p leo3 --no-default-features --features "mac
 LEO3_NO_LEAN=1 cargo test --locked -p leo3 --features macros --test test_compile_error
 LEO3_NO_LEAN=1 cargo test --locked -p leo3 --features macros --test test_binding_metadata
 LEO3_NO_LEAN=1 RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo +nightly doc --locked --workspace --no-deps --all-features
+RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo +nightly doc --locked --workspace --no-deps --all-features
 ```
 
 ### Runtime
