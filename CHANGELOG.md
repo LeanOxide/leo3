@@ -71,6 +71,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `leo3::task::TaskPriority::SYNC`: explicit inline-execution priority
   (Lean's `Task.Priority.sync`, `u32::MAX`) — the task runs on the calling
   thread instead of being queued to the task pool
+- CI: a **v4.26.0** leg in `compat-runtime-matrix` (ubuntu/windows; macOS
+  excluded, as with the flaky v4.20.0 leg) — same spec as the v4.20.0 leg
+  (`cargo-test-full.sh cargo test --locked --all-features --workspace`).
+  The 4.26 boundary is the densest version-gating seam in the codebase
+  (world-token removal, Promise/Task C API de-IO-wrapping, the
+  `Format.pretty` symbol rename, ST ref C API changes), and both W-375 and
+  W-376 were only caught when a real v4.26.0 toolchain crashed — the
+  pinned leg gives that boundary direct regression coverage in CI
 
 ### Changed
 - **`io` module rewritten against the modern Lean handle ABI** (verified
