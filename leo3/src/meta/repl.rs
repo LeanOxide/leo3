@@ -701,11 +701,16 @@ pub fn init_search_path<'l>(lean: Lean<'l>, sysroot: &str) -> LeanResult<()> {
     crate::runtime::ensure_meta_initialized();
     unsafe {
         let path = crate::types::LeanString::mk(lean, sysroot)?;
+        // `initSearchPath (sysroot : System.FilePath) (sp : Lean.SearchPath := ∅) : IO Unit`
+        // compiles to a 3-arg C fn `(sysroot, sp, world)`. Pass the default empty
+        // search path (∅) explicitly: with arity 2 the world token mis-slots into
+        // `sp` and the real world arg is left undefined (garbage in R8 on Windows).
+        let sp = ffi::lean_box(0);
         let world = ffi::io::lean_io_mk_world();
         let result = apply_curried(
             ffi::meta::repl::lean_init_search_path as *mut std::ffi::c_void,
-            2,
-            &[path.into_ptr(), world],
+            3,
+            &[path.into_ptr(), sp, world],
         );
         super::metam::handle_eio_result(result)?;
         Ok(())
