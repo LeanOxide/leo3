@@ -31,9 +31,12 @@ extern "C" {
 // ============================================================================
 
 extern "C" {
-    /// `Lean.initSearchPath : FilePath → IO Unit` (curried, arity 2 with
-    /// the world token). Sets the global search path used by `importModules`
-    /// to `sysroot/lib/lean` plus `LEAN_PATH`.
+    /// `Lean.initSearchPath (leanSysroot : System.FilePath)
+    /// (sp : Lean.SearchPath := ∅) : IO Unit` — three-arg C ABI
+    /// `(sysroot, sp, world)`. Callers must pass `sp` explicitly (the
+    /// default ∅ is `lean_box 0`); see `init_search_path`. Sets the global
+    /// search path used by `importModules` to `sysroot/lib/lean` plus
+    /// `LEAN_PATH`.
     #[link_name = "l_Lean_initSearchPath"]
     pub fn lean_init_search_path(
         env: *mut *mut lean_object,
