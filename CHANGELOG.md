@@ -139,6 +139,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of duplicating it (W-352)
 
 ### Fixed
+- **CI: the vendored-libuv flake shield now covers every test target (W-389)**:
+  the Lean 4.33 `libleanshared.so` libuv abort (W-350) is load-dependent and
+  can take down any binary that drives the runtime, not just
+  `test_eq_proofs` — after the 4.33.1 release the `Compat / Full Matrix`
+  ubuntu/stable leg went red on exactly that signature and a rerun of the
+  same commit passed. `.github/scripts/cargo-test-full.sh` now retries in
+  isolation **any** sole failing target that died without printing a
+  libtest summary (signal kill, not assertion failure), using cargo's own
+  `to rerun pass` hint across all target forms — `--test`, `--bin`,
+  `--example`, `--bench`, `--lib`, `--doc` (incl. workspace `-p pkg`); the
+  section anchors were corrected against real cargo output (examples print
+  `Running unittests examples/NAME.rs`, bins print
+  `Running unittests src/main.rs` or `src/bin/NAME.rs` with the artifact
+  stem dash-normalized — package/target `foo-bar` builds
+  `deps/foo_bar-...` while the rerun hint keeps `--bin foo-bar` — benches
+  print `Running benches/NAME.rs`); when the same target name exists in
+  multiple workspace packages the anchor is ambiguous (cargo section
+  headers do not name the owning package) and the run conservatively
+  stays red; a clean retry turns the run green with a warning annotation,
+  while deterministic failures (failing tests, any co-failing target, or a
+  retry that fails again) still fail the run.
+  `.github/scripts/test-cargo-test-full.sh` pins the section-mapping logic
+  with 15 fake-cargo scenarios (run by the new `Smoke / Scripts` CI job).
 - **`smoke-docs` job red since 2026-08-13 (broken rustdoc intra-doc link)**:
   `a25e55c` added a `[crate::meta::repl::run_command]` link to
   `MetaMContext::replace_env`'s doc, but `mod repl` is `#[cfg(lean_4_25)]`-gated,
