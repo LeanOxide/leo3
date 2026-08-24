@@ -55,7 +55,8 @@ chmod +x "$workdir/fake-cargo"
 # written with heredocs that cannot create directories).
 for s in pass flake-test flake-test-still flake-deterministic multi-fail \
          compile-fail flake-lib-workspace flake-doc flake-example \
-         flake-bin-main flake-bin-named flake-bench; do
+         flake-bin-main flake-bin-named flake-bench flake-bin-hyphen-main \
+         flake-bin-hyphen-named multi-same-name; do
   mkdir -p "$workdir/$s"
 done
 
@@ -359,6 +360,74 @@ test bench_smoke ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
 LOG
 
+# flake-bin-hyphen-main: package foo-bar's DEFAULT bin is signal-killed.
+# Cargo names the artifact from the target with dashes normalized to
+# underscores (deps/foo_bar-...), while the rerun hint keeps the original
+# target name (--bin foo-bar) — the anchor must use the artifact stem.
+cat > "$workdir/flake-bin-hyphen-main/full.log" <<'LOG'
+     Running unittests src/main.rs (target/debug/deps/foo_bar-6a901a0bb418615b)
+running 1 test
+test main_test ... thread 'main_test' (666) has exited with signal 6 (SIGABRT)
+
+     Running unittests src/lib.rs (target/debug/deps/foo_bar-c3aa86536683aafc)
+running 1 test
+test lib_test ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass '--bin foo-bar'
+LOG
+cat > "$workdir/flake-bin-hyphen-main/retry.log" <<'LOG'
+     Running unittests src/main.rs (target/debug/deps/foo_bar-6a901a0bb418615b)
+running 1 test
+test main_test ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+LOG
+
+# flake-bin-hyphen-named: named bin sub-bin of package foo-bar killed —
+# the source path keeps the original target name (src/bin/sub-bin.rs) while
+# the artifact stem is sub_bin.
+cat > "$workdir/flake-bin-hyphen-named/full.log" <<'LOG'
+     Running unittests src/bin/sub-bin.rs (target/debug/deps/sub_bin-aecebca760d741dc)
+running 1 test
+test sub_test ... thread 'sub_test' (555) has exited with signal 6 (SIGABRT)
+
+     Running unittests src/main.rs (target/debug/deps/foo_bar-6a901a0bb418615b)
+running 1 test
+test main_test ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass '--bin sub-bin'
+LOG
+cat > "$workdir/flake-bin-hyphen-named/retry.log" <<'LOG'
+     Running unittests src/bin/sub-bin.rs (target/debug/deps/sub_bin-aecebca760d741dc)
+running 1 test
+test sub_test ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+LOG
+
+# multi-same-name: two workspace packages both define a bin named `shared`;
+# package a's section (with summary) runs first, package b's is the
+# signal-killed one. The section header does not name the owning package,
+# so the anchor is ambiguous — the script must refuse to retry rather than
+# check package a's (succeeding) section and skip the flake.
+cat > "$workdir/multi-same-name/full.log" <<'LOG'
+     Running unittests src/bin/shared.rs (target/debug/deps/shared-1a2b3c4d5e6f7890)
+running 1 test
+test t ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/bin/shared.rs (target/debug/deps/shared-0f9e8d7c6b5a4321)
+running 1 test
+test t ... thread 't' (333) has exited with signal 6 (SIGABRT)
+
+error: test failed, to rerun pass `-p b --bin shared`
+LOG
+
 # --- run -------------------------------------------------------------------
 scenario pass                 0       no    0    0
 scenario flake-test           0       yes   101  0
@@ -372,6 +441,9 @@ scenario flake-example        0       yes   101  0
 scenario flake-bin-main       0       yes   101  0
 scenario flake-bin-named      0       yes   101  0
 scenario flake-bench          0       yes   101  0
+scenario flake-bin-hyphen-main 0       yes   101  0
+scenario flake-bin-hyphen-named 0      yes   101  0
+scenario multi-same-name      nonzero no    101  0
 
 echo
 if [ "$failures" -gt 0 ]; then

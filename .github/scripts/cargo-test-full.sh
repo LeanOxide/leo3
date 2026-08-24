@@ -94,6 +94,9 @@ done
 #   --test NAME     Running tests/NAME.rs
 #   --bin NAME      Running unittests src/main.rs (target/debug/deps/NAME-
 #                   or Running unittests src/bin/NAME.rs (target/debug/deps/NAME-
+#                   (in the deps path, NAME is cargo's artifact name: target
+#                   name with dashes normalized to underscores; the source
+#                   file path keeps the original target name)
 #   --example NAME  Running unittests examples/NAME.rs
 #   --bench NAME    Running benches/NAME.rs
 #   --lib           Running unittests src/lib.rs (target/debug/deps/<stem>-
@@ -112,8 +115,9 @@ case "$target" in
     ;;
   "--bin "*)
     name=${target#--bin }
-    start_text="Running unittests src/main.rs (target/debug/deps/${name}-"
-    start_text2="Running unittests src/bin/${name}.rs (target/debug/deps/${name}-"
+    stem=${name//-/_}
+    start_text="Running unittests src/main.rs (target/debug/deps/${stem}-"
+    start_text2="Running unittests src/bin/${name}.rs (target/debug/deps/${stem}-"
     ;;
   "--example "*)
     name=${target#--example }
@@ -142,6 +146,17 @@ case "$target" in
     exit "$status"
     ;;
 esac
+
+# Multiple packages can legitimately carry the same target name, and cargo's
+# section header does not name the owning package, so when the anchor matches
+# more than one section there is no way to tell which one belongs to the
+# killed target. Keep the failure rather than check the wrong section
+# (see the multi-same-name scenario in test-cargo-test-full.sh).
+anchor_count=$(grep -cF -- "$start_text" "$log_file")
+if [ -n "$start_text2" ]; then
+  anchor_count=$((anchor_count + $(grep -cF -- "$start_text2" "$log_file")))
+fi
+[ "$anchor_count" -le 1 ] || exit "$status"
 
 section=$(awk -v s="$start_text" -v s2="$start_text2" '
   !f && (index($0, s) || (s2 != "" && index($0, s2))) { f = 1; next }
