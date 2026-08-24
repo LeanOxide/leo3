@@ -31,6 +31,10 @@
 # retry turns the run green with a warning annotation. Deterministic
 # failures (failing tests, any other failing target, or a retry that fails
 # again) still fail the run.
+#
+# The section-mapping anchors below are verified against real cargo output;
+# the regression scenarios live in .github/scripts/test-cargo-test-full.sh —
+# run it after editing this file.
 set -uo pipefail
 
 FLAKE_RETRY_LIMIT=2
@@ -69,30 +73,55 @@ failed_hint=$(grep -oE "to rerun pass ['\`][^'\`]+['\`]" "$log_file" \
   | head -n1 | sed -E "s/^to rerun pass ['\`]//; s/['\`]$//")
 
 # Split the hint into an optional `-p <pkg>` and the target selector
-# (`--test NAME` | `--lib` | `--example NAME` | `--doc`).
+# (`--test NAME` | `--bin NAME` | `--example NAME` | `--bench NAME` |
+# `--lib` | `--doc`).
 pkg=""
 target=""
 set -- $failed_hint
 while [ $# -gt 0 ]; do
   case "$1" in
     -p) pkg="${2-}"; shift ;;
-    --test|--example) target="$1 ${2-}"; shift ;;
+    --test|--bin|--example|--bench) target="$1 ${2-}"; shift ;;
     --lib|--doc) target="$1" ;;
   esac
   shift
 done
 
 # Map the selector to the literal text of the log line that starts that
-# target's section. The section ends at the next "Running " or "Doc-tests "
-# line (so summaries of later targets — still executed under --no-fail-fast,
-# including doc-tests, which print after every integration test binary —
-# cannot leak in). A binary killed by a signal never reaches libtest's
-# "test result:" summary line, so the section of a flake-aborted target
-# contains no summary.
+# target's section. Headers verified against real cargo output (see
+# .github/scripts/test-cargo-test-full.sh):
+#
+#   --test NAME     Running tests/NAME.rs
+#   --bin NAME      Running unittests src/main.rs (target/debug/deps/NAME-
+#                   or Running unittests src/bin/NAME.rs (target/debug/deps/NAME-
+#   --example NAME  Running unittests examples/NAME.rs
+#   --bench NAME    Running benches/NAME.rs
+#   --lib           Running unittests src/lib.rs (target/debug/deps/<stem>-
+#   --doc           Doc-tests <stem>
+#
+# The section ends at the next "Running " or "Doc-tests " line (so summaries
+# of later targets — still executed under --no-fail-fast, including
+# doc-tests, which print after every integration test binary — cannot leak
+# in). A binary killed by a signal never reaches libtest's "test result:"
+# summary line, so the section of a flake-aborted target contains no summary.
+start_text2=""
 case "$target" in
   "--test "*)
     name=${target#--test }
     start_text="Running tests/${name}.rs"
+    ;;
+  "--bin "*)
+    name=${target#--bin }
+    start_text="Running unittests src/main.rs (target/debug/deps/${name}-"
+    start_text2="Running unittests src/bin/${name}.rs (target/debug/deps/${name}-"
+    ;;
+  "--example "*)
+    name=${target#--example }
+    start_text="Running unittests examples/${name}.rs"
+    ;;
+  "--bench "*)
+    name=${target#--bench }
+    start_text="Running benches/${name}.rs"
     ;;
   --lib)
     if [ -n "$pkg" ]; then
@@ -100,10 +129,6 @@ case "$target" in
     else
       start_text="Running unittests src/lib.rs"
     fi
-    ;;
-  "--example "*)
-    name=${target#--example }
-    start_text="Running examples/${name}.rs"
     ;;
   --doc)
     if [ -n "$pkg" ]; then
@@ -118,8 +143,8 @@ case "$target" in
     ;;
 esac
 
-section=$(awk -v s="$start_text" '
-  !f && index($0, s) { f = 1; next }
+section=$(awk -v s="$start_text" -v s2="$start_text2" '
+  !f && (index($0, s) || (s2 != "" && index($0, s2))) { f = 1; next }
   f && ($0 ~ /^ *Running / || $0 ~ /^ *Doc-tests /) { exit }
   f { print }
 ' "$log_file")

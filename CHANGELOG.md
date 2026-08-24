@@ -147,10 +147,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same commit passed. `.github/scripts/cargo-test-full.sh` now retries in
   isolation **any** sole failing target that died without printing a
   libtest summary (signal kill, not assertion failure), using cargo's own
-  `to rerun pass` hint (incl. workspace `-p pkg --test/--lib/--doc`
-  forms); a clean retry turns the run green with a warning annotation,
-  while deterministic failures (failing tests, any co-failing target, or a
-  retry that fails again) still fail the run
+  `to rerun pass` hint across all target forms — `--test`, `--bin`,
+  `--example`, `--bench`, `--lib`, `--doc` (incl. workspace `-p pkg`); the
+  section anchors were corrected against real cargo output (examples print
+  `Running unittests examples/NAME.rs`, bins print
+  `Running unittests src/main.rs` or `src/bin/NAME.rs`, benches print
+  `Running benches/NAME.rs`), and a clean retry turns the run green with a
+  warning annotation, while deterministic failures (failing tests, any
+  co-failing target, or a retry that fails again) still fail the run.
+  `.github/scripts/test-cargo-test-full.sh` pins the section-mapping logic
+  with 12 fake-cargo scenarios (run by the new `Smoke / Scripts` CI job).
 - **`smoke-docs` job red since 2026-08-13 (broken rustdoc intra-doc link)**:
   `a25e55c` added a `[crate::meta::repl::run_command]` link to
   `MetaMContext::replace_env`'s doc, but `mod repl` is `#[cfg(lean_4_25)]`-gated,

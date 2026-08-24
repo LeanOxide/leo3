@@ -143,6 +143,14 @@ jobs:
       - name: Compile leo3-macros doctests without Lean
         run: RUSTC_WRAPPER= LEO3_NO_LEAN=1 cargo test --locked -p leo3-macros --doc
 
+  smoke-scripts:
+    name: Smoke / Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run cargo-test-full.sh flake-shield regression scenarios
+        run: bash .github/scripts/test-cargo-test-full.sh
+
   smoke-minimal-surface:
     uses: ./.github/workflows/test.yml
     with:
