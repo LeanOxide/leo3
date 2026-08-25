@@ -213,6 +213,12 @@ impl<'l> MetaMContext<'l> {
         // same thread where Lean was initialized to avoid cross-thread
         // object access violations (SIGSEGV from mimalloc thread-local heaps).
         let result = crate::runtime::with_worker(move || unsafe {
+            // W-407 Bug B: reset the thread-local heartbeat counter
+            // before dispatching `MetaM.run'` (which does not snapshot
+            // `initHeartbeats`), so the computation's `maxHeartbeats`
+            // check measures this command's allocations instead of the
+            // process-wide count.
+            crate::runtime::reset_heartbeats();
             // Wrap core_state in an ST.Ref as required by the CoreM monad stack.
             // lean_meta_metam_run creates the ST.Ref for Meta.State internally,
             // but expects Core.State to already be wrapped in an ST.Ref.
@@ -281,6 +287,12 @@ impl<'l> MetaMContext<'l> {
                 // ST.Ref threading) and does not corrupt the heap when the
                 // computation assigns a metavariable (2026-08 audit; the
                 // `MetaM.run` variants double-drop the returned Meta.State).
+                // Unlike `MetaM.run'`, `MetaM.toIO` snapshots the
+                // heartbeat baseline itself (`CoreM.toIO` sets
+                // `initHeartbeats := (← IO.getNumHeartbeats)`), so its
+                // `maxHeartbeats` check already measures this command
+                // from its entry — no `reset_heartbeats` needed here
+                // (W-407 Bug B).
                 let world = ffi::lean_box(0);
                 let result = ffi::meta::lean_meta_metam_to_io(
                     computation_ptr,
