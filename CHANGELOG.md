@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`LeanEnvironment::free_regions`** (`meta` feature): releases the C++
+  `compacted_region` buffers that `importModules` attaches to the
+  environment header (`env.header.regions`, ~1.4 GB for a full `Lean`
+  import) by calling Lean's `Environment.freeRegions` — the only release
+  path for those buffers, which the stock runtime only invokes from the
+  one-shot `lean` CLI path. The method consumes the environment (the
+  underlying FFI is linear) and must be called on the last reference,
+  after dropping everything derived from the import; repeated
+  `importModules` sessions that release via `free_regions` now keep RSS
+  flat instead of leaking ~1.4–1.6 GB per session (W-407 / W-413). The
+  binding is version-gated on the 4.26 world-token erasure
+  (`(env, world) -> EIO Unit` pre-4.26, `(env) -> EIO Unit` 4.26+) and is
+  available on every supported toolchain (4.20–4.34)
 - `io` now runs on **Lean 4.26 through 4.33** (and still 4.20/4.25): the
   runtime split that erased the `world` token from the IO primitives and
   from `EStateM.Result` (ctor `(0, 1)`), turned
