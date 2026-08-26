@@ -120,7 +120,7 @@ pub mod context;
 pub mod declaration;
 pub mod environment;
 pub mod expr;
-#[cfg(lean_4_25)]
+#[cfg(all(lean_4_25, target_os = "linux"))]
 pub mod keepalive;
 pub mod level;
 pub mod literal;
@@ -141,9 +141,10 @@ pub use metam::MetaMContext;
 pub use name::{LeanName, NameKind};
 pub use tactic::{apply, assumption, exact, goal_type, intro, rfl, TacticResult, TacticState};
 
-#[cfg(lean_4_25)]
+#[cfg(all(lean_4_25, target_os = "linux"))]
 pub use keepalive::{
-    diff_freed_vmras, record_freed_set, remap_cross_set_bases, snapshot_olean_vmras, OleanVma,
+    diff_freed_vmras, record_freed_set, remap_cross_set_bases, snapshot_lean_vmras, LeanVma,
+    RemapError,
 };
 #[cfg(lean_4_25)]
 pub use repl::{

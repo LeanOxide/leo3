@@ -4,11 +4,7 @@
 //! unmaps the environment's compacted regions, which would dangle those cache
 //! keys. The next import's symbol lookup must not dereference them.
 
-#![cfg(all(
-    feature = "meta",
-    feature = "runtime-tests",
-    lean_4_25
-))]
+#![cfg(all(feature = "meta", feature = "runtime-tests", lean_4_25))]
 
 use leo3::meta::*;
 use leo3::prelude::*;
@@ -19,8 +15,11 @@ fn free_regions_after_elab_keeps_next_import_crash_free() {
         for _ in 0..6u32 {
             let env = import_modules(lean, &["Lean"], 0)?;
             let mut metam = MetaMContext::new(lean, env)?;
-            let ty =
-                LeanExpr::const_(lean, LeanName::from_str(lean, "True")?, LeanList::nil(lean)?)?;
+            let ty = LeanExpr::const_(
+                lean,
+                LeanName::from_str(lean, "True")?,
+                LeanList::nil(lean)?,
+            )?;
             let goal = metam.mk_goal(&ty)?;
             let mvar = LeanExpr::mvar_id(&goal)?;
             let stx = parse_tactic(lean, metam.env(), "exact True.intro")?;
