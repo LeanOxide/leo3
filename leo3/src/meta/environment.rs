@@ -308,6 +308,74 @@ impl LeanEnvironment {
     }
 }
 
+impl<'l> LeanBound<'l, LeanEnvironment> {
+    /// Free the compacted regions backing this environment's imported
+    /// modules, releasing the C++ `compacted_region` buffers that hold the
+    /// olean payloads.
+    ///
+    /// W-407 Bug A: `importModules` compacts each module's olean payload
+    /// into C++ `compacted_region` buffers attached to the environment
+    /// header (`env.header.regions`) — ~1.4 GB for a full `Lean` import.
+    /// Nothing else ever releases those buffers: `lean_dec` on the
+    /// environment only drops reference counts, and the native runtime has
+    /// no mark-sweep GC. Lean's `Environment.freeRegions` is the only
+    /// release path, and the stock runtime only invokes it from the
+    /// one-shot `lean` CLI path (`withImportModules`) — so embedded callers
+    /// that call `importModules` repeatedly (e.g. one environment per
+    /// session) permanently leak one ~1.4–1.6 GB buffer per import. This
+    /// method is the Rust-side entry to that release.
+    ///
+    /// **Consumes `self`.** `freeRegions` is linear: the callee `dec`s the
+    /// environment before freeing the regions. After this call, the
+    /// environment and **every Lean object derived from its import**
+    /// (expressions, names, tactic contexts, `MetaMContext`s built on it,
+    /// ...) are dangling and must not be used. If another environment was
+    /// derived from this one (e.g. via `run_cmd` or `add_decl`), drop it
+    /// and everything derived from it **before** calling this method.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that `self` is the **last live reference**
+    /// to this environment: no other Rust value may hold the environment
+    /// or any object allocated during its import. `LeanBound` is `Clone`,
+    /// and every clone (and every object derived from the import) keeps
+    /// the same Lean reference count alive — releasing the regions while
+    /// any of them still lives, or using/dropping one afterwards, is a
+    /// use-after-free or heap corruption. This restates `freeRegions`'
+    /// documented precondition ("no live references to imported objects
+    /// may exist at the time of invocation"), which a consuming method on
+    /// a `Clone` type cannot enforce from safe Rust.
+    ///
+    /// # Errors
+    ///
+    /// Returns the Lean exception if the region-free IO step fails
+    /// (normally unreachable).
+    pub unsafe fn free_regions(self) -> LeanResult<()> {
+        let env_ptr = self.into_ptr();
+        with_worker(move || unsafe {
+            #[cfg(not(lean_4_26))]
+            {
+                let world = ffi::io::lean_io_mk_world();
+                let result = ffi::environment::lean_environment_free_regions(env_ptr, world);
+                // The callee ignores `world` (the result carries its own
+                // fresh token), so release it here.
+                ffi::lean_dec(world);
+                // `EIO Unit`: tag 0 = ok(unit) — the payload is a scalar
+                // unit, never dec'd; tag 1 = error (rendered by
+                // `handle_eio_result`).
+                super::metam::handle_eio_result(result).map(|_| ())
+            }
+            #[cfg(lean_4_26)]
+            {
+                // Lean >= 4.26 (ST redesign): the world token is erased
+                // from the export; same `EIO Unit` result handling.
+                let result = ffi::environment::lean_environment_free_regions(env_ptr);
+                super::metam::handle_eio_result(result).map(|_| ())
+            }
+        })
+    }
+}
+
 /// Information about a constant in the environment
 ///
 /// Constants include axioms, definitions, theorems, inductive types, constructors, etc.

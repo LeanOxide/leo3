@@ -104,6 +104,54 @@ extern "C" {
 }
 
 // ============================================================================
+// Region Management
+// ============================================================================
+
+// `lean_environment_free_regions` is the direct C export of
+// `Environment.freeRegions` (`src/Lean/Environment.lean`), the only release
+// path for the C++ `compacted_region` buffers that hold a module import's
+// olean payloads (`env.header.regions`).
+//
+// ABI by era: pre-4.26 the export threads the IO world token
+// (`(env, world) -> EIO Unit`); 4.26+ (ST redesign) erases the singleton
+// world, so the export takes only the environment (`(env) -> EIO Unit`).
+// Verified by disassembly against the v4.20.0 / v4.25.2 binaries (world
+// present, `rsi` saved and echoed into the result) and the v4.26.0 /
+// v4.33.1 binaries (no `rsi` use at all).
+
+extern "C" {
+    /// `Environment.freeRegions (env : Environment) : IO Unit` — frees the
+    /// compacted regions of an imported environment.
+    ///
+    /// **Linear**: consumes `env`. The compiled body extracts
+    /// `env.header.regions`, `dec`s `env`, and only then frees the regions —
+    /// so the caller must hand over its last reference to the environment
+    /// and must hold no other live references to objects derived from the
+    /// same import (they may share the freed region storage).
+    ///
+    /// # Safety
+    /// - `env` must be a valid `Environment` object (consumed)
+    /// - `world` must be a valid world token; it is ignored by the callee
+    ///   (not decremented — the result carries its own fresh token)
+    /// - Must be called on the Lean worker thread
+    /// - Returns an `EIO Unit` result; the caller owns it
+    #[cfg(not(lean_4_26))]
+    pub fn lean_environment_free_regions(env: lean_obj_arg, world: lean_obj_arg) -> lean_obj_res;
+
+    /// `Environment.freeRegions (env : Environment) : IO Unit` (Lean 4.26
+    /// and later, ST redesign): the world token was erased, so the export
+    /// takes only the environment. Same linear semantics and preconditions
+    /// as the pre-4.26 form.
+    ///
+    /// # Safety
+    /// - `env` must be a valid `Environment` object (consumed)
+    /// - Must be called on the Lean worker thread
+    /// - Returns an `EIO Unit` result; the caller owns it
+    #[cfg(lean_4_26)]
+    pub fn lean_environment_free_regions(env: lean_obj_arg) -> lean_obj_res;
+}
+
+// ============================================================================
 // Environment Modifications (Immutable Updates)
 // ============================================================================
 
