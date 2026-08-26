@@ -138,8 +138,8 @@ extern "C" {
     #[cfg(not(lean_4_26))]
     pub fn lean_environment_free_regions(env: lean_obj_arg, world: lean_obj_arg) -> lean_obj_res;
 
-    /// `Environment.freeRegions (env : Environment) : IO Unit` (Lean
-    /// >= 4.26, ST redesign): the world token was erased, so the export
+    /// `Environment.freeRegions (env : Environment) : IO Unit` (Lean 4.26
+    /// and later, ST redesign): the world token was erased, so the export
     /// takes only the environment. Same linear semantics and preconditions
     /// as the pre-4.26 form.
     ///

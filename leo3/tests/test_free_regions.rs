@@ -26,7 +26,7 @@
 #![cfg(all(
     feature = "meta",
     feature = "runtime-tests",
-    not(target_os = "windows"),
+    target_os = "linux",
     lean_4_25
 ))]
 
@@ -38,11 +38,6 @@ fn rss_bytes() -> u64 {
     let s = std::fs::read_to_string("/proc/self/statm").expect("statm");
     let resident_pages: u64 = s.split_whitespace().nth(1).unwrap().parse().unwrap();
     resident_pages * 4096
-}
-
-#[cfg(not(target_os = "linux"))]
-fn rss_bytes() -> u64 {
-    0
 }
 
 #[test]
@@ -60,12 +55,16 @@ fn test_free_regions_keeps_rss_flat_across_imports() {
         // delta.
         {
             let env = import_modules(lean, &["Lean"], 0)?;
-            env.free_regions()?;
+            // Safety: `env` is freshly imported and nothing derived from
+            // the import escapes the block — it is the last live reference.
+            unsafe { env.free_regions() }?;
         }
         let rss_before = rss_bytes();
         for _ in 0..ITERS {
             let env = import_modules(lean, &["Lean"], 0)?;
-            env.free_regions()?;
+            // Safety: as in the warm-up above — `env` is the last live
+            // reference to a freshly imported environment.
+            unsafe { env.free_regions() }?;
         }
         let rss_after = rss_bytes();
         let growth = rss_after.saturating_sub(rss_before);

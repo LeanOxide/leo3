@@ -13,10 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment header (`env.header.regions`, ~1.4 GB for a full `Lean`
   import) by calling Lean's `Environment.freeRegions` — the only release
   path for those buffers, which the stock runtime only invokes from the
-  one-shot `lean` CLI path. The method consumes the environment (the
-  underlying FFI is linear) and must be called on the last reference,
-  after dropping everything derived from the import; repeated
-  `importModules` sessions that release via `free_regions` now keep RSS
+  one-shot `lean` CLI path. The method is `unsafe`: it consumes the
+  environment (the underlying FFI is linear) and requires the caller to
+  guarantee it is the last live reference, with everything derived from
+  the import already dropped. Repeated `importModules` sessions that
+  release via `free_regions` now keep RSS
   flat instead of leaking ~1.4–1.6 GB per session (W-407 / W-413). The
   binding is version-gated on the 4.26 world-token erasure
   (`(env, world) -> EIO Unit` pre-4.26, `(env) -> EIO Unit` 4.26+) and is

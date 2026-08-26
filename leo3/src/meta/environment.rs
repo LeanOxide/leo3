@@ -333,19 +333,24 @@ impl<'l> LeanBound<'l, LeanEnvironment> {
     /// derived from this one (e.g. via `run_cmd` or `add_decl`), drop it
     /// and everything derived from it **before** calling this method.
     ///
-    /// # Preconditions
+    /// # Safety
     ///
-    /// `self` must be the last live reference to this environment — no
-    /// other Rust value may hold this environment or any object allocated
-    /// during its import — matching `freeRegions`' documented precondition
-    /// ("no live references to imported objects may exist at the time of
-    /// invocation").
+    /// The caller must guarantee that `self` is the **last live reference**
+    /// to this environment: no other Rust value may hold the environment
+    /// or any object allocated during its import. `LeanBound` is `Clone`,
+    /// and every clone (and every object derived from the import) keeps
+    /// the same Lean reference count alive — releasing the regions while
+    /// any of them still lives, or using/dropping one afterwards, is a
+    /// use-after-free or heap corruption. This restates `freeRegions`'
+    /// documented precondition ("no live references to imported objects
+    /// may exist at the time of invocation"), which a consuming method on
+    /// a `Clone` type cannot enforce from safe Rust.
     ///
     /// # Errors
     ///
     /// Returns the Lean exception if the region-free IO step fails
     /// (normally unreachable).
-    pub fn free_regions(self) -> LeanResult<()> {
+    pub unsafe fn free_regions(self) -> LeanResult<()> {
         let env_ptr = self.into_ptr();
         with_worker(move || unsafe {
             #[cfg(not(lean_4_26))]
