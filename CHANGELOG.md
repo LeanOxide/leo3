@@ -33,13 +33,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`hash(module) % 0x7f00_0000_0000`, 64 KiB aligned), the keepalive module
   snapshots those file-backed VMAs (from `/proc/self/maps`) before/after
   `free_regions` and, before a cross-set import, re-`mmap`s the freed set's
-  regions at their original addresses, reviving the dangling keys. The
-  re-`mmap` uses `MAP_FIXED_NOREPLACE` and verifies the target file's inode,
-  so it can never clobber a range the OS has since re-used (a refused
-  re-mmap is reported to the caller, which blocks the import rather than
-  proceeding with dangling keys). Same-set imports self-heal and are left
-  alone, so the common case pays no RSS cost; each *distinct* freed set that
-  is later crossed pins one resident copy of its file-backed regions.
+  regions at their original addresses, reviving the dangling keys. Each VMA is
+  identified by its full identity (address range, file offset, inode, device,
+  path, and file size) so a range that was freed and then re-used by a
+  *different* file is correctly treated as freed (not silently accepted), and
+  same-address/same-length VMAs with different file identities are detected as
+  a conflict and the re-map is refused (reported to the caller, which blocks
+  the import) rather than both committing. The re-`mmap` uses
+  `MAP_FIXED_NOREPLACE` and, after the call, verifies the kernel returned the
+  exact requested address; it re-opens the file and re-checks inode, device,
+  and size (a shrunken file is refused), and refuses files that have since
+  been deleted (the ` (deleted)` maps suffix). A kernel guard (>= 4.17, where
+  `MAP_FIXED_NOREPLACE` landed) makes the stopgap a no-op on older kernels
+  rather than a silent `MAP_FIXED` clobber. A refused re-mmap is reported to
+  the caller, which blocks the import rather than proceeding with dangling
+  keys. Same-set imports self-heal and are left alone, so the common case pays
+  no RSS cost; each *distinct* freed set that is later crossed pins one
+  resident copy of its file-backed regions. The per-environment safe-free
+  decision (which lives in `leotower`) detects file-backed vs heap-backed
+  imports from an import-time `/proc/self/maps` diff: a file-backed env is
+  freed and its regions recorded; a heap-backed env is freed only when its
+  module set has a file-backed copy (its names alias that copy's cache
+  entries), otherwise it is leaked (freeing would dangle a newly-cached key).
   **Stopgap, Linux only** (it reads `/proc/self/maps` and needs
   `MAP_FIXED_NOREPLACE`); the true fix is upstream (content-owning cache
   keys) and is tracked separately.

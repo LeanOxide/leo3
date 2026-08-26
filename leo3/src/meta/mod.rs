@@ -143,8 +143,8 @@ pub use tactic::{apply, assumption, exact, goal_type, intro, rfl, TacticResult, 
 
 #[cfg(all(lean_4_25, target_os = "linux"))]
 pub use keepalive::{
-    diff_freed_vmras, record_freed_set, remap_cross_set_bases, snapshot_lean_vmras, LeanVma,
-    RemapError,
+    diff_added_vmras, diff_freed_vmras, has_file_backed_copy, record_freed_set,
+    register_file_backed_set, remap_cross_set_bases, snapshot_lean_vmras, LeanVma, RemapError,
 };
 #[cfg(lean_4_25)]
 pub use repl::{
