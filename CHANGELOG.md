@@ -139,6 +139,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of duplicating it (W-352)
 
 ### Fixed
+- **spurious `maxHeartbeats` timeouts on long-lived workers (W-407 / W-412)**:
+  Lean's heartbeat counter (the small-allocation counter) is thread-local and
+  accumulates monotonically across every command on the worker thread. Only
+  `CoreM.toIO` snapshots the baseline (`initHeartbeats := (← IO.getNumHeartbeats)`),
+  but the monadic FFI entry points used by the `meta` module —
+  `Lean.Elab.runTactic`, `Lean.Meta.ppGoal` / `ppExpr`,
+  `Lean.Elab.Command.elabCommandTopLevel`, and `MetaM.run'` — do not go through
+  `CoreM.toIO`, so `Core.checkMaxHeartbeatsCore` measured the *process-wide*
+  allocation count against `maxHeartbeats` (200000 × 1000). A trivial tactic
+  then deterministically "timed out" once enough prior work had run — each
+  `import Modules` of `Lean` alone costs ~3.56M heartbeats, so a LeanDojo-style
+  loop of fresh `Repl()` sessions crossed the 200M limit after ~56 imports.
+  Each of those entry points now resets the worker thread's counter via
+  `lean_io_set_heartbeats` (new FFI binding, alongside
+  `lean_io_get_num_heartbeats`, version-gated for the 4.26 ST redesign that
+  erased the world token from the IO primitives) before dispatching the
+  command, so the
+  per-command budget measures a single command's allocations again
+  (`run_persistent` needs no reset — `MetaM.toIO` already snapshots the
+  baseline). `tests/test_heartbeat_reset.rs` pins the regression: the worker
+  counter is pushed past the limit, and a trivial tactic must still succeed.
 - **CI: the vendored-libuv flake shield now covers every test target (W-389)**:
   the Lean 4.33 `libleanshared.so` libuv abort (W-350) is load-dependent and
   can take down any binary that drives the runtime, not just

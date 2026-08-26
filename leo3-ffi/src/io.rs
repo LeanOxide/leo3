@@ -486,6 +486,60 @@ extern "C" {
 // host-side in pure Rust.
 
 // ============================================================================
+// Heartbeat Counter
+// ============================================================================
+
+extern "C" {
+    /// `IO.getNumHeartbeats : BaseIO Nat` (`src/runtime/io.cpp`) — reads the
+    /// current *thread-local* heartbeat counter.
+    ///
+    /// In the native runtime the heartbeat counter is the small-object
+    /// allocation counter (bumped by every `lean_alloc_small`): it is what
+    /// `Core.checkMaxHeartbeatsCore` compares against
+    /// `Core.Context.initHeartbeats` for the `maxHeartbeats` limit.
+    ///
+    /// # Safety
+    /// - `world` must be a valid world token; it is ignored by the callee
+    ///   (not decremented — the result carries its own fresh token)
+    /// - Returns an `IO Nat` result; the caller owns it
+    #[cfg(not(lean_4_26))]
+    pub fn lean_io_get_num_heartbeats(world: lean_obj_arg) -> lean_obj_res;
+
+    /// `IO.setNumHeartbeats` / `BaseIO.setHeartbeats (count : Nat) : BaseIO
+    /// Unit` (`src/runtime/io.cpp`) — sets the current *thread-local*
+    /// heartbeat counter to `count`.
+    ///
+    /// # Safety
+    /// - `count` must be a valid `Nat` object (consumed)
+    /// - `world` must be a valid world token; it is ignored by the callee
+    ///   (not decremented — the result carries its own fresh token)
+    /// - Returns an `IO Unit` result; the caller owns it
+    #[cfg(not(lean_4_26))]
+    pub fn lean_io_set_heartbeats(count: lean_obj_arg, world: lean_obj_arg) -> lean_obj_res;
+
+    /// `IO.getNumHeartbeats` (Lean >= 4.26, ST redesign): the world token
+    /// was erased from the IO primitives, so this export takes no
+    /// arguments and returns the counter as a raw `Nat` — an inlined small
+    /// value (`1 + 2*n`, never dec'd) or a big-Nat heap object (caller
+    /// owns it) when the count overflows the inline range.
+    ///
+    /// # Safety
+    /// - When the returned object is heap-allocated (even address), the
+    ///   caller owns one reference and must release it
+    #[cfg(lean_4_26)]
+    pub fn lean_io_get_num_heartbeats() -> lean_obj_res;
+
+    /// `BaseIO.setHeartbeats (count : Nat) : BaseIO Unit` (Lean >= 4.26,
+    /// ST redesign): the world token was erased, so this export takes only
+    /// the count and returns a raw unit scalar (never dec'd).
+    ///
+    /// # Safety
+    /// - `count` must be a valid `Nat` object (consumed)
+    #[cfg(lean_4_26)]
+    pub fn lean_io_set_heartbeats(count: lean_obj_arg) -> lean_obj_res;
+}
+
+// ============================================================================
 // IO Error Constructors
 // ============================================================================
 

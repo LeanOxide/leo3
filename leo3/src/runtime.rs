@@ -264,3 +264,48 @@ where
 {
     with_worker(f)
 }
+
+/// Reset the worker thread's Lean heartbeat counter to zero.
+///
+/// W-407 Bug B: the heartbeat counter (the small-allocation counter) is
+/// thread-local and accumulates monotonically across every command run on
+/// the worker thread. The monadic FFI entry points used by the `meta`
+/// module (`Lean.Elab.runTactic`, `Lean.Meta.ppGoal`/`ppExpr`,
+/// `Lean.Elab.Command.elabCommandTopLevel`, `MetaM.run'`) do not go through
+/// `CoreM.toIO` — the only place that snapshots the baseline
+/// (`initHeartbeats := (← IO.getNumHeartbeats)`, `src/Lean/CoreM.lean`) — so
+/// `Core.checkMaxHeartbeatsCore` measures the *process-wide* allocation
+/// count against `maxHeartbeats` (200000 × 1000) instead of a single
+/// command's. A trivial `runTactic` then deterministically times out once
+/// enough prior work has run (each `import Modules` of `Lean` alone costs
+/// ~3.56M heartbeats).
+///
+/// Call this as the first statement of each such command entry, on the
+/// worker thread, to restore the intended "200M small allocations per
+/// command" semantics. The worker thread serializes all Lean work, so the
+/// reset is race-free.
+///
+/// # Safety
+/// - Must be called on the Lean worker thread: the counter is
+///   thread-local, and the call must stay inside the serialized FFI path
+///   that precedes the command it guards.
+#[cfg(feature = "meta")]
+pub(crate) unsafe fn reset_heartbeats() {
+    let zero = crate::ffi::lean_box(0);
+    #[cfg(not(lean_4_26))]
+    {
+        let world = crate::ffi::io::lean_io_mk_world();
+        let result = crate::ffi::io::lean_io_set_heartbeats(zero, world);
+        // The callee decs `zero`. `world` is ignored (the result carries
+        // its own fresh token), so release it ourselves.
+        crate::ffi::lean_dec(world);
+        crate::ffi::lean_dec(result);
+    }
+    #[cfg(lean_4_26)]
+    {
+        // Lean >= 4.26 (ST redesign): the world token is gone and the
+        // return is a raw unit scalar (never dec'd); the callee decs
+        // `zero`.
+        crate::ffi::io::lean_io_set_heartbeats(zero);
+    }
+}

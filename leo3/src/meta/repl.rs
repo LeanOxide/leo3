@@ -989,6 +989,11 @@ pub fn run_tactic<'l>(
 
     let (alpha, new_meta_state, new_core_state, new_term_state, kept_meta_ref) =
         crate::runtime::with_worker(move || unsafe {
+            // W-407 Bug B: reset the thread-local heartbeat counter before
+            // dispatching `Lean.Elab.runTactic` (which does not snapshot
+            // `initHeartbeats`), so its `maxHeartbeats` check measures this
+            // command's allocations instead of the process-wide count.
+            crate::runtime::reset_heartbeats();
             // Meta.State ref: reuse the caller's persistent ref if given,
             // else wrap the context's current bare state.
             let meta_state_ref = if let Some(r) = &persistent_meta_ref {
@@ -1252,6 +1257,10 @@ pub fn pp_goal<'l>(
     let meta_state_ptr = meta_state.into_ptr();
 
     let rendered = crate::runtime::with_worker(move || unsafe {
+        // W-407 Bug B: reset the heartbeat counter for this command
+        // (see `run_tactic`; `Lean.Meta.ppGoal` does not snapshot
+        // `initHeartbeats` either).
+        crate::runtime::reset_heartbeats();
         // State refs, following the run_tactic pattern: wrap the session's
         // current Meta.State / Core.State in fresh ST refs plus a world token.
         #[cfg(not(lean_4_26))]
@@ -1395,6 +1404,10 @@ pub fn pp_exprs<'l>(
     let meta_state_ptr = meta_state.into_ptr();
 
     let rendered: Vec<*mut ffi::lean_object> = crate::runtime::with_worker(move || unsafe {
+        // W-407 Bug B: reset the heartbeat counter for this command (see
+        // `run_tactic`; `Lean.Meta.ppExpr` does not snapshot
+        // `initHeartbeats` either).
+        crate::runtime::reset_heartbeats();
         // State refs + world, created once and shared across the loop.
         // The callee decs the references it is handed; we keep one base
         // reference each (the `mk_ref` extraction) and drop it at the end.
@@ -1531,6 +1544,11 @@ unsafe fn run_command_core<'l>(
         // Must run on the worker thread: elabCommand allocates Lean
         // objects (olean reading, environment construction), and Lean
         // objects must not cross minimal-move local heaps.
+        // W-407 Bug B: reset the heartbeat counter before dispatching
+        // `elabCommandTopLevel` (it does not snapshot `initHeartbeats`),
+        // so the command's `maxHeartbeats` check measures this command's
+        // allocations instead of the process-wide count.
+        crate::runtime::reset_heartbeats();
         let cmd_state_owned = mk_command_state(&env)?;
         #[cfg(not(lean_4_26))]
         let (cmd_state_ref, world) = {
