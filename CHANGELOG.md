@@ -22,6 +22,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binding is version-gated on the 4.26 world-token erasure
   (`(env, world) -> EIO Unit` pre-4.26, `(env) -> EIO Unit` 4.26+) and is
   available on every supported toolchain (4.20–4.34)
+- **`meta::keepalive`**: stopgap for the cross-module-set SIGSEGV that
+  follows `free_regions` (W-417). The Lean runtime's global
+  `g_native_symbol_cache` holds *borrowed* `name` pointers into the
+  environment's compacted import regions; `Environment.freeRegions`
+  `munmap`s those regions, so the cached keys dangle and a later import of
+  a *different* module set crashes on its first symbol lookup. Because each
+  `.olean` is `mmap`ed at a deterministic base (`hash(module) %
+  0x7f00_0000_0000`, 64 KiB aligned), the keepalive module snapshots the
+  olean VMAs before/after `free_regions` and, before a cross-set import,
+  re-`mmap`s the freed set's regions at their original addresses, reviving
+  the dangling keys. Same-set imports self-heal and are left alone, so the
+  common case pays no RSS cost; each *distinct* freed set that is later
+  crossed pins one resident copy of its olean regions. **Stopgap**: the
+  true fix is upstream (content-owning cache keys) and is tracked
+  separately.
 - `io` now runs on **Lean 4.26 through 4.33** (and still 4.20/4.25): the
   runtime split that erased the `world` token from the IO primitives and
   from `EStateM.Result` (ctor `(0, 1)`), turned

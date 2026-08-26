@@ -120,6 +120,8 @@ pub mod context;
 pub mod declaration;
 pub mod environment;
 pub mod expr;
+#[cfg(lean_4_25)]
+pub mod keepalive;
 pub mod level;
 pub mod literal;
 pub mod metam;
@@ -139,6 +141,10 @@ pub use metam::MetaMContext;
 pub use name::{LeanName, NameKind};
 pub use tactic::{apply, assumption, exact, goal_type, intro, rfl, TacticResult, TacticState};
 
+#[cfg(lean_4_25)]
+pub use keepalive::{
+    diff_freed_vmras, record_freed_set, remap_cross_set_bases, snapshot_olean_vmras, OleanVma,
+};
 #[cfg(lean_4_25)]
 pub use repl::{
     default_term_context, default_term_state, ensure_search_path, import_modules,
