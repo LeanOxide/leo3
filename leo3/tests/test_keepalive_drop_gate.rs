@@ -33,10 +33,10 @@ fn drop_gate_frees_file_backed_and_leaks_heap_backed() {
     let result: LeanResult<()> = leo3::test_with_lean(|lean| {
         // Env A: first import of Lean, all regions file-backed.
         let before_a = snapshot_lean_vmras().expect("maps readable before A");
-        let a = import_modules(lean, &["Lean"], 0)?;
+        let a = import_modules(lean, &["Lean"], 0)?.unbind_mt();
         let after_a = snapshot_lean_vmras().expect("maps readable after A");
         let added_a = diff_added_vmras(&before_a, &after_a).len() as u64;
-        let count_a = unsafe { environment_region_count(a.as_ptr() as *const std::ffi::c_void) };
+        let count_a = environment_region_count(&a);
         assert!(
             safe_to_free_regions(count_a, added_a),
             "a fully file-backed environment must be safe to free (count={count_a:?}, added={added_a})",
@@ -46,16 +46,16 @@ fn drop_gate_frees_file_backed_and_leaks_heap_backed() {
         // deterministic base, so B's regions fall back to the heap: same region
         // count, but zero new file VMAs. It must NOT be safe to free.
         let before_b = snapshot_lean_vmras().expect("maps readable before B");
-        let b = import_modules(lean, &["Lean"], 0)?;
+        let b = import_modules(lean, &["Lean"], 0)?.unbind_mt();
         let after_b = snapshot_lean_vmras().expect("maps readable after B");
         let added_b = diff_added_vmras(&before_b, &after_b).len() as u64;
-        let count_b = unsafe { environment_region_count(b.as_ptr() as *const std::ffi::c_void) };
+        let count_b = environment_region_count(&b);
         assert!(
             !safe_to_free_regions(count_b, added_b),
             "a heap-backed environment must NOT be safe to free (count={count_b:?}, added={added_b})",
         );
 
-        // Both envs are still alive; their `LeanBound` drop does a plain
+        // Both envs are still alive; their `LeanUnbound` drop does a plain
         // `lean_dec` (no `free_regions`), so no region is freed here and no
         // cache key dangles.
         drop(b);

@@ -79,6 +79,9 @@ use std::thread;
 
 use libc::{c_void, off_t, MAP_FAILED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, PROT_READ};
 
+use super::environment::LeanEnvironment;
+use crate::unbound::LeanUnbound;
+
 /// A single lean import-region virtual memory area, as seen in
 /// `/proc/self/maps`.
 ///
@@ -368,16 +371,30 @@ pub fn safe_to_free_regions(region_count: Option<u64>, file_vmas_added: u64) -> 
 /// [`safe_to_free_regions`] treats as "cannot prove all regions are
 /// file-backed" (leak) — a safe failure mode if the layout ever changes.
 ///
+/// Typed, not a raw pointer: the caller passes a `LeanUnbound<LeanEnvironment>`
+/// it owns, so the public signature never exposes an arbitrary
+/// `*const c_void`. The object is only read (never mutated or freed); the raw
+/// field walk below is `unsafe` but sound for a real in-memory `Environment`,
+/// and it is kept in a private helper so the raw pointer stays out of the
+/// public API.
+pub fn environment_region_count(env: &LeanUnbound<LeanEnvironment>) -> Option<u64> {
+    // SAFETY: `env` is a live environment the caller owns and keeps alive for
+    // the call; `count_regions_from` only reads through it.
+    unsafe { count_regions_from(env.as_ptr() as *const c_void) }
+}
+
+/// Read the region count from a raw environment pointer. Kept private: public
+/// callers route through [`environment_region_count`], which guarantees the
+/// pointer came from a `LeanUnbound<LeanEnvironment>` rather than an
+/// arbitrary caller-supplied `*const c_void`.
+///
 /// # Safety
 ///
-/// `env_ptr` must be a live, valid elaboration `Environment` object that the
-/// caller owns and guarantees stays alive for the duration of the call. The
-/// function only *reads* through it (it never mutates or frees it); the raw
-/// field walk is only sound because the object is a real, in-memory
-/// `Environment`. Passing an aligned-but-unmapped or otherwise invalid pointer
-/// is undefined behavior (a fault), which is why this is `unsafe` rather than a
-/// safe API over the pinned layout.
-pub unsafe fn environment_region_count(env_ptr: *const c_void) -> Option<u64> {
+/// `env_ptr` must point at a live, valid elaboration `Environment` that the
+/// caller owns and keeps alive for the call; the function only reads through
+/// it. Passing an aligned-but-unmapped or otherwise invalid pointer is
+/// undefined behavior (a fault).
+unsafe fn count_regions_from(env_ptr: *const c_void) -> Option<u64> {
     let e = env_ptr as *const u64;
     if !sane_ptr(e as u64) {
         return None;

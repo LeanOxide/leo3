@@ -72,9 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `remap_cross_set_bases`, and the maps snapshot) — not only the leotower
   wiring — so their `/proc/self/maps` reads and `mmap`/`munmap` steps cannot
   interleave with a concurrent import's symbol lookups. The env's region count
-  is read by `environment_region_count`, an `unsafe fn` with a documented
-  contract (the caller must own a live environment) rather than a safe API
-  over the pinned Lean layout.
+  is read by `environment_region_count`, a *typed* API (it takes the caller's
+  own `LeanUnbound<LeanEnvironment>`), so the pinned-layout walk never appears
+  in the public signature as a raw pointer; the raw-pointer walk lives in a
+  private `unsafe` helper.
   **RSS cost of the safe choice:** a heap/mixed-backed env (e.g. a second
   concurrent import of a set whose deterministic bases are already held by a
   live session) is leaked in full, so holding two same-set sessions at once
