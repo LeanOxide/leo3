@@ -1669,6 +1669,11 @@ mod tests {
         );
     }
 
+    // NOTE: this test mutates the process-global `POISONED` latch (set, then
+    // reset), so a concurrently-running `remap_cross_set_bases` test could
+    // observe a transiently-quarantined state. Run the `meta::keepalive` unit
+    // tests with `--test-threads=1` (this module also exercises shared global
+    // `FREED_SETS`, which is why the whole module is run single-threaded).
     #[test]
     fn poison_quarantine_blocks_remap() {
         // A quarantined keepalive must block the cross-set re-map (and thus the
