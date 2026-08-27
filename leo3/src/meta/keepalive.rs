@@ -69,13 +69,13 @@
 //! independent), but cross-set imports after a free can then crash — which is
 //! the point of the switch.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Condvar, LazyLock, Mutex};
+use std::thread;
 
 use libc::{c_void, off_t, MAP_FAILED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, PROT_READ};
 
@@ -176,6 +176,11 @@ pub enum RemapError {
     /// cannot be done safely (the flag would be treated as `MAP_FIXED`,
     /// clobbering live mappings), so the import is blocked.
     KernelUnsupported,
+    /// `/proc/self/maps` could not be read. Without it we cannot prove a base
+    /// is free / an identical mapping is present, nor diff the VMAs a free
+    /// unmapped — so the caller must fail closed (leak the env, or block the
+    /// import) rather than assume the range is safe.
+    MapsUnavailable,
 }
 
 impl fmt::Display for RemapError {
@@ -200,6 +205,10 @@ impl fmt::Display for RemapError {
             RemapError::KernelUnsupported => write!(
                 f,
                 "kernel does not support MAP_FIXED_NOREPLACE (needs >= 4.17); refusing to re-map to avoid clobbering live mappings"
+            ),
+            RemapError::MapsUnavailable => write!(
+                f,
+                "could not read /proc/self/maps; cannot prove the lean region state, failing closed"
             ),
         }
     }
@@ -245,24 +254,80 @@ fn cstr_field(arr: &[std::os::raw::c_char]) -> Option<&str> {
     std::str::from_utf8(&bytes[..len]).ok()
 }
 
-/// Process-wide serialization for the environment free/record and
-/// remap/import sequences (see [`lifecycle_lock`]).
-static LIFECYCLE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+/// Process-wide, **reentrant** serialization for the environment lifecycle
+/// (import / free / record / re-map / snapshot). See [`lifecycle_lock`].
+struct ReentrantLifecycleLock {
+    /// `(holder, hold-count)`. `holder` is the thread currently owning the
+    /// lock; `hold-count` is how many times that thread has acquired it.
+    state: Mutex<(Option<std::thread::ThreadId>, u32)>,
+    cv: Condvar,
+}
+
+impl ReentrantLifecycleLock {
+    const fn new() -> Self {
+        Self {
+            state: Mutex::new((None, 0)),
+            cv: Condvar::new(),
+        }
+    }
+
+    /// Acquire the lock, blocking until it is free. Re-acquiring from the same
+    /// thread increments the hold-count instead of blocking (reentrancy), so a
+    /// sequence that already holds the lock can call the instrumented entries
+    /// ([`snapshot_lean_vmras`], [`record_freed_set`], [`remap_cross_set_bases`],
+    /// and the import/free entries) without deadlocking.
+    fn lock(&self) -> ReentrantLifecycleGuard<'_> {
+        let me = thread::current().id();
+        let mut state = self.state.lock().unwrap();
+        if state.0 == Some(me) {
+            state.1 += 1;
+            return ReentrantLifecycleGuard { lk: self };
+        }
+        while state.0.is_some() {
+            state = self.cv.wait(state).unwrap();
+        }
+        state.0 = Some(me);
+        state.1 = 1;
+        ReentrantLifecycleGuard { lk: self }
+    }
+}
+
+/// Guard for [`ReentrantLifecycleLock`]. Dropping it decrements the hold-count
+/// and releases the lock (waking a waiter) only on the last release.
+pub struct ReentrantLifecycleGuard<'a> {
+    lk: &'a ReentrantLifecycleLock,
+}
+
+impl Drop for ReentrantLifecycleGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self.lk.state.lock().unwrap();
+        state.1 -= 1;
+        if state.1 == 0 {
+            state.0 = None;
+            self.lk.cv.notify_all();
+        }
+    }
+}
+
+static LIFECYCLE_LOCK: LazyLock<ReentrantLifecycleLock> =
+    LazyLock::new(ReentrantLifecycleLock::new);
 
 /// Acquire the process-wide lifecycle lock.
 ///
-/// The environment free/record sequence (leotower `EnvRegions::drop`:
-/// snapshot-before → `free_regions` → snapshot-after → record) and the import
-/// sequence (leotower `Repl::new`: remap cross-set bases → import) each touch
-/// the shared lean VMA state that backs `g_native_symbol_cache`. The Lean FFI
-/// half of each sequence is already serialized by leo3's single worker thread,
-/// but the `/proc/self/maps` snapshots and the record / re-map steps run on the
-/// *caller* thread. Without this lock two concurrent sequences can interleave
-/// their snapshots and corrupt the freed-set record (one drop's before/after
-/// diff can swallow another sequence's VMAs). Hold the returned guard across
-/// the *entire* sequence, on the caller thread.
-pub fn lifecycle_lock() -> std::sync::MutexGuard<'static, ()> {
-    LIFECYCLE_LOCK.lock().unwrap()
+/// Every operation that touches the shared lean VMA state that backs
+/// `g_native_symbol_cache` is serialized by this (reentrant) lock: the import
+/// and `free_regions` entries, plus [`snapshot_lean_vmras`],
+/// [`record_freed_set`], and [`remap_cross_set_bases`], each acquire it at
+/// entry. leotower additionally holds it across the *whole* free/record
+/// sequence (`EnvRegions::drop`: snapshot → `free_regions` → snapshot → record)
+/// and the whole import sequence (`Repl::new`: re-map → import), so those
+/// multi-step sequences are atomic against a concurrent direct leo3 caller.
+/// The lock is reentrant, so the inner instrumented entries do not deadlock
+/// when called from within such a held sequence. The worker thread never takes
+/// this lock, so it can never be held across a `with_worker` dispatch in a way
+/// that would block the worker.
+pub fn lifecycle_lock() -> ReentrantLifecycleGuard<'static> {
+    LIFECYCLE_LOCK.lock()
 }
 
 /// Decide whether an imported environment is safe to `free_regions`.
@@ -302,7 +367,17 @@ pub fn safe_to_free_regions(region_count: Option<u64>, file_vmas_added: u64) -> 
 /// file VMAs it adds. Any step that fails a sanity check returns `None`, which
 /// [`safe_to_free_regions`] treats as "cannot prove all regions are
 /// file-backed" (leak) — a safe failure mode if the layout ever changes.
-pub fn environment_region_count(env_ptr: *const c_void) -> Option<u64> {
+///
+/// # Safety
+///
+/// `env_ptr` must be a live, valid elaboration `Environment` object that the
+/// caller owns and guarantees stays alive for the duration of the call. The
+/// function only *reads* through it (it never mutates or frees it); the raw
+/// field walk is only sound because the object is a real, in-memory
+/// `Environment`. Passing an aligned-but-unmapped or otherwise invalid pointer
+/// is undefined behavior (a fault), which is why this is `unsafe` rather than a
+/// safe API over the pinned layout.
+pub unsafe fn environment_region_count(env_ptr: *const c_void) -> Option<u64> {
     let e = env_ptr as *const u64;
     if !sane_ptr(e as u64) {
         return None;
@@ -403,6 +478,48 @@ fn vma_eq(a: &LeanVma, b: &LeanVma) -> bool {
         && a.deleted == b.deleted
 }
 
+/// True iff the two VMAs' address ranges overlap as **half-open** intervals
+/// `[addr, addr+len)`. Uses checked arithmetic (an overflowing end is treated
+/// as no overlap rather than wrapping). This is the correct test for
+/// deterministic-base collisions: two regions collide whenever their ranges
+/// intersect at *all*, not only when start and length happen to match exactly
+/// (a pending set occupying `[0x2000,0x3000)` still blocks an importing set
+/// whose region is `[0x1000,0x3000)`).
+fn ranges_overlap(a: &LeanVma, b: &LeanVma) -> bool {
+    match (a.addr.checked_add(a.len), b.addr.checked_add(b.len)) {
+        (Some(a_end), Some(b_end)) => a.addr < b_end && b.addr < a_end,
+        _ => false,
+    }
+}
+
+/// If two VMAs' ranges overlap as half-open intervals but back *different*
+/// files, return the conflict address (the lower start); otherwise `None`.
+/// Identical regions (same full identity) are the same mapping and are not a
+/// conflict.
+fn overlapping_conflict(a: &LeanVma, b: &LeanVma) -> Option<usize> {
+    if ranges_overlap(a, b) && !vma_eq(a, b) {
+        Some(a.addr.min(b.addr))
+    } else {
+        None
+    }
+}
+
+/// Find a deterministic-base collision across ALL recorded VMAs: the first
+/// pair of VMAs (whether from the same freed set or different ones) whose
+/// ranges overlap as half-open intervals but back different files. Pure (no
+/// global state) so it is unit-testable in isolation. Returns the conflict
+/// address, or `None` if the ranges are clean.
+fn find_collision(all: &[&LeanVma]) -> Option<usize> {
+    for i in 0..all.len() {
+        for j in (i + 1)..all.len() {
+            if let Some(addr) = overlapping_conflict(all[i], all[j]) {
+                return Some(addr);
+            }
+        }
+    }
+    None
+}
+
 /// Parse one `/proc/self/maps` line: `start-end perm offset dev inode [pad]
 /// path`. The inode and the path are separated by variable whitespace, so take
 /// the first five fields and treat the trimmed remainder as the path.
@@ -436,16 +553,33 @@ fn read_maps() -> Option<String> {
 /// is a lean import-region file (`.olean`, `.olean.server`, `.olean.private`,
 /// or `.ir`). Used to bracket `free_regions` and diff out the VMAs it unmaps.
 ///
-/// Returns empty when the stopgap is disabled (`LEO3_KEEPALIVE_DISABLE`) or
-/// `/proc/self/maps` is unreadable; leotower treats an empty snapshot as "do
-/// not free the regions" (see its `EnvRegions::drop`).
-pub fn snapshot_lean_vmras() -> Vec<LeanVma> {
+/// Returns `Err(RemapError::MapsUnavailable)` when `/proc/self/maps` cannot be
+/// read, so the caller can fail closed (leak / block) instead of treating an
+/// unreadable maps as "no lean VMAs" (which would free with nothing recorded).
+/// When the stopgap is disabled (`LEO3_KEEPALIVE_DISABLE`) it returns `Ok` of an
+/// empty list: the stopgap is deliberately off, so there is nothing to track.
+pub fn snapshot_lean_vmras() -> Result<Vec<LeanVma>, RemapError> {
+    // Serialize the read against the free / re-map sequences that also read
+    // `/proc/self/maps` (a snapshot interleaved with another sequence's free
+    // would mix their VMAs). Reentrant, so a held sequence's snapshots do not
+    // deadlock.
+    let _lifecycle = lifecycle_lock();
     if *DISABLED {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let Some(maps) = read_maps() else {
-        return Vec::new();
-    };
+    snapshot_from(read_maps())
+}
+
+/// Parse a `/proc/self/maps` snapshot into lean VMAs. `None` means the read
+/// failed (return `MapsUnavailable`); `Some(..)` is the maps content.
+fn snapshot_from(maps: Option<String>) -> Result<Vec<LeanVma>, RemapError> {
+    let maps = maps.ok_or(RemapError::MapsUnavailable)?;
+    Ok(parse_maps_content(&maps))
+}
+
+/// Pure filter of a maps snapshot down to lean import-region VMAs (testable
+/// without touching `/proc/self/maps`).
+fn parse_maps_content(maps: &str) -> Vec<LeanVma> {
     let mut out = Vec::new();
     for line in maps.lines() {
         let Some(m) = parse_maps_line(line) else {
@@ -529,6 +663,9 @@ pub fn diff_added_vmras(before: &[LeanVma], after: &[LeanVma]) -> Vec<LeanVma> {
 /// are both kept — `remap_cross_set_bases` detects that as a conflict and
 /// refuses to re-map (it cannot revive two files at one address).
 pub fn record_freed_set(modules: &[&str], freed_vmras: Vec<LeanVma>) {
+    // Serialize the metadata write against concurrent sequences (reentrant, so
+    // a drop holding the lock across its whole sequence does not deadlock).
+    let _lifecycle = lifecycle_lock();
     if *DISABLED || freed_vmras.is_empty() {
         return;
     }
@@ -569,53 +706,52 @@ pub fn record_freed_set(modules: &[&str], freed_vmras: Vec<LeanVma>) {
 /// risk the original dangling-key SIGSEGV. On failure the sets are left
 /// retryable — state is only committed when *every* region succeeds.
 pub fn remap_cross_set_bases(importing: &[&str]) -> Result<(), Vec<RemapError>> {
+    // Serialize the whole re-map (collision check → importing-set validation →
+    // re-mmap) against concurrent free/import sequences and against other
+    // callers of this entry (reentrant, so a sequence already holding the lock
+    // does not deadlock).
+    let _lifecycle = lifecycle_lock();
     if *DISABLED {
         return Ok(());
     }
     let import_key = key_of(importing);
     let mut guard = FREED_SETS.lock().unwrap();
 
-    // Collision detection across *all* freed sets — including the importing
-    // set's own pending regions. Two recorded regions that claim the same
-    // address range but back *different* files (a deterministic-base collision)
-    // cannot both be revived; if the importing set's base is among them the
-    // import's own self-heal re-mmap would be blocked, so the import is refused
-    // up front rather than proceed with dangling keys.
-    //
-    // Only *pending* (not-yet-remapped) non-importing sets are scheduled for an
-    // actual re-mmap: the importing set re-maps its own bases itself during the
-    // import, and already-remapped sets stay mapped.
-    let mut seen: HashMap<(usize, usize), &LeanVma> = HashMap::new();
+    // Collision detection across *all* freed sets — pending **and** retained —
+    // using checked half-open interval intersection, not an exact `(addr, len)`
+    // key. Two recorded regions from *different* sets whose ranges intersect
+    // but back *different* files are a deterministic-base collision: they
+    // cannot both be revived, and if the collision involves the importing set
+    // the import's self-heal re-mmap would hit a partially-occupied range and
+    // fall back to the heap, dangling its keys. So any such overlap blocks the
+    // import up front. Identical regions (same full identity) are the same
+    // mapping, not a conflict.
+    // Build the flat list of every recorded VMA (across all freed sets,
+    // including retained) and look for a deterministic-base collision via the
+    // pure `find_collision` helper. This catches conflicts both *within* a
+    // single set (two different files on the same base) and *across* sets.
+    let all_vmras: Vec<&LeanVma> = guard.iter().flat_map(|s| s.vmras.iter()).collect();
+    if let Some(addr) = find_collision(&all_vmras) {
+        return Err(vec![RemapError::IdentityConflict { addr }]);
+    }
+
+    // Schedule the actual re-mmap: only *pending* (not-yet-remapped)
+    // non-importing sets. The importing set re-maps its own bases during the
+    // import, and already-remapped sets stay mapped. Deleted files are
+    // *included* (not skipped) so `remap_vma` → `check_identity` reports
+    // `FileDeleted` and blocks the import rather than silently leaving a
+    // dangling key from an un-remappable region.
     let mut to_remap: Vec<(usize, usize)> = Vec::new();
     let mut candidates: Vec<usize> = Vec::new();
     for (i, set) in guard.iter().enumerate() {
-        if set.vmras.is_empty() {
+        if set.vmras.is_empty() || set.remapped || set.key == import_key {
             continue;
         }
-        let is_importing = set.key == import_key;
-        let is_pending = !set.remapped;
-        for (j, vma) in set.vmras.iter().enumerate() {
-            match seen.get(&(vma.addr, vma.len)) {
-                Some(prev) if vma_eq(prev, vma) => {
-                    // Duplicate (same address + identity) — nothing to do.
-                }
-                Some(_) => {
-                    return Err(vec![RemapError::IdentityConflict { addr: vma.addr }]);
-                }
-                None => {
-                    seen.insert((vma.addr, vma.len), vma);
-                    if is_pending && !is_importing {
-                        to_remap.push((i, j));
-                        if !candidates.contains(&i) {
-                            candidates.push(i);
-                        }
-                    }
-                }
-            }
+        for (j, _vma) in set.vmras.iter().enumerate() {
+            to_remap.push((i, j));
         }
+        candidates.push(i);
     }
-    // `seen` holds borrows into `guard`; end them before mutating.
-    drop(seen);
 
     // Validate the importing set's *own* pending regions. The importing set is
     // deliberately skipped by the re-mmap loop above (it re-maps its own bases
@@ -729,10 +865,11 @@ fn check_identity(vma: &LeanVma) -> Result<(), RemapError> {
 /// keys dangling — so refuse the import.
 fn base_is_reusable(vma: &LeanVma) -> Result<(), RemapError> {
     let Some(maps) = read_maps() else {
-        // Unreadable: the import's own `mmap` will fall back safely to the
-        // heap for any occupied base; this is a best-effort guard, so let the
-        // import proceed rather than spuriously block on a transient read.
-        return Ok(());
+        // Unreadable maps: we cannot prove the range is free or mapped by the
+        // identical file, so we cannot prove the import's self-heal will revive
+        // the keys. Fail closed — block the import rather than let it fall back
+        // to the heap and dangle the keys.
+        return Err(RemapError::MapsUnavailable);
     };
     let end = match vma.addr.checked_add(vma.len) {
         Some(e) => e,
@@ -1261,5 +1398,85 @@ mod tests {
         );
         unsafe { libc::munmap(p, 4096) };
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ranges_overlap_is_half_open_interval() {
+        // Touching at the boundary is NOT an overlap (half-open).
+        let a = mk_vma(0x1000, 0x1000, 0, 1, "/a.olean"); // [0x1000, 0x2000)
+        let b = mk_vma(0x2000, 0x1000, 0, 2, "/b.olean"); // [0x2000, 0x3000)
+        assert!(!ranges_overlap(&a, &b), "adjacent ranges must not overlap");
+        // Partial overlap: a=[0x1000,0x3000), b=[0x2000,0x3000).
+        let a = mk_vma(0x1000, 0x2000, 0, 1, "/a.olean");
+        let b = mk_vma(0x2000, 0x1000, 0, 2, "/b.olean");
+        assert!(ranges_overlap(&a, &b), "partial overlap must be detected");
+        // Containment: a=[0x1000,0x4000), b=[0x2000,0x3000).
+        let a = mk_vma(0x1000, 0x3000, 0, 1, "/a.olean");
+        let b = mk_vma(0x2000, 0x1000, 0, 2, "/b.olean");
+        assert!(ranges_overlap(&a, &b), "containment must be an overlap");
+        // Identical ranges overlap.
+        let c = mk_vma(0x1000, 0x1000, 0, 1, "/a.olean");
+        let d = mk_vma(0x1000, 0x1000, 0, 1, "/a.olean");
+        assert!(ranges_overlap(&c, &d));
+    }
+
+    #[test]
+    fn find_collision_detects_partial_overlap_but_not_identical() {
+        // Two VMAs with partially overlapping ranges and DIFFERENT files ->
+        // conflict (detected even though no (addr,len) pair is exact):
+        // a=[0xaa_0000,0xca_0000), b=[0xab_0000,0xbb_0000).
+        let a = mk_vma(0x7f00_00aa_0000, 0x200_0000, 0, 1, "/a.olean");
+        let b = mk_vma(0x7f00_00ab_0000, 0x100_0000, 0, 2, "/b.olean");
+        assert!(
+            find_collision(&[&a, &b]).is_some(),
+            "partially-overlapping ranges from different sets must be a conflict"
+        );
+        // The SAME region recorded twice (identical identity) is not a
+        // conflict — it is the same mapping and dedup-able.
+        let x = mk_vma(0x7f00_00aa_0000, 0x200_0000, 0, 1, "/a.olean");
+        let y = mk_vma(0x7f00_00aa_0000, 0x200_0000, 0, 1, "/a.olean");
+        assert!(
+            find_collision(&[&x, &y]).is_none(),
+            "identical regions are the same mapping, not a conflict"
+        );
+        // Disjoint ranges (with a gap) -> no conflict:
+        // p=[0xaa_0000,0xab_0000), q=[0xac_0000,0xad_0000) (0x1_0000 = 0x10000).
+        let p = mk_vma(0x7f00_00aa_0000, 0x1_0000, 0, 1, "/a.olean");
+        let q = mk_vma(0x7f00_00ac_0000, 0x1_0000, 0, 2, "/b.olean");
+        assert!(
+            find_collision(&[&p, &q]).is_none(),
+            "disjoint ranges must not be a conflict"
+        );
+    }
+
+    #[test]
+    fn snapshot_from_unreadable_maps_fails_closed() {
+        assert!(
+            matches!(snapshot_from(None), Err(RemapError::MapsUnavailable)),
+            "an unreadable /proc/self/maps must be reported, not treated as empty"
+        );
+    }
+
+    #[test]
+    fn parse_maps_content_keeps_only_lean_suffixes() {
+        let maps = "\
+00400000-00401000 r--p 00000000 00:00 0
+7f0000000000-7f0000001000 r--p 00000000 08:01 1234 /opt/lean/lib/Lean.olean
+7f0000002000-7f0000003000 r--p 00000000 08:01 1235 /opt/lean/lib/Lean.ir
+7f0000004000-7f0000005000 r--p 00000000 08:01 1236 /opt/lean/lib/other.so
+";
+        let vm = parse_maps_content(maps);
+        assert_eq!(
+            vm.len(),
+            2,
+            "only the .olean and .ir mappings should be kept"
+        );
+        assert!(vm
+            .iter()
+            .all(|v| { v.path.ends_with(".olean") || v.path.ends_with(".ir") }));
+        assert!(
+            vm.iter().all(|v| !v.deleted),
+            "none of these are marked deleted"
+        );
     }
 }

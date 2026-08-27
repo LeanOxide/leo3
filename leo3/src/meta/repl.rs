@@ -858,6 +858,15 @@ pub fn import_modules_with_exts<'l>(
     load_exts: bool,
 ) -> LeanResult<LeanBound<'l, LeanEnvironment>> {
     crate::runtime::ensure_meta_initialized();
+    // W-417: serialize this import against the keepalive free/record/re-map
+    // sequences (and other imports). The import's `mmap`s change the lean VMA
+    // state and populate `g_native_symbol_cache`; an import interleaved with a
+    // drop's snapshot/free or a re-map would corrupt the VMA diff and the
+    // freed-set record. Reentrant, so a sequence already holding the lock does
+    // not deadlock. The lock is held on this (caller) thread across the
+    // `with_worker` import below.
+    #[cfg(all(lean_4_25, target_os = "linux"))]
+    let _lifecycle = super::keepalive::lifecycle_lock();
     unsafe {
         ensure_search_path(lean)?;
         // `Lean.importModules` wraps each call in `withImporting`, whose

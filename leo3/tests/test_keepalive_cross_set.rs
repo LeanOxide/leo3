@@ -28,12 +28,27 @@ use leo3::prelude::*;
 /// The lean import-region file suffixes that `free_regions` unmaps.
 const SUFFIXES: [&str; 4] = [".olean", ".olean.server", ".olean.private", ".ir"];
 
-/// Count of `freed` regions that are mapped again in `remapped` (by addr+len).
+/// Count of `freed` regions that are mapped again in `remapped`, comparing
+/// the full VMA identity (address range, offset, inode, device, size, path,
+/// and deleted flag), not just addr+len — a re-map that landed on the right
+/// range but the wrong file must not count as restored.
 fn remapped_count(freed: &[LeanVma], remapped: &[LeanVma]) -> usize {
     freed
         .iter()
-        .filter(|v| remapped.iter().any(|r| r.addr == v.addr && r.len == v.len))
+        .filter(|v| remapped.iter().any(|r| vma_identity_eq(v, r)))
         .count()
+}
+
+/// Full VMA identity equality (mirrors keepalive's `vma_eq`).
+fn vma_identity_eq(a: &LeanVma, b: &LeanVma) -> bool {
+    a.addr == b.addr
+        && a.len == b.len
+        && a.offset == b.offset
+        && a.inode == b.inode
+        && a.device == b.device
+        && a.size == b.size
+        && a.path == b.path
+        && a.deleted == b.deleted
 }
 
 #[test]
@@ -41,10 +56,10 @@ fn cross_set_remap_restores_freed_regions() {
     let result: LeanResult<()> = leo3::test_with_lean(|lean| {
         // Import set A and capture its lean regions.
         let env = import_modules(lean, &["Lean"], 0)?;
-        let before = snapshot_lean_vmras();
+        let before = snapshot_lean_vmras().expect("maps readable");
         // Free set A's regions (consumes `env`).
         unsafe { env.free_regions() }?;
-        let after = snapshot_lean_vmras();
+        let after = snapshot_lean_vmras().expect("maps readable");
         let freed = diff_freed_vmras(&before, &after);
         assert!(
             !freed.is_empty(),
@@ -64,7 +79,7 @@ fn cross_set_remap_restores_freed_regions() {
         // pinned (pinning would push same-set imports onto the heap and
         // inflate RSS).
         remap_cross_set_bases(&["Lean"]).expect("same-set re-map errored");
-        let same = snapshot_lean_vmras();
+        let same = snapshot_lean_vmras().expect("maps readable");
         assert_eq!(
             remapped_count(&freed, &same),
             0,
@@ -74,7 +89,7 @@ fn cross_set_remap_restores_freed_regions() {
         // A cross-set re-map must restore every freed region (all four
         // suffixes) so the next import's lookups do not dangle.
         remap_cross_set_bases(&["Other.Set"]).expect("cross-set re-map errored");
-        let remapped = snapshot_lean_vmras();
+        let remapped = snapshot_lean_vmras().expect("maps readable");
         let restored = remapped_count(&freed, &remapped);
         assert_eq!(
             restored,

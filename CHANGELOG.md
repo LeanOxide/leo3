@@ -35,11 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `free_regions` and, before a cross-set import, re-`mmap`s the freed set's
   regions at their original addresses, reviving the dangling keys. Each VMA is
   identified by its full identity (address range, file offset, inode, device,
-  path, and file size) so a range that was freed and then re-used by a
-  *different* file is correctly treated as freed (not silently accepted), and
-  same-address/same-length VMAs with different file identities are detected as
-  a conflict and the re-map is refused (reported to the caller, which blocks
-  the import) rather than both committing. The re-`mmap` uses
+  path, file size, and the ` (deleted)` flag) so a range that was freed and
+  then re-used by a *different* file is correctly treated as freed (not
+  silently accepted), and any two recorded regions whose ranges overlap —
+  checked as a half-open interval intersection, so *partial* overlaps as well
+  as exact matches — but back different files are detected as a conflict and
+  the re-map is refused (reported to the caller, which blocks the import)
+  rather than both committing. The re-`mmap` uses
   `MAP_FIXED_NOREPLACE` and, after the call, verifies the kernel returned the
   exact requested address; it re-opens the file and re-checks inode, device,
   and size (a shrunken file is refused), and refuses files that have since
@@ -60,10 +62,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deterministic base was already held) is leaked in full, because
   `free_regions` frees *every* region and freeing a heap region dangles its
   `g_native_symbol_cache` keys. No historical "was this set file-backed"
-  record is kept. The drop's snapshot/free/record and the import's remap are
-  serialized by a process-wide lock so their `/proc/self/maps` reads and
-  `mmap`/`munmap` steps cannot interleave with a concurrent import's symbol
-  lookups.
+  record is kept. A failed `/proc/self/maps` read is **fail-closed**: an
+  unreadable snapshot is reported (`MapsUnavailable`), not treated as empty,
+  so a drop that cannot verify its pre-free region state leaks the env instead
+  of freeing it, and a re-map whose target base cannot be verified blocks the
+  import. The drop's snapshot/free/record and the import's remap are
+  serialized by a process-wide reentrant lock, held at every public entry
+  point (`import_modules`, `free_regions`, `record_freed_set`,
+  `remap_cross_set_bases`, and the maps snapshot) — not only the leotower
+  wiring — so their `/proc/self/maps` reads and `mmap`/`munmap` steps cannot
+  interleave with a concurrent import's symbol lookups. The env's region count
+  is read by `environment_region_count`, an `unsafe fn` with a documented
+  contract (the caller must own a live environment) rather than a safe API
+  over the pinned Lean layout.
   **RSS cost of the safe choice:** a heap/mixed-backed env (e.g. a second
   concurrent import of a set whose deterministic bases are already held by a
   live session) is leaked in full, so holding two same-set sessions at once

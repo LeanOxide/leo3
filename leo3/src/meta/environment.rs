@@ -352,6 +352,12 @@ impl<'l> LeanBound<'l, LeanEnvironment> {
     /// (normally unreachable).
     pub unsafe fn free_regions(self) -> LeanResult<()> {
         let env_ptr = self.into_ptr();
+        // W-417: serialize this free against the keepalive import/snapshot/
+        // record/re-map sequences (reentrant, so a drop holding the lock across
+        // its whole sequence does not deadlock). Held on this (caller) thread
+        // across the `with_worker` free below.
+        #[cfg(all(lean_4_25, target_os = "linux"))]
+        let _lifecycle = super::keepalive::lifecycle_lock();
         with_worker(move || unsafe {
             #[cfg(not(lean_4_26))]
             {
