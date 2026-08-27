@@ -351,21 +351,33 @@ impl<'l> LeanBound<'l, LeanEnvironment> {
     /// Returns the Lean exception if the region-free IO step fails
     /// (normally unreachable).
     pub unsafe fn free_regions(self) -> LeanResult<()> {
-        let env_ptr = self.into_ptr();
         // Refuse to dispatch to the worker from the worker itself (a self
-        // `with_worker` would deadlock, as in `import_modules_with_exts`).
+        // `with_worker` would deadlock). Checked BEFORE `into_ptr` (which
+        // `forget`s `self`), so rejecting on the worker does not leak the owned
+        // environment reference.
         if crate::runtime::on_worker_thread() {
             return Err(LeanError::other(
                 "free_regions must not be called from the Lean worker thread (with_worker would deadlock)",
             ));
         }
+        // Quarantined: a prior destructive free failed unrecoverably. Freeing
+        // again could create more dangling `g_native_symbol_cache` keys that no
+        // re-map would revive, so refuse (the env's regions are leaked, not
+        // freed).
+        #[cfg(all(lean_4_25, target_os = "linux"))]
+        if super::keepalive::keepalive_poisoned() {
+            return Err(LeanError::other(
+                "free_regions refused: keepalive is quarantined (a prior destructive free failed unrecoverably); the environment's regions are leaked, not freed",
+            ));
+        }
+        let env_ptr = self.into_ptr();
         // W-417: serialize this free against the keepalive import/snapshot/
         // record/re-map sequences (reentrant, so a drop holding the lock across
         // its whole sequence does not deadlock). Held on this (caller) thread
         // across the `with_worker` free below.
         #[cfg(all(lean_4_25, target_os = "linux"))]
         let _lifecycle = super::keepalive::lifecycle_lock();
-        with_worker(move || unsafe {
+        let result = with_worker(move || unsafe {
             #[cfg(not(lean_4_26))]
             {
                 let world = ffi::io::lean_io_mk_world();
@@ -385,7 +397,16 @@ impl<'l> LeanBound<'l, LeanEnvironment> {
                 let result = ffi::environment::lean_environment_free_regions(env_ptr);
                 super::metam::handle_eio_result(result).map(|_| ())
             }
-        })
+        });
+        // `Environment.freeRegions` is a non-atomic `forM CompactedRegion.free`:
+        // an error can occur after the first regions are already unmapped,
+        // leaving their `g_native_symbol_cache` keys dangling and unrecoverable.
+        // Quarantine the process so no further import can dereference them.
+        #[cfg(all(lean_4_25, target_os = "linux"))]
+        if result.is_err() {
+            super::keepalive::poison_keepalive();
+        }
+        result
     }
 }
 

@@ -736,14 +736,38 @@ pub fn diff_freed_vmras(before: &[LeanVma], after: &[LeanVma]) -> Vec<LeanVma> {
 /// **heap-backed** (it added none, because the deterministic base was already
 /// occupied and Lean fell back to a `malloc` buffer).
 ///
-/// A VMA counts as "new" only if `before` holds no VMA with the same address
-/// range *and* the same file identity.
+/// "New" is decided by the *stable* address range `[addr, addr+len)` alone, not
+/// by full file identity: a pre-existing mapping whose mutable metadata
+/// (`size`/`size_known`/`deleted`) churned between the snapshots keeps its
+/// range and so is **not** counted as new. This keeps `file_vmas_added` honest
+/// — a metadata churn of an already-mapped lean VMA cannot be mistaken for a
+/// region this import `mmap`'d, which would otherwise let the drop gate free a
+/// heap-mixed environment. (See [`import_window_has_identity_churn`] for the
+/// explicit churn signal.)
 pub fn diff_added_vmras(before: &[LeanVma], after: &[LeanVma]) -> Vec<LeanVma> {
     after
         .iter()
-        .filter(|v| !before.iter().any(|b| vma_eq(v, b)))
+        .filter(|v| !before.iter().any(|b| b.addr == v.addr && b.len == v.len))
         .cloned()
         .collect()
+}
+
+/// True if some address range is present in *both* `before` and `after` but
+/// carries a *different* file identity — i.e. a pre-existing lean mapping's
+/// backing file was modified, unlinked, or recreated during the import window.
+/// When this happens the filesystem under the lean regions is churning, so the
+/// file-backed count computed from these snapshots is unreliable; the caller
+/// marks the resulting environment untrackable and leaks it on drop instead of
+/// risking a free of a heap-mixed environment. Complements the range-based
+/// [`diff_added_vmras`]: that keeps the *count* honest, this flags the *source
+/// of the churn* so the environment is conservatively leaked.
+pub fn import_window_has_identity_churn(before: &[LeanVma], after: &[LeanVma]) -> bool {
+    before.iter().any(|b| {
+        after
+            .iter()
+            .filter(|a| a.addr == b.addr && a.len == b.len)
+            .any(|a| !vma_eq(a, b))
+    })
 }
 
 /// Record a freed module set and the lean regions `free_regions` unmapped for
@@ -1669,5 +1693,48 @@ mod tests {
             !keepalive_poisoned(),
             "quarantine must be resettable in tests"
         );
+    }
+
+    fn vm(addr: usize, len: usize, inode: u64, size: u64, size_known: bool, path: &str) -> LeanVma {
+        LeanVma {
+            addr,
+            len,
+            offset: 0,
+            inode,
+            device: 0,
+            path: path.into(),
+            size,
+            size_known,
+            deleted: false,
+        }
+    }
+
+    #[test]
+    fn added_vmras_ignore_metadata_churn_of_existing() {
+        // A pre-existing lean VMA whose mutable metadata (size) churned between
+        // snapshots keeps its range, so it is NOT counted as newly added — the
+        // range-based diff keeps `file_vmas_added` honest.
+        let before = vec![vm(0x7f00_0000_0000, 4096, 100, 5000, true, "/m.olean")];
+        let after = vec![
+            vm(0x7f00_0000_0000, 4096, 100, 5100, true, "/m.olean"), // size churn
+            vm(0x7f00_0010_0000, 8192, 200, 8192, true, "/n.olean"), // genuinely new
+        ];
+        let added = diff_added_vmras(&before, &after);
+        assert_eq!(added.len(), 1, "only the genuinely new range is added");
+        assert_eq!(added[0].path, "/n.olean");
+    }
+
+    #[test]
+    fn identity_churn_flags_unreliable_count() {
+        let before = vec![vm(0x7f00_0000_0000, 4096, 100, 5000, true, "/m.olean")];
+        // No churn: same range, same identity.
+        let after_same = vec![before[0].clone()];
+        assert!(!import_window_has_identity_churn(&before, &after_same));
+        // Churn: same range, different inode (the backing file was recreated).
+        let after_churned = vec![vm(0x7f00_0000_0000, 4096, 999, 5000, true, "/m.olean")];
+        assert!(import_window_has_identity_churn(&before, &after_churned));
+        // Churn via size change.
+        let after_shrunk = vec![vm(0x7f00_0000_0000, 4096, 100, 5100, true, "/m.olean")];
+        assert!(import_window_has_identity_churn(&before, &after_shrunk));
     }
 }

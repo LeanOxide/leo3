@@ -181,9 +181,15 @@ static WORKER: Mutex<Option<mpsc::SyncSender<Box<dyn FnOnce() + Send>>>> = Mutex
 /// detect (and refuse) a call that would dispatch to the worker *from the
 /// worker itself*: a self-`with_worker` dispatch deadlocks, because the worker
 /// blocks in the rendezvous channel waiting for the task it cannot run.
+/// `meta`-only: the sole readers are the `meta` import/free entries, so this is
+/// gated to `meta` and is never dead code in a `meta`-off workspace build.
+#[cfg(feature = "meta")]
 static WORKER_THREAD_ID: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
 
-/// True iff the current thread is the long-lived Lean worker thread.
+/// True iff the current thread is the long-lived Lean worker thread. Compiled
+/// only with `meta` (its sole callers live there) to avoid dead-code warnings
+/// in `meta`-off workspace builds.
+#[cfg(feature = "meta")]
 pub(crate) fn on_worker_thread() -> bool {
     *WORKER_THREAD_ID.lock().unwrap() == Some(std::thread::current().id())
 }
@@ -206,7 +212,10 @@ pub(crate) fn ensure_worker_initialized() {
             // overflows. 64 MiB matches typical host-process expectations.
             .stack_size(64 * 1024 * 1024)
             .spawn(move || {
-                *WORKER_THREAD_ID.lock().unwrap() = Some(std::thread::current().id());
+                #[cfg(feature = "meta")]
+                {
+                    *WORKER_THREAD_ID.lock().unwrap() = Some(std::thread::current().id());
+                }
                 unsafe {
                     ffi::lean_initialize_runtime_module();
                     ffi::lean_initialize_thread();

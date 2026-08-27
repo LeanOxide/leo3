@@ -868,6 +868,17 @@ pub fn import_modules_with_exts<'l>(
             "import_modules_with_exts must not be called from the Lean worker thread (with_worker would deadlock)",
         ));
     }
+    // Quarantined: a prior destructive `free_regions` failed unrecoverably, so
+    // the `g_native_symbol_cache` state may hold dangling keys. Refuse the
+    // import (it would walk the cache and dereference them) rather than crash.
+    // This is the real import boundary — leotower's `block_on_remap` also blocks
+    // on the quarantine, but a direct leo3 caller must be stopped here too.
+    #[cfg(all(lean_4_25, target_os = "linux"))]
+    if super::keepalive::keepalive_poisoned() {
+        return Err(LeanError::other(
+            "import refused: keepalive is quarantined (a prior destructive free failed unrecoverably); the symbol-cache state may hold dangling keys",
+        ));
+    }
     // W-417: serialize this import against the keepalive free/record/re-map
     // sequences (and other imports). The import's `mmap`s change the lean VMA
     // state and populate `g_native_symbol_cache`; an import interleaved with a

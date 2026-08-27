@@ -101,6 +101,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   place for the process lifetime (a same-inode, same-size in-place overwrite
   is the one identity case the (inode, device, no-shrink) check does not
   catch).
+  **Round-7 hardening (boundary enforcement + per-env records):** the quarantine
+  is now enforced at the *real* destructive boundaries, not just the leotower
+  pre-import re-map hook — `import_modules_with_exts` (hence `import_modules`)
+  refuses to run while the keepalive is quarantined (it would walk the symbol
+  cache and dereference a dangling key), and `free_regions` refuses to free
+  while quarantined *and* latches the quarantine itself when a non-atomic free
+  errors (so a direct caller cannot bypass the drop's recovery). `free_regions`
+  also refuses on the worker thread *before* it transfers ownership, so a
+  refused call no longer leaks the owned environment. The dropped set is
+  recorded from the environment's *own* import-time VMA set (captured at
+  import), never a process-wide snapshot, so a second live environment's
+  regions are never mis-attributed into this one's record. `diff_added_vmras`
+  decides "new" by the stable address range alone (robust to metadata churn of
+  a pre-existing mapping), and `import_window_has_identity_churn` flags an
+  import window in which a pre-existing mapping's backing file changed — such
+  an environment is marked untrackable and leaked on drop rather than freed
+  with an unreliable count. The `on_worker_thread` helper is `meta`-feature
+  gated so a `meta`-off workspace build has no dead code (the CI clippy gate
+  builds the whole workspace).
   **RSS cost of the safe choice:** a heap/mixed-backed env (e.g. a second
   concurrent import of a set whose deterministic bases are already held by a
   live session) is leaked in full, so holding two same-set sessions at once
