@@ -64,6 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serialized by a process-wide lock so their `/proc/self/maps` reads and
   `mmap`/`munmap` steps cannot interleave with a concurrent import's symbol
   lookups.
+  **RSS cost of the safe choice:** a heap/mixed-backed env (e.g. a second
+  concurrent import of a set whose deterministic bases are already held by a
+  live session) is leaked in full, so holding two same-set sessions at once
+  costs ~1.4 GB RSS per such session rather than reusing the freed base;
+  keeping RSS bounded under that concurrent workload is tracked separately
+  (W-426) and is *not* claimed by this stopgap. The common single-session
+  case (one file-backed import per session) still frees and stays flat.
   **Stopgap, Linux only** (it reads `/proc/self/maps` and needs
   `MAP_FIXED_NOREPLACE`); the true fix is upstream (content-owning cache
   keys) and is tracked separately.
