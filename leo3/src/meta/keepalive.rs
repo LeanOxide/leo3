@@ -283,18 +283,25 @@ pub fn safe_to_free_regions(region_count: Option<u64>, file_vmas_added: u64) -> 
     matches!(region_count, Some(n) if n >= 1 && n == file_vmas_added)
 }
 
-/// Read the environment's import/region count from the live environment object,
-/// guarding every step. This is the number of compacted import regions the
-/// environment holds (one per imported module).
+/// Read the environment's compacted-region count from the live environment
+/// object, guarding every step. This is the number of compacted import
+/// regions the environment holds — one per file-backed *part* of an imported
+/// module (a `.olean` region plus a companion `.ir` / `.server` / `.private`
+/// region when the module has such code). For a fully file-backed import this
+/// count equals the number of lean file VMAs the import adds (each region is
+/// exactly one `mmap` / one VMA line); a heap-fallback region is still counted
+/// here but adds no VMA, which is what makes the count gate in
+/// [`safe_to_free_regions`] discriminate file- from heap-backed envs.
 ///
 /// The field path is the compiled layout of the elaboration `Environment` in
 /// the pinned Lean toolchain (verified against the disassembly of
 /// `lean_environment_free_regions` and a runtime probe): `env.field0.field0.
-/// field5.field2` is the `Array Import` (one element per imported
-/// module/region); its element count (word 1 of the array object, word 0 being
-/// the refcount header) is the region count. Any step that fails a sanity
-/// check returns `None`, which [`safe_to_free_regions`] treats as "cannot
-/// prove all regions are file-backed" (leak).
+/// field5.field2` is that region array; its element count (word 1 of the array
+/// object, word 0 being the refcount header) is the region count. A full
+/// `Lean` import reads 6828 here (4 × 1707 modules), matching the 6828 lean
+/// file VMAs it adds. Any step that fails a sanity check returns `None`, which
+/// [`safe_to_free_regions`] treats as "cannot prove all regions are
+/// file-backed" (leak) — a safe failure mode if the layout ever changes.
 pub fn environment_region_count(env_ptr: *const c_void) -> Option<u64> {
     let e = env_ptr as *const u64;
     if !sane_ptr(e as u64) {
@@ -313,7 +320,7 @@ pub fn environment_region_count(env_ptr: *const c_void) -> Option<u64> {
     if !sane_ptr(a) {
         return None;
     }
-    let b = read(a as *const u64, 3); // env[0][0][5][2] (the Array Import)
+    let b = read(a as *const u64, 3); // env[0][0][5][2] (the regions array)
     if !sane_ptr(b) {
         return None;
     }
