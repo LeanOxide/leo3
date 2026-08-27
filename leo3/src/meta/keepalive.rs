@@ -390,9 +390,10 @@ static LIFECYCLE_LOCK: LazyLock<ReentrantLifecycleLock> =
 /// and the whole import sequence (`Repl::new`: re-map → import), so those
 /// multi-step sequences are atomic against a concurrent direct leo3 caller.
 /// The lock is reentrant, so the inner instrumented entries do not deadlock
-/// when called from within such a held sequence. The worker thread never takes
-/// this lock, so it can never be held across a `with_worker` dispatch in a way
-/// that would block the worker.
+/// when called from within such a held sequence. The two entries that dispatch
+/// to the worker (`import_modules_with_exts`, `free_regions`) refuse to run on
+/// the worker thread, so this lock can never be held across a `with_worker`
+/// dispatch in a way that would block the worker.
 pub fn lifecycle_lock() -> ReentrantLifecycleGuard<'static> {
     LIFECYCLE_LOCK.lock()
 }
