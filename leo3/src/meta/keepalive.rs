@@ -69,7 +69,7 @@
 //! independent), but cross-set imports after a free can then crash — which is
 //! the point of the switch.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::io;
@@ -245,39 +245,85 @@ fn cstr_field(arr: &[std::os::raw::c_char]) -> Option<&str> {
     std::str::from_utf8(&bytes[..len]).ok()
 }
 
-/// Module-set keys that have a **file-backed** (re-mappable) copy.
-///
-/// A heap-backed environment (whose data lives in a `malloc` buffer, not file
-/// VMAs — the Lean `module.cpp` fallback when any deterministic `mmap` fails)
-/// is safe to free *only* when its set is in this registry: then its names
-/// alias the file-backed copy's `g_native_symbol_cache` entries and were never
-/// newly cached, so freeing the `malloc` buffer cannot dangle a cache key. A
-/// set that was *first* imported heap-backed (its deterministic base collided
-/// with another set's mapping) has no file-backed copy and its names WERE newly
-/// cached — freeing it would dangle, so it is leaked instead.
-static FILE_BACKED_SETS: LazyLock<Mutex<HashSet<String>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
+/// Process-wide serialization for the environment free/record and
+/// remap/import sequences (see [`lifecycle_lock`]).
+static LIFECYCLE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-/// Register that the module set was imported file-backed (its data is in
-/// re-mappable file VMAs). Called by leotower at import time, when the
-/// import-time VMA diff is non-empty.
-pub fn register_file_backed_set(modules: &[&str]) {
-    if *DISABLED {
-        return;
-    }
-    let key = key_of(modules);
-    FILE_BACKED_SETS.lock().unwrap().insert(key);
+/// Acquire the process-wide lifecycle lock.
+///
+/// The environment free/record sequence (leotower `EnvRegions::drop`:
+/// snapshot-before → `free_regions` → snapshot-after → record) and the import
+/// sequence (leotower `Repl::new`: remap cross-set bases → import) each touch
+/// the shared lean VMA state that backs `g_native_symbol_cache`. The Lean FFI
+/// half of each sequence is already serialized by leo3's single worker thread,
+/// but the `/proc/self/maps` snapshots and the record / re-map steps run on the
+/// *caller* thread. Without this lock two concurrent sequences can interleave
+/// their snapshots and corrupt the freed-set record (one drop's before/after
+/// diff can swallow another sequence's VMAs). Hold the returned guard across
+/// the *entire* sequence, on the caller thread.
+pub fn lifecycle_lock() -> std::sync::MutexGuard<'static, ()> {
+    LIFECYCLE_LOCK.lock().unwrap()
 }
 
-/// True if the module set has a file-backed (re-mappable) copy. Called by
-/// leotower at drop time to decide whether a heap-backed environment is safe
-/// to free.
-pub fn has_file_backed_copy(modules: &[&str]) -> bool {
-    if *DISABLED {
-        return false;
+/// Decide whether an imported environment is safe to `free_regions`.
+///
+/// `free_regions` releases *every* compacted region, including any **heap**
+/// region (the `malloc` buffer the Lean `module.cpp` fallback uses when a
+/// deterministic `mmap` base is already occupied). A heap region's
+/// `g_native_symbol_cache` keys point into that buffer and cannot be re-mapped
+/// after it is freed, so freeing a heap/mixed environment dangles them and the
+/// next import's symbol lookup SIGSEGVs.
+///
+/// An environment is all-file-backed — and therefore safe to free — exactly
+/// when its region count equals the number of lean file VMAs the import added:
+/// each file-backed region is one `mmap` (one VMA line), a heap region adds
+/// none. Any uncertainty (the count could not be read, or it does not match)
+/// returns `false`, so the caller leaks the environment instead.
+pub fn safe_to_free_regions(region_count: Option<u64>, file_vmas_added: u64) -> bool {
+    matches!(region_count, Some(n) if n >= 1 && n == file_vmas_added)
+}
+
+/// Read the environment's import/region count from the live environment object,
+/// guarding every step. This is the number of compacted import regions the
+/// environment holds (one per imported module).
+///
+/// The field path is the compiled layout of the elaboration `Environment` in
+/// the pinned Lean toolchain (verified against the disassembly of
+/// `lean_environment_free_regions` and a runtime probe): `env.field0.field0.
+/// field5.field2` is the `Array Import` (one element per imported
+/// module/region); its element count (word 1 of the array object, word 0 being
+/// the refcount header) is the region count. Any step that fails a sanity
+/// check returns `None`, which [`safe_to_free_regions`] treats as "cannot
+/// prove all regions are file-backed" (leak).
+pub fn environment_region_count(env_ptr: *const c_void) -> Option<u64> {
+    let e = env_ptr as *const u64;
+    if !sane_ptr(e as u64) {
+        return None;
     }
-    let key = key_of(modules);
-    FILE_BACKED_SETS.lock().unwrap().contains(&key)
+    let read = |base: *const u64, i: usize| unsafe { *base.add(i) };
+    let f0 = read(e, 1); // env.field0
+    if !sane_ptr(f0) {
+        return None;
+    }
+    let f00 = read(f0 as *const u64, 1); // env.field0.field0
+    if !sane_ptr(f00) {
+        return None;
+    }
+    let a = read(f00 as *const u64, 6); // env[0][0][5]
+    if !sane_ptr(a) {
+        return None;
+    }
+    let b = read(a as *const u64, 3); // env[0][0][5][2] (the Array Import)
+    if !sane_ptr(b) {
+        return None;
+    }
+    let n = read(b as *const u64, 1); // array element count
+    (1..200_000).contains(&n).then_some(n)
+}
+
+/// A plausible heap-object pointer: non-null, 8-aligned, in the user VA range.
+fn sane_ptr(v: u64) -> bool {
+    0x1000 < v && v < (1 << 48) && v.is_multiple_of(8)
 }
 
 /// File suffixes of the lean import regions that `free_regions` unmaps.
@@ -334,16 +380,20 @@ fn st_dev_to_maps(dev: u64) -> u64 {
 }
 
 /// True iff `a` and `b` are the same VMA: same address range AND same file
-/// identity (offset + inode + device + path). Matching on identity as well as
-/// address is what lets the diff / dedup distinguish "the same mapping is
-/// still there" from "that address was reused by a different file".
+/// identity (offset + inode + device + on-disk size + path + deleted flag).
+/// Matching on identity as well as address is what lets the diff / dedup
+/// distinguish "the same mapping is still there" from "that address was reused
+/// by a different file"; `size` catches in-place truncation and `deleted`
+/// an unlinked backing file that keeps the inode.
 fn vma_eq(a: &LeanVma, b: &LeanVma) -> bool {
     a.addr == b.addr
         && a.len == b.len
         && a.offset == b.offset
         && a.inode == b.inode
         && a.device == b.device
+        && a.size == b.size
         && a.path == b.path
+        && a.deleted == b.deleted
 }
 
 /// Parse one `/proc/self/maps` line: `start-end perm offset dev inode [pad]
@@ -515,48 +565,83 @@ pub fn remap_cross_set_bases(importing: &[&str]) -> Result<(), Vec<RemapError>> 
     if *DISABLED {
         return Ok(());
     }
-    // MAP_FIXED_NOREPLACE needs kernel >= 4.17; on older kernels the flag is
-    // silently treated as MAP_FIXED, which would CLOBBER a live mapping. Refuse
-    // to re-map (block the import) rather than risk it.
-    if !*KERNEL_NO_REPLACE {
-        return Err(vec![RemapError::KernelUnsupported]);
-    }
     let import_key = key_of(importing);
     let mut guard = FREED_SETS.lock().unwrap();
-    // Collect candidate sets (freed, not the importing set, not yet remapped)
-    // and the VMAs to re-map, as (set, vma) indices so `guard` can be mutated
-    // afterwards. De-dup on full identity: a true duplicate (same address +
-    // identity) is skipped, but two records at the same address with *different*
-    // file identity are a conflict the re-map cannot resolve — error out before
-    // touching any mapping (the import is then blocked).
+
+    // Collision detection across *all* freed sets — including the importing
+    // set's own pending regions. Two recorded regions that claim the same
+    // address range but back *different* files (a deterministic-base collision)
+    // cannot both be revived; if the importing set's base is among them the
+    // import's own self-heal re-mmap would be blocked, so the import is refused
+    // up front rather than proceed with dangling keys.
+    //
+    // Only *pending* (not-yet-remapped) non-importing sets are scheduled for an
+    // actual re-mmap: the importing set re-maps its own bases itself during the
+    // import, and already-remapped sets stay mapped.
     let mut seen: HashMap<(usize, usize), &LeanVma> = HashMap::new();
     let mut to_remap: Vec<(usize, usize)> = Vec::new();
     let mut candidates: Vec<usize> = Vec::new();
     for (i, set) in guard.iter().enumerate() {
-        if set.remapped || set.key == import_key || set.vmras.is_empty() {
+        if set.vmras.is_empty() {
             continue;
         }
-        candidates.push(i);
+        let is_importing = set.key == import_key;
+        let is_pending = !set.remapped;
         for (j, vma) in set.vmras.iter().enumerate() {
             match seen.get(&(vma.addr, vma.len)) {
                 Some(prev) if vma_eq(prev, vma) => {
-                    // Duplicate (same address + identity) — already scheduled.
+                    // Duplicate (same address + identity) — nothing to do.
                 }
                 Some(_) => {
                     return Err(vec![RemapError::IdentityConflict { addr: vma.addr }]);
                 }
                 None => {
                     seen.insert((vma.addr, vma.len), vma);
-                    to_remap.push((i, j));
+                    if is_pending && !is_importing {
+                        to_remap.push((i, j));
+                        if !candidates.contains(&i) {
+                            candidates.push(i);
+                        }
+                    }
                 }
             }
         }
     }
     // `seen` holds borrows into `guard`; end them before mutating.
     drop(seen);
+
+    // Validate the importing set's *own* pending regions. The importing set is
+    // deliberately skipped by the re-mmap loop above (it re-maps its own bases
+    // during the import), so none of the file-identity / range-occupation
+    // checks would otherwise run for it. Its import relies on re-mapping at
+    // exactly these bases to self-heal its dangling keys, which only works if
+    // each base is currently free (or still mapped by the identical file); a
+    // different occupant would force a heap fallback and dangle the keys.
+    if let Some(i) = guard.iter().position(|s| s.key == import_key) {
+        let set = &guard[i];
+        if !set.remapped {
+            for vma in &set.vmras {
+                check_identity(vma).map_err(|e| vec![e])?;
+                base_is_reusable(vma).map_err(|e| vec![e])?;
+            }
+        }
+    }
+
+    // No cross-set regions need re-mapping. The stopgap then has nothing to do
+    // and — crucially — does not require `MAP_FIXED_NOREPLACE`, so an old
+    // kernel is not a problem here (the importing-set validation above reads
+    // `/proc/self/maps`, which needs no special kernel support).
     if to_remap.is_empty() {
         return Ok(());
     }
+
+    // MAP_FIXED_NOREPLACE needs kernel >= 4.17; on older kernels the flag is
+    // silently treated as MAP_FIXED, which would CLOBBER a live mapping. Refuse
+    // to re-map (block the import) rather than risk it.
+    if !*KERNEL_NO_REPLACE {
+        return Err(vec![RemapError::KernelUnsupported]);
+    }
+
     // Re-map every region; commit state only if all of them succeed.
     let mut failures: Vec<RemapError> = Vec::new();
     for (si, vi) in &to_remap {
@@ -565,11 +650,14 @@ pub fn remap_cross_set_bases(importing: &[&str]) -> Result<(), Vec<RemapError>> 
         }
     }
     if failures.is_empty() {
-        for si in candidates {
-            guard[si].remapped = true;
-            // The regions are now pinned for the life of the process; the
-            // metadata is no longer needed.
-            guard[si].vmras.clear();
+        for si in &candidates {
+            guard[*si].remapped = true;
+            // NOTE: `vmras` is intentionally *not* cleared. The re-mapped
+            // regions stay mapped for the life of the process, but their
+            // address + identity are still needed by the collision detection
+            // above: a later import of a *different* set whose deterministic
+            // base collides with a re-mapped region must be refused, not
+            // silently fall back to the heap and dangle its keys.
         }
         Ok(())
     } else {
@@ -577,20 +665,13 @@ pub fn remap_cross_set_bases(importing: &[&str]) -> Result<(), Vec<RemapError>> 
     }
 }
 
-/// Re-`mmap` a single lean VMA back at its original address, verifying the
-/// file identity recorded at snapshot time and refusing to clobber a range
-/// that is already occupied by a different mapping.
-///
-/// File identity is `inode` + `device` (a replaced/moved file changes its
-/// inode and/or device), plus an on-disk *size* that must not have shrunk
-/// (in-place truncation keeps the inode but leaves the region tail pointing at
-/// stale / zero bytes). The lean regions are mapped page/region-aligned, so a
-/// VMA's length (from `/proc/self/maps`) can legitimately exceed the file size
-/// (the tail is zero-filled) — the size check therefore compares against the
-/// recorded *file* size, not the VMA length.
-fn remap_vma(vma: &LeanVma) -> Result<(), RemapError> {
-    // A deleted (unlinked) file cannot be re-opened, so it cannot be re-mapped.
-    // Refuse rather than leave the cached key dangling.
+/// Verify the recorded file still exists with the same identity (inode,
+/// device) and has not shrunk since the snapshot. Shared by the re-mmap path
+/// ([`remap_vma`]) and the importing-set self-heal validation
+/// ([`base_is_reusable`]).
+fn check_identity(vma: &LeanVma) -> Result<(), RemapError> {
+    // A deleted (unlinked) file cannot be re-opened, so it cannot be re-mapped
+    // or re-read; refuse rather than leave the cached key dangling.
     if vma.deleted {
         return Err(RemapError::FileDeleted {
             path: vma.path.clone(),
@@ -628,6 +709,87 @@ fn remap_vma(vma: &LeanVma) -> Result<(), RemapError> {
             detail: format!("file size shrank: recorded {0}, on disk {size}", vma.size),
         });
     }
+    Ok(())
+}
+
+/// The importing set re-maps its own freed bases during the import (Lean's
+/// deterministic `mmap`). That self-heal only revives the dangling
+/// `g_native_symbol_cache` keys if, at the moment the import runs, every byte
+/// of `[addr, addr+len)` is either *unmapped* (the import maps it fresh) or
+/// already mapped by the *identical* file at the matching offset (the region
+/// was already revived, so the keys are valid). Any other occupant would make
+/// the import's single `mmap` of the range fall back to the heap, leaving the
+/// keys dangling — so refuse the import.
+fn base_is_reusable(vma: &LeanVma) -> Result<(), RemapError> {
+    let Some(maps) = read_maps() else {
+        // Unreadable: the import's own `mmap` will fall back safely to the
+        // heap for any occupied base; this is a best-effort guard, so let the
+        // import proceed rather than spuriously block on a transient read.
+        return Ok(());
+    };
+    let end = match vma.addr.checked_add(vma.len) {
+        Some(e) => e,
+        None => return Err(RemapError::RangeOccupied { addr: vma.addr }),
+    };
+    if vma.len == 0 {
+        return Ok(());
+    }
+    let parsed: Vec<MapsVma> = maps.lines().filter_map(parse_maps_line).collect();
+    let mut pos = vma.addr;
+    while pos < end {
+        match parsed.iter().find(|m| m.start <= pos && pos < m.end) {
+            None => {
+                // `pos` is unmapped (free) — the import will map it. Advance to
+                // the start of the next VMA (or `end`) to skip the gap.
+                let next = parsed
+                    .iter()
+                    .filter(|m| m.start > pos)
+                    .map(|m| m.start)
+                    .min();
+                pos = std::cmp::min(next.unwrap_or(end), end);
+            }
+            Some(m) => {
+                // Occupied: it must be the identical file at the matching offset.
+                if m.inode != vma.inode || m.device != vma.device || m.path != vma.path {
+                    return Err(RemapError::RangeOccupied { addr: vma.addr });
+                }
+                let off_at_pos = match m.offset.checked_add((pos - m.start) as u64) {
+                    Some(o) => o,
+                    None => return Err(RemapError::RangeOccupied { addr: vma.addr }),
+                };
+                let expected_offset = match vma.offset.checked_add((pos - vma.addr) as u64) {
+                    Some(o) => o,
+                    None => return Err(RemapError::RangeOccupied { addr: vma.addr }),
+                };
+                if off_at_pos != expected_offset {
+                    return Err(RemapError::RangeOccupied { addr: vma.addr });
+                }
+                pos = std::cmp::min(m.end, end);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Re-`mmap` a single lean VMA back at its original address, verifying the
+/// file identity recorded at snapshot time and refusing to clobber a range
+/// that is already occupied by a different mapping.
+///
+/// File identity is `inode` + `device` (a replaced/moved file changes its
+/// inode and/or device), plus an on-disk *size* that must not have shrunk
+/// (in-place truncation keeps the inode but leaves the region tail pointing at
+/// stale / zero bytes). The lean regions are mapped page/region-aligned, so a
+/// VMA's length (from `/proc/self/maps`) can legitimately exceed the file size
+/// (the tail is zero-filled) — the size check therefore compares against the
+/// recorded *file* size, not the VMA length.
+fn remap_vma(vma: &LeanVma) -> Result<(), RemapError> {
+    // Verify the file identity (exists, inode, device, size not shrunk) before
+    // touching any mapping; see `check_identity`.
+    check_identity(vma)?;
+    let file = File::open(&vma.path).map_err(|source| RemapError::OpenFailed {
+        path: vma.path.clone(),
+        source,
+    })?;
     // MAP_FIXED_NOREPLACE maps at `addr` only if the range is free; if it is
     // already mapped the call fails with EEXIST instead of silently replacing
     // the occupant.
@@ -777,10 +939,16 @@ mod tests {
 
     #[test]
     fn record_ignores_empty() {
-        let before = FREED_SETS.lock().unwrap().len();
+        // Recording an empty set must not create an entry for that key. Check
+        // the specific key rather than the registry's total length, so the
+        // assertion is independent of concurrent tests adding their own sets.
+        let key = key_of(&["A-empty-check"]);
         record_freed_set(&["A-empty-check"], vec![]);
-        let after = FREED_SETS.lock().unwrap().len();
-        assert_eq!(before, after, "recording an empty set must be a no-op");
+        let guard = FREED_SETS.lock().unwrap();
+        assert!(
+            !guard.iter().any(|s| s.key == key),
+            "recording an empty set must not create a set entry"
+        );
     }
 
     #[test]
@@ -961,5 +1129,130 @@ mod tests {
                 .any(|e| matches!(e, RemapError::IdentityConflict { .. })),
             "got {err:?}"
         );
+    }
+
+    // ---- Item 1+2 regression: the per-env all-file-backed gate ----
+
+    #[test]
+    fn safe_to_free_requires_count_to_match_added_vmras() {
+        // All regions file-backed: region count == file VMAs added ⇒ free.
+        assert!(safe_to_free_regions(Some(6828), 6828));
+        assert!(safe_to_free_regions(Some(1), 1));
+        // Mixed: some regions heap-backed (fewer file VMAs than regions) ⇒ leak.
+        assert!(!safe_to_free_regions(Some(6828), 0));
+        assert!(!safe_to_free_regions(Some(6828), 6825));
+        // Over-count (should not happen, but be conservative) ⇒ leak.
+        assert!(!safe_to_free_regions(Some(6828), 6829));
+        // Unreadable region count ⇒ cannot prove ⇒ leak.
+        assert!(!safe_to_free_regions(None, 6828));
+        // Empty env (no regions) is not freeable ⇒ leak.
+        assert!(!safe_to_free_regions(Some(0), 0));
+    }
+
+    #[test]
+    fn vma_eq_compares_size_and_deleted() {
+        let a = mk_vma(0x1000, 0x100, 0, 1, "/a.olean");
+        let mut b = a.clone();
+        assert!(vma_eq(&a, &b), "identical VMAs must match");
+        b.size = a.size + 1;
+        assert!(!vma_eq(&a, &b), "size change must break equality");
+        let mut c = mk_vma(0x1000, 0x100, 0, 1, "/a.olean");
+        c.deleted = true;
+        assert!(!vma_eq(&a, &c), "deleted flag must break equality");
+    }
+
+    // ---- Item 3 regression: the importing set's base must not be clobbered ----
+
+    #[test]
+    fn pending_set_cannot_occupy_importing_base() {
+        // A (the importing set) and B (a pending, not-yet-remapped set) both
+        // have a recorded VMA at the same address but back *different* files
+        // (a deterministic-base collision). Importing A must be refused (the
+        // pending B would otherwise be re-mapped onto A's base and break A's
+        // self-heal), not silently scheduled.
+        let a = mk_vma(0x7f00_0006_0000, 0x1000, 0, 1, "/a.olean");
+        let b = mk_vma(0x7f00_0006_0000, 0x1000, 0, 2, "/b.olean");
+        record_freed_set(&["S-imp-occ-A"], vec![a.clone()]);
+        record_freed_set(&["S-imp-occ-B"], vec![b.clone()]);
+        // Importing a *third* set must still surface the collision: B's pending
+        // VMA occupies A's recorded base.
+        let err = remap_cross_set_bases(&["S-imp-occ-C"]).unwrap_err();
+        assert!(
+            err.iter()
+                .any(|e| matches!(e, RemapError::IdentityConflict { .. })),
+            "a pending set occupying another freed base must block the re-map, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn base_is_reusable_when_range_free_or_identical() {
+        // Allocate a page we own, then test the three occupancy cases against
+        // it without ever clobbering an address we do not control.
+        let path = std::env::temp_dir().join(format!("leo3_kareuse_{}.olean", std::process::id()));
+        std::fs::write(&path, [0u8; 4096]).unwrap();
+        let md = std::fs::metadata(&path).unwrap();
+        let fd = File::open(&path).unwrap();
+        let base = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        assert!(base != MAP_FAILED, "anonymous mmap failed");
+        let want = base as usize;
+        let dev = st_dev_to_maps(md.dev());
+        let identical = LeanVma {
+            addr: want,
+            len: 4096,
+            offset: 0,
+            inode: md.ino(),
+            device: dev,
+            size: md.len(),
+            path: path.to_string_lossy().into_owned(),
+            deleted: false,
+        };
+        // 1. Occupied by an anonymous page (different file) => refused.
+        assert!(
+            matches!(
+                base_is_reusable(&identical).unwrap_err(),
+                RemapError::RangeOccupied { .. }
+            ),
+            "a base occupied by a different (anonymous) mapping must be refused"
+        );
+        // 2. Map the real file over the page we own => identical => reusable.
+        let p = unsafe {
+            libc::mmap(
+                base,
+                4096,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE | libc::MAP_FIXED,
+                fd.as_raw_fd(),
+                0,
+            )
+        };
+        assert_eq!(p as usize, want, "MAP_FIXED over our own page failed");
+        assert!(
+            base_is_reusable(&identical).is_ok(),
+            "an identically-occupied base must be reusable"
+        );
+        // 3. Same range claimed by a different file (wrong inode) => refused.
+        let different = LeanVma {
+            inode: md.ino() + 1,
+            path: format!("{}/other.olean", std::env::temp_dir().display()),
+            ..identical.clone()
+        };
+        assert!(
+            matches!(
+                base_is_reusable(&different).unwrap_err(),
+                RemapError::RangeOccupied { .. }
+            ),
+            "a base claimed by a different file must be refused"
+        );
+        unsafe { libc::munmap(p, 4096) };
+        let _ = std::fs::remove_file(&path);
     }
 }

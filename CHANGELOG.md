@@ -50,11 +50,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keys. Same-set imports self-heal and are left alone, so the common case pays
   no RSS cost; each *distinct* freed set that is later crossed pins one
   resident copy of its file-backed regions. The per-environment safe-free
-  decision (which lives in `leotower`) detects file-backed vs heap-backed
-  imports from an import-time `/proc/self/maps` diff: a file-backed env is
-  freed and its regions recorded; a heap-backed env is freed only when its
-  module set has a file-backed copy (its names alias that copy's cache
-  entries), otherwise it is leaked (freeing would dangle a newly-cached key).
+  decision (which lives in `leotower`) is made at drop time from the *live*
+  environment: it reads the env's actual compacted-region count
+  (`env.header.regions`) and compares it to the number of lean file VMAs this
+  env's import added — each file-backed compacted region is exactly one
+  `mmap` (one lean file VMA) and a heap region (`malloc`) adds none, so the env
+  is freed only when every region is file-backed (count == VMAs added). A
+  heap- or mixed-backed env (some module fell back to the heap because its
+  deterministic base was already held) is leaked in full, because
+  `free_regions` frees *every* region and freeing a heap region dangles its
+  `g_native_symbol_cache` keys. No historical "was this set file-backed"
+  record is kept. The drop's snapshot/free/record and the import's remap are
+  serialized by a process-wide lock so their `/proc/self/maps` reads and
+  `mmap`/`munmap` steps cannot interleave with a concurrent import's symbol
+  lookups.
   **Stopgap, Linux only** (it reads `/proc/self/maps` and needs
   `MAP_FIXED_NOREPLACE`); the true fix is upstream (content-owning cache
   keys) and is tracked separately.
