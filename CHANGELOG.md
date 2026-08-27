@@ -72,10 +72,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `remap_cross_set_bases`, and the maps snapshot) — not only the leotower
   wiring — so their `/proc/self/maps` reads and `mmap`/`munmap` steps cannot
   interleave with a concurrent import's symbol lookups. The env's region count
-  is read by `environment_region_count`, a *typed* API (it takes the caller's
-  own `LeanUnbound<LeanEnvironment>`), so the pinned-layout walk never appears
-  in the public signature as a raw pointer; the raw-pointer walk lives in a
-  private `unsafe` helper.
+  is read by `environment_region_count`, an `unsafe fn` taking a
+  `&LeanUnbound<LeanEnvironment>`: it is typed (no raw `*const c_void` in the
+  signature) but deliberately `unsafe`, because `LeanUnbound::cast::<U>` is a
+  *safe* generic cast that can forge a `LeanUnbound<LeanEnvironment>` out of
+  any other `LeanUnbound`, so the "this is a real environment" precondition
+  cannot be expressed in the type system and must be upheld by the caller. The
+  raw pinned-layout walk lives in a private `unsafe` helper.
+  **Failure containment:** `Environment.freeRegions` is a non-atomic
+  `forM CompactedRegion.free`, so a mid-sequence error can leave the first
+  regions already unmapped with their keys dangling. The leotower drop
+  therefore recovers on that path: if the post-free `/proc/self/maps` is
+  readable it records exactly the regions the failed free unmapped (so a later
+  cross-set import revives them); if it is *also* unreadable — the freed set
+  can no longer be determined — it latches a process-wide **quarantine**
+  (`poison_keepalive`) that is one-way: every subsequent drop leaks instead of
+  freeing, and `remap_cross_set_bases` (hence every cross-set import) returns
+  `RemapError::Poisoned`, so the possibly-dangling keys can never be
+  dereferenced. A snapshot `stat` that fails marks the region
+  `size_known = false`, and such a region is untrackable: the drop leaks the
+  env and the re-map's identity check refuses it, so a failed stat is never
+  treated as a 0-byte identity that any file satisfies. The reentrant
+  lifecycle guard is `!Send` (the lock records the holding `ThreadId`, so the
+  guard must not move across threads), and `import_modules_with_exts` /
+  `free_regions` refuse to be called from the Lean worker thread (a self
+  `with_worker` dispatch would deadlock). The `.olean`/`.ir` files are
+  compiler build artifacts; the stopgap relies on them not being rewritten in
+  place for the process lifetime (a same-inode, same-size in-place overwrite
+  is the one identity case the (inode, device, no-shrink) check does not
+  catch).
   **RSS cost of the safe choice:** a heap/mixed-backed env (e.g. a second
   concurrent import of a set whose deterministic bases are already held by a
   live session) is leaked in full, so holding two same-set sessions at once

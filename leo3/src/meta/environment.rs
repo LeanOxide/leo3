@@ -352,6 +352,13 @@ impl<'l> LeanBound<'l, LeanEnvironment> {
     /// (normally unreachable).
     pub unsafe fn free_regions(self) -> LeanResult<()> {
         let env_ptr = self.into_ptr();
+        // Refuse to dispatch to the worker from the worker itself (a self
+        // `with_worker` would deadlock, as in `import_modules_with_exts`).
+        if crate::runtime::on_worker_thread() {
+            return Err(LeanError::other(
+                "free_regions must not be called from the Lean worker thread (with_worker would deadlock)",
+            ));
+        }
         // W-417: serialize this free against the keepalive import/snapshot/
         // record/re-map sequences (reentrant, so a drop holding the lock across
         // its whole sequence does not deadlock). Held on this (caller) thread

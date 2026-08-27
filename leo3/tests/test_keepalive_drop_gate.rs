@@ -36,7 +36,7 @@ fn drop_gate_frees_file_backed_and_leaks_heap_backed() {
         let a = import_modules(lean, &["Lean"], 0)?.unbind_mt();
         let after_a = snapshot_lean_vmras().expect("maps readable after A");
         let added_a = diff_added_vmras(&before_a, &after_a).len() as u64;
-        let count_a = environment_region_count(&a);
+        let count_a = unsafe { environment_region_count(&a) };
         assert!(
             safe_to_free_regions(count_a, added_a),
             "a fully file-backed environment must be safe to free (count={count_a:?}, added={added_a})",
@@ -49,7 +49,7 @@ fn drop_gate_frees_file_backed_and_leaks_heap_backed() {
         let b = import_modules(lean, &["Lean"], 0)?.unbind_mt();
         let after_b = snapshot_lean_vmras().expect("maps readable after B");
         let added_b = diff_added_vmras(&before_b, &after_b).len() as u64;
-        let count_b = environment_region_count(&b);
+        let count_b = unsafe { environment_region_count(&b) };
         assert!(
             !safe_to_free_regions(count_b, added_b),
             "a heap-backed environment must NOT be safe to free (count={count_b:?}, added={added_b})",

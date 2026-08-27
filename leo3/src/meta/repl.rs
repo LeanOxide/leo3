@@ -858,6 +858,16 @@ pub fn import_modules_with_exts<'l>(
     load_exts: bool,
 ) -> LeanResult<LeanBound<'l, LeanEnvironment>> {
     crate::runtime::ensure_meta_initialized();
+    // Refuse to dispatch to the worker from the worker itself: this entry
+    // takes the lifecycle lock and then `with_worker`s, so calling it from a
+    // worker closure (`run_worker`) would make the worker block in the
+    // rendezvous channel for a task it cannot run (deadlock). A clean error
+    // beats a hang.
+    if crate::runtime::on_worker_thread() {
+        return Err(LeanError::other(
+            "import_modules_with_exts must not be called from the Lean worker thread (with_worker would deadlock)",
+        ));
+    }
     // W-417: serialize this import against the keepalive free/record/re-map
     // sequences (and other imports). The import's `mmap`s change the lean VMA
     // state and populate `g_native_symbol_cache`; an import interleaved with a

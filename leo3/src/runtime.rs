@@ -177,6 +177,17 @@ unsafe impl<T> Send for SendBox<T> {}
 #[allow(clippy::type_complexity)]
 static WORKER: Mutex<Option<mpsc::SyncSender<Box<dyn FnOnce() + Send>>>> = Mutex::new(None);
 
+/// `ThreadId` of the long-lived Lean worker, captured when it starts. Used to
+/// detect (and refuse) a call that would dispatch to the worker *from the
+/// worker itself*: a self-`with_worker` dispatch deadlocks, because the worker
+/// blocks in the rendezvous channel waiting for the task it cannot run.
+static WORKER_THREAD_ID: Mutex<Option<std::thread::ThreadId>> = Mutex::new(None);
+
+/// True iff the current thread is the long-lived Lean worker thread.
+pub(crate) fn on_worker_thread() -> bool {
+    *WORKER_THREAD_ID.lock().unwrap() == Some(std::thread::current().id())
+}
+
 /// Ensure the long-lived Lean worker thread is spawned and fully initialized.
 ///
 /// This worker is the canonical serialized path for runtime bootstrap and for
@@ -195,6 +206,7 @@ pub(crate) fn ensure_worker_initialized() {
             // overflows. 64 MiB matches typical host-process expectations.
             .stack_size(64 * 1024 * 1024)
             .spawn(move || {
+                *WORKER_THREAD_ID.lock().unwrap() = Some(std::thread::current().id());
                 unsafe {
                     ffi::lean_initialize_runtime_module();
                     ffi::lean_initialize_thread();

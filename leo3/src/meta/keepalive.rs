@@ -74,6 +74,7 @@ use std::fs::File;
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, LazyLock, Mutex};
 use std::thread;
 
@@ -112,6 +113,14 @@ pub struct LeanVma {
     /// `/proc/self/maps`). Such a file cannot be re-opened, so the VMA cannot
     /// be re-mapped (it is NOT safely trackable).
     pub deleted: bool,
+    /// Whether the snapshot successfully read this region's size, i.e. whether
+    /// its file identity is trackable. `false` when the snapshot's `stat`
+    /// failed (permission / race / special fs): the recorded `size` is then 0
+    /// by construction, and treating it as a valid "0-byte region" would let
+    /// the re-map accept an arbitrary (even truncated or rewritten) file at
+    /// the original address. Such a VMA is NOT safely trackable — the re-map
+    /// refuses it and the drop must leak the env.
+    pub size_known: bool,
 }
 
 /// A module set that was freed, together with the lean regions that
@@ -184,6 +193,12 @@ pub enum RemapError {
     /// unmapped — so the caller must fail closed (leak the env, or block the
     /// import) rather than assume the range is safe.
     MapsUnavailable,
+    /// The keepalive stopgap has been quarantined: a prior destructive
+    /// `free_regions` failed in a way that could not be proven fully recovered,
+    /// so the process must not import again (the symbol-cache state may hold
+    /// dangling keys). The re-map — and therefore the cross-set import — is
+    /// blocked rather than risk a dangling name dereference.
+    Poisoned,
 }
 
 impl fmt::Display for RemapError {
@@ -213,6 +228,10 @@ impl fmt::Display for RemapError {
                 f,
                 "could not read /proc/self/maps; cannot prove the lean region state, failing closed"
             ),
+            RemapError::Poisoned => write!(
+                f,
+                "keepalive stopgap is quarantined (a prior destructive free failed unrecoverably); blocking import"
+            ),
         }
     }
 }
@@ -223,6 +242,37 @@ static FREED_SETS: LazyLock<Mutex<Vec<FreedSet>>> = LazyLock::new(|| Mutex::new(
 /// stopgap off.
 static DISABLED: LazyLock<bool> =
     LazyLock::new(|| std::env::var_os("LEO3_KEEPALIVE_DISABLE").is_some());
+
+/// Process-wide quarantine latch. Once a *destructive* `free_regions` has
+/// started and the process state can no longer be proven clean (the free
+/// returned an error mid-sequence — `Environment.freeRegions` is a non-atomic
+/// `forM CompactedRegion.free`, so a mid-sequence error leaves the first
+/// regions already unmapped with their `g_native_symbol_cache` keys dangling —
+/// or the post-free `/proc/self/maps` was unreadable), the lean region state
+/// backing the symbol cache is untrustworthy. Rather than risk the next import
+/// dereferencing a dangling name key, the process quarantines itself: no
+/// further destructive free is ever performed (future envs leak) and no further
+/// cross-set import is allowed (the re-map blocks). One-way latch; only tests
+/// reset it.
+static POISONED: AtomicBool = AtomicBool::new(false);
+
+/// Latch the keepalive stopgap into quarantine (see [`POISONED`]). Idempotent.
+pub fn poison_keepalive() {
+    POISONED.store(true, Ordering::SeqCst);
+}
+
+/// Whether the keepalive stopgap has been quarantined (a prior destructive free
+/// failed in a way that could not be proven fully recovered).
+pub fn keepalive_poisoned() -> bool {
+    POISONED.load(Ordering::SeqCst)
+}
+
+/// Test-only: clear the quarantine latch so one test's poison does not leak
+/// into another test in the same process.
+#[cfg(test)]
+pub fn test_reset_poison() {
+    POISONED.store(false, Ordering::SeqCst);
+}
 
 /// True if the running kernel supports `mmap(MAP_FIXED_NOREPLACE)` (added in
 /// Linux 4.17). Checked once; on older kernels the flag would be silently
@@ -284,21 +334,35 @@ impl ReentrantLifecycleLock {
         let mut state = self.state.lock().unwrap();
         if state.0 == Some(me) {
             state.1 += 1;
-            return ReentrantLifecycleGuard { lk: self };
+            return ReentrantLifecycleGuard {
+                lk: self,
+                _not_send: std::marker::PhantomData,
+            };
         }
         while state.0.is_some() {
             state = self.cv.wait(state).unwrap();
         }
         state.0 = Some(me);
         state.1 = 1;
-        ReentrantLifecycleGuard { lk: self }
+        ReentrantLifecycleGuard {
+            lk: self,
+            _not_send: std::marker::PhantomData,
+        }
     }
 }
 
 /// Guard for [`ReentrantLifecycleLock`]. Dropping it decrements the hold-count
 /// and releases the lock (waking a waiter) only on the last release.
+///
+/// The guard is deliberately `!Send`: the lock records the *holding thread's*
+/// `ThreadId`, so the guard must be dropped on the thread that acquired it.
+/// Moving it to another thread would leave the lock's holder as the original
+/// thread, and a re-acquire from the new thread would wait for the original
+/// thread forever (a deadlock if the original thread waits on the new one).
+/// `PhantomData<*const ()>` is the standard "not movable across threads" marker.
 pub struct ReentrantLifecycleGuard<'a> {
     lk: &'a ReentrantLifecycleLock,
+    _not_send: std::marker::PhantomData<*const ()>,
 }
 
 impl Drop for ReentrantLifecycleGuard<'_> {
@@ -371,16 +435,21 @@ pub fn safe_to_free_regions(region_count: Option<u64>, file_vmas_added: u64) -> 
 /// [`safe_to_free_regions`] treats as "cannot prove all regions are
 /// file-backed" (leak) — a safe failure mode if the layout ever changes.
 ///
-/// Typed, not a raw pointer: the caller passes a `LeanUnbound<LeanEnvironment>`
-/// it owns, so the public signature never exposes an arbitrary
-/// `*const c_void`. The object is only read (never mutated or freed); the raw
-/// field walk below is `unsafe` but sound for a real in-memory `Environment`,
-/// and it is kept in a private helper so the raw pointer stays out of the
-/// public API.
-pub fn environment_region_count(env: &LeanUnbound<LeanEnvironment>) -> Option<u64> {
-    // SAFETY: `env` is a live environment the caller owns and keeps alive for
-    // the call; `count_regions_from` only reads through it.
-    unsafe { count_regions_from(env.as_ptr() as *const c_void) }
+/// # Safety
+///
+/// Typed (a `LeanUnbound<LeanEnvironment>`), but **not safe**: `LeanUnbound`
+/// `T` is only a Rust-level tag and `LeanUnbound::cast::<U>` is a *safe*
+/// generic cast, so `cast` can forge a `LeanUnbound<LeanEnvironment>` out of a
+/// valid `LeanUnbound<LeanString>` / `LeanUnbound<LeanAny>` without any
+/// `unsafe`. The `Environment` object this walks is therefore *not* guaranteed
+/// by the type system. The caller must uphold: `env` points at a genuine, live
+/// elaboration `Environment` (not a `cast` from some other Lean object) that
+/// the caller owns and keeps alive for the duration of the call. The function
+/// only *reads* through it (never mutates or frees); the raw field walk lives
+/// in the private `count_regions_from` and is sound precisely for a real
+/// in-memory `Environment`.
+pub unsafe fn environment_region_count(env: &LeanUnbound<LeanEnvironment>) -> Option<u64> {
+    count_regions_from(env.as_ptr() as *const c_void)
 }
 
 /// Read the region count from a raw environment pointer. Kept private: public
@@ -493,6 +562,7 @@ fn vma_eq(a: &LeanVma, b: &LeanVma) -> bool {
         && a.size == b.size
         && a.path == b.path
         && a.deleted == b.deleted
+        && a.size_known == b.size_known
 }
 
 /// True iff the two VMAs' address ranges overlap as **half-open** intervals
@@ -615,11 +685,17 @@ fn parse_maps_content(maps: &str) -> Vec<LeanVma> {
             .unwrap_or(&m.path)
             .to_string();
         // File size at snapshot time, for the in-place-truncation check on
-        // re-map. A deleted / unstat-able file has size 0 (and `deleted`).
-        let size = if deleted {
-            0
+        // re-map. `size_known` distinguishes a *legitimate* 0-byte region from
+        // a *failed* `stat` (both record `size == 0`): only the former is
+        // trackable. A failed `stat` (permission / race / special fs) marks
+        // the region untrackable so the re-map refuses it and the drop leaks.
+        let (size, size_known) = if deleted {
+            (0, false)
         } else {
-            std::fs::metadata(&path).map(|md| md.len()).unwrap_or(0)
+            match std::fs::metadata(&path) {
+                Ok(md) => (md.len(), true),
+                Err(_) => (0, false),
+            }
         };
         out.push(LeanVma {
             addr: m.start,
@@ -630,6 +706,7 @@ fn parse_maps_content(maps: &str) -> Vec<LeanVma> {
             size,
             path,
             deleted,
+            size_known,
         });
     }
     out
@@ -730,6 +807,12 @@ pub fn remap_cross_set_bases(importing: &[&str]) -> Result<(), Vec<RemapError>> 
     let _lifecycle = lifecycle_lock();
     if *DISABLED {
         return Ok(());
+    }
+    // Quarantined: a prior destructive free failed unrecoverably, so the symbol
+    // cache may hold dangling keys. Block the import (and its re-map) rather
+    // than risk a dangling name dereference on the next import.
+    if keepalive_poisoned() {
+        return Err(vec![RemapError::Poisoned]);
     }
     let import_key = key_of(importing);
     let mut guard = FREED_SETS.lock().unwrap();
@@ -837,6 +920,26 @@ fn check_identity(vma: &LeanVma) -> Result<(), RemapError> {
             path: vma.path.clone(),
         });
     }
+    // A region whose snapshot `stat` failed is not trackable: its recorded
+    // `size` is 0 by construction, and treating that as "any file satisfies"
+    // would let the re-map accept an arbitrary (even truncated/rewritten) file
+    // at the original address. Refuse it (the drop must leak the env instead).
+    if !vma.size_known {
+        return Err(RemapError::IdentityMismatch {
+            path: vma.path.clone(),
+            detail:
+                "region size was not trackable at snapshot time (stat failed); refusing to re-map"
+                    .into(),
+        });
+    }
+    // Identity here is (device, inode, "size did not shrink"). That catches
+    // recreation (new inode), deletion (deleted flag) and in-place
+    // truncation (smaller size). It does NOT catch a same-inode, same-size
+    // in-place *rewrite* — the bytes at the revived address could differ from
+    // the bytes that produced the dangling `g_native_symbol_cache` keys. That
+    // residual is closed by the deployment contract: the `.olean`/`.ir` files
+    // are compiler build artifacts that must not be rewritten in place for the
+    // lifetime of the process. See the module docs / CHANGELOG.
     let file = File::open(&vma.path).map_err(|source| RemapError::OpenFailed {
         path: vma.path.clone(),
         source,
@@ -1066,6 +1169,7 @@ mod tests {
             size: 0,
             path: path.to_string(),
             deleted: false,
+            size_known: true,
         }
     }
 
@@ -1174,6 +1278,7 @@ mod tests {
             size: md.len(),
             path: path.to_string_lossy().into_owned(),
             deleted: false,
+            size_known: true,
         };
         let err = remap_vma(&vma).unwrap_err();
         assert!(
@@ -1199,6 +1304,7 @@ mod tests {
             size: md.len() + 1024,
             path: path.to_string_lossy().into_owned(),
             deleted: false,
+            size_known: true,
         };
         let err = remap_vma(&vma).unwrap_err();
         assert!(
@@ -1219,6 +1325,7 @@ mod tests {
             size: 0,
             path: "/no/matter.olean".into(),
             deleted: true,
+            size_known: false,
         };
         let err = remap_vma(&vma).unwrap_err();
         assert!(matches!(err, RemapError::FileDeleted { .. }), "got {err:?}");
@@ -1255,6 +1362,7 @@ mod tests {
             size: md.len(),
             path: path.to_string_lossy().into_owned(),
             deleted: false,
+            size_known: true,
         };
         let err = remap_vma(&vma).unwrap_err();
         assert!(
@@ -1375,6 +1483,7 @@ mod tests {
             size: md.len(),
             path: path.to_string_lossy().into_owned(),
             deleted: false,
+            size_known: true,
         };
         // 1. Occupied by an anonymous page (different file) => refused.
         assert!(
@@ -1494,6 +1603,70 @@ mod tests {
         assert!(
             vm.iter().all(|v| !v.deleted),
             "none of these are marked deleted"
+        );
+    }
+
+    #[test]
+    fn parse_marks_unstatable_region_untrackable() {
+        // A maps line for a lean path whose `stat` fails must be recorded as
+        // NOT trackable (`size_known = false`), not as a 0-byte region that any
+        // file would satisfy.
+        let maps = "7f0000006000-7f0000007000 r--p 00000000 08:01 9999 /no/such/dir/mod.olean\n";
+        let vm = parse_maps_content(maps);
+        let v = vm.iter().find(|v| v.path.ends_with("mod.olean")).unwrap();
+        assert!(
+            !v.size_known,
+            "a region whose snapshot stat failed must be marked untrackable"
+        );
+        assert_eq!(v.size, 0);
+    }
+
+    #[test]
+    fn remap_refuses_untrackable_region() {
+        // An untrackable region must be refused by the identity check rather
+        // than accepted (a `size == 0` from a failed stat is not a valid
+        // 0-byte identity that any file satisfies).
+        let vma = LeanVma {
+            addr: 0x7f00_0009_0000,
+            len: 0x1000,
+            offset: 0,
+            inode: 1,
+            device: 0,
+            size: 0,
+            path: "/no/such/dir/mod.olean".into(),
+            deleted: false,
+            size_known: false,
+        };
+        let err = check_identity(&vma).unwrap_err();
+        assert!(
+            matches!(err, RemapError::IdentityMismatch { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn poison_quarantine_blocks_remap() {
+        // A quarantined keepalive must block the cross-set re-map (and thus the
+        // import) rather than risk dereferencing a dangling cache key.
+        struct ResetOnDrop;
+        impl Drop for ResetOnDrop {
+            fn drop(&mut self) {
+                test_reset_poison();
+            }
+        }
+        let _reset = ResetOnDrop;
+        test_reset_poison(); // start clean
+        poison_keepalive();
+        assert!(keepalive_poisoned());
+        let err = remap_cross_set_bases(&["S-poison-test"]).unwrap_err();
+        assert!(
+            err.iter().any(|e| matches!(e, RemapError::Poisoned)),
+            "quarantined re-map must return Poisoned, got {err:?}"
+        );
+        test_reset_poison();
+        assert!(
+            !keepalive_poisoned(),
+            "quarantine must be resettable in tests"
         );
     }
 }
