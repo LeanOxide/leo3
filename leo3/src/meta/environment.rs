@@ -350,7 +350,7 @@ impl<'l> LeanBound<'l, LeanEnvironment> {
     ///
     /// Returns the Lean exception if the region-free IO step fails
     /// (normally unreachable).
-    pub unsafe fn free_regions(self) -> LeanResult<()> {
+    pub unsafe fn free_regions(self, modules: &[&str]) -> LeanResult<()> {
         // Refuse to dispatch to the worker from the worker itself (a self
         // `with_worker` would deadlock). Checked BEFORE `into_ptr` (which
         // `forget`s `self`), so rejecting on the worker does not leak the owned
@@ -360,23 +360,40 @@ impl<'l> LeanBound<'l, LeanEnvironment> {
                 "free_regions must not be called from the Lean worker thread (with_worker would deadlock)",
             ));
         }
-        // Quarantined: a prior destructive free failed unrecoverably. Freeing
-        // again could create more dangling `g_native_symbol_cache` keys that no
-        // re-map would revive, so refuse (the env's regions are leaked, not
-        // freed).
+        // `modules` is used by the Linux record path; silence on other targets.
+        #[cfg(not(all(lean_4_25, target_os = "linux")))]
+        let _ = modules;
+        let env_ptr = self.into_ptr();
+        // W-417: serialize the whole free/record sequence (snapshot → free →
+        // snapshot → record / quarantine). Reentrant, so the inner `with_worker`
+        // free re-enters without deadlocking.
+        #[cfg(all(lean_4_25, target_os = "linux"))]
+        let _lifecycle = super::keepalive::lifecycle_lock();
+        // Quarantined: a prior destructive free failed unrecoverably. Checked
+        // AFTER acquiring the lock — a concurrent quarantining free latches the
+        // poison while it holds the lock, so reading the poison before the lock
+        // could race and miss it. Refuse: freeing again could create more
+        // dangling keys that no re-map would revive (the env's regions leak).
         #[cfg(all(lean_4_25, target_os = "linux"))]
         if super::keepalive::keepalive_poisoned() {
             return Err(LeanError::other(
                 "free_regions refused: keepalive is quarantined (a prior destructive free failed unrecoverably); the environment's regions are leaked, not freed",
             ));
         }
-        let env_ptr = self.into_ptr();
-        // W-417: serialize this free against the keepalive import/snapshot/
-        // record/re-map sequences (reentrant, so a drop holding the lock across
-        // its whole sequence does not deadlock). Held on this (caller) thread
-        // across the `with_worker` free below.
+        // Pre-free snapshot. Under the lifecycle lock the only lean VMA changes
+        // are this free's, so `diff(before, after)` is exactly this env's
+        // regions. If the snapshot is unavailable we cannot record what a free
+        // would unmap, so refuse (the env is already `into_ptr`'d = leaked, which
+        // is safe — no dangling keys; not a quarantine, since nothing was freed).
         #[cfg(all(lean_4_25, target_os = "linux"))]
-        let _lifecycle = super::keepalive::lifecycle_lock();
+        let before = match super::keepalive::snapshot_lean_vmras() {
+            Ok(v) => v,
+            Err(e) => {
+                return Err(LeanError::other(&format!(
+                    "free_regions: cannot snapshot /proc/self/maps before freeing ({e}); env leaked instead of freed"
+                )));
+            }
+        };
         let result = with_worker(move || unsafe {
             #[cfg(not(lean_4_26))]
             {
@@ -398,13 +415,45 @@ impl<'l> LeanBound<'l, LeanEnvironment> {
                 super::metam::handle_eio_result(result).map(|_| ())
             }
         });
-        // `Environment.freeRegions` is a non-atomic `forM CompactedRegion.free`:
-        // an error can occur after the first regions are already unmapped,
-        // leaving their `g_native_symbol_cache` keys dangling and unrecoverable.
-        // Quarantine the process so no further import can dereference them.
+        // Record / quarantine (W-417). `free_regions` is a non-atomic
+        // `forM CompactedRegion.free`. Deliberate policy (see
+        // `classify_free_recovery`): a *recoverable* error (post-state readable)
+        // records exactly what the partial free unmapped so a later cross-set
+        // import revives it — no quarantine; only an *unrecoverable* error
+        // (post-state unreadable, freed set undeterminable) latches the process
+        // quarantine. This lives here (not just leotower) so a DIRECT leo3
+        // caller that frees a set is protected too: the free records its VMAs
+        // under `modules`, and the import re-maps them before its symbol
+        // lookups dereference dangling keys.
         #[cfg(all(lean_4_25, target_os = "linux"))]
-        if result.is_err() {
-            super::keepalive::poison_keepalive();
+        {
+            let after = super::keepalive::snapshot_lean_vmras();
+            match super::keepalive::classify_free_recovery(result.is_ok(), after.is_ok()) {
+                super::keepalive::FreeRecovery::RecordDiff
+                | super::keepalive::FreeRecovery::RecordPartial => {
+                    // Free (fully or partially) unmapped some regions and the
+                    // post-state is readable: record exactly what was unmapped so
+                    // a later cross-set import revives it.
+                    if let Ok(a) = after {
+                        super::keepalive::record_freed_set(
+                            modules,
+                            super::keepalive::diff_freed_vmras(&before, &a),
+                        );
+                    }
+                }
+                super::keepalive::FreeRecovery::RecordPre => {
+                    // Free succeeded but post-state unreadable: every region of
+                    // this env was unmapped; record the pre-free set (precise
+                    // under the lock) for a best-effort revive.
+                    super::keepalive::record_freed_set(modules, before.clone());
+                }
+                super::keepalive::FreeRecovery::Quarantine => {
+                    // Unrecoverable: cannot determine the freed set. Quarantine —
+                    // no further destructive free and no further import, so the
+                    // dangling keys can never be dereferenced.
+                    super::keepalive::poison_keepalive();
+                }
+            }
         }
         result
     }

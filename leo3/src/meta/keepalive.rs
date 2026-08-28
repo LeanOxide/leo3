@@ -65,9 +65,13 @@
 //!
 //! Set `LEO3_KEEPALIVE_DISABLE=1` to turn the whole stopgap off (snapshots
 //! return empty, recording and re-mapping become no-ops) for A/B measurement.
-//! The environment is still released on drop (the W-407 region fix is
-//! independent), but cross-set imports after a free can then crash — which is
-//! the point of the switch.
+//! With tracking disabled the drop-time count gate cannot prove the environment
+//! is file-backed (the import-time VMA diff is empty, so `file_vmas_added` is
+//! `0`), so it fails **closed**: the environment is **leaked** on drop (NOT
+//! freed) and cross-set imports after a free can crash. This is the safe-but
+//! memory-costly mode — the leak inflates RSS, so it must NOT be used as the
+//! "no-keepalive" baseline for RSS measurement (that baseline needs a build
+//! with no keepalive code at all).
 
 use std::fmt;
 use std::fs::File;
@@ -75,8 +79,7 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, LazyLock, Mutex};
-use std::thread;
+use std::sync::{LazyLock, Mutex};
 
 use libc::{c_void, off_t, MAP_FAILED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, PROT_READ};
 
@@ -307,96 +310,12 @@ fn cstr_field(arr: &[std::os::raw::c_char]) -> Option<&str> {
     std::str::from_utf8(&bytes[..len]).ok()
 }
 
-/// Process-wide, **reentrant** serialization for the environment lifecycle
-/// (import / free / record / re-map / snapshot). See [`lifecycle_lock`].
-struct ReentrantLifecycleLock {
-    /// `(holder, hold-count)`. `holder` is the thread currently owning the
-    /// lock; `hold-count` is how many times that thread has acquired it.
-    state: Mutex<(Option<std::thread::ThreadId>, u32)>,
-    cv: Condvar,
-}
-
-impl ReentrantLifecycleLock {
-    const fn new() -> Self {
-        Self {
-            state: Mutex::new((None, 0)),
-            cv: Condvar::new(),
-        }
-    }
-
-    /// Acquire the lock, blocking until it is free. Re-acquiring from the same
-    /// thread increments the hold-count instead of blocking (reentrancy), so a
-    /// sequence that already holds the lock can call the instrumented entries
-    /// ([`snapshot_lean_vmras`], [`record_freed_set`], [`remap_cross_set_bases`],
-    /// and the import/free entries) without deadlocking.
-    fn lock(&self) -> ReentrantLifecycleGuard<'_> {
-        let me = thread::current().id();
-        let mut state = self.state.lock().unwrap();
-        if state.0 == Some(me) {
-            state.1 += 1;
-            return ReentrantLifecycleGuard {
-                lk: self,
-                _not_send: std::marker::PhantomData,
-            };
-        }
-        while state.0.is_some() {
-            state = self.cv.wait(state).unwrap();
-        }
-        state.0 = Some(me);
-        state.1 = 1;
-        ReentrantLifecycleGuard {
-            lk: self,
-            _not_send: std::marker::PhantomData,
-        }
-    }
-}
-
-/// Guard for [`ReentrantLifecycleLock`]. Dropping it decrements the hold-count
-/// and releases the lock (waking a waiter) only on the last release.
-///
-/// The guard is deliberately `!Send`: the lock records the *holding thread's*
-/// `ThreadId`, so the guard must be dropped on the thread that acquired it.
-/// Moving it to another thread would leave the lock's holder as the original
-/// thread, and a re-acquire from the new thread would wait for the original
-/// thread forever (a deadlock if the original thread waits on the new one).
-/// `PhantomData<*const ()>` is the standard "not movable across threads" marker.
-pub struct ReentrantLifecycleGuard<'a> {
-    lk: &'a ReentrantLifecycleLock,
-    _not_send: std::marker::PhantomData<*const ()>,
-}
-
-impl Drop for ReentrantLifecycleGuard<'_> {
-    fn drop(&mut self) {
-        let mut state = self.lk.state.lock().unwrap();
-        state.1 -= 1;
-        if state.1 == 0 {
-            state.0 = None;
-            self.lk.cv.notify_all();
-        }
-    }
-}
-
-static LIFECYCLE_LOCK: LazyLock<ReentrantLifecycleLock> =
-    LazyLock::new(ReentrantLifecycleLock::new);
-
-/// Acquire the process-wide lifecycle lock.
-///
-/// Every operation that touches the shared lean VMA state that backs
-/// `g_native_symbol_cache` is serialized by this (reentrant) lock: the import
-/// and `free_regions` entries, plus [`snapshot_lean_vmras`],
-/// [`record_freed_set`], and [`remap_cross_set_bases`], each acquire it at
-/// entry. leotower additionally holds it across the *whole* free/record
-/// sequence (`EnvRegions::drop`: snapshot → `free_regions` → snapshot → record)
-/// and the whole import sequence (`Repl::new`: re-map → import), so those
-/// multi-step sequences are atomic against a concurrent direct leo3 caller.
-/// The lock is reentrant, so the inner instrumented entries do not deadlock
-/// when called from within such a held sequence. The two entries that dispatch
-/// to the worker (`import_modules_with_exts`, `free_regions`) refuse to run on
-/// the worker thread, so this lock can never be held across a `with_worker`
-/// dispatch in a way that would block the worker.
-pub fn lifecycle_lock() -> ReentrantLifecycleGuard<'static> {
-    LIFECYCLE_LOCK.lock()
-}
+/// Re-export of the process-wide lifecycle lock, defined in `crate::runtime`
+/// (where `with_worker` acquires it, so every worker-dispatched evaluation is
+/// serialized against a concurrent `free_regions`). See
+/// [`crate::runtime::lifecycle_lock`] for the rationale.
+pub use crate::runtime::lifecycle_lock;
+pub use crate::runtime::ReentrantLifecycleGuard;
 
 /// Decide whether an imported environment is safe to `free_regions`.
 ///
@@ -414,6 +333,35 @@ pub fn lifecycle_lock() -> ReentrantLifecycleGuard<'static> {
 /// returns `false`, so the caller leaks the environment instead.
 pub fn safe_to_free_regions(region_count: Option<u64>, file_vmas_added: u64) -> bool {
     matches!(region_count, Some(n) if n >= 1 && n == file_vmas_added)
+}
+
+/// The record/quarantine decision for a `free_regions` outcome. A *recoverable*
+/// error (post-snapshot readable) records what the partial free unmapped so a
+/// later cross-set import revives it — no quarantine; only an *unrecoverable*
+/// error (post-snapshot unreadable, freed set undeterminable) quarantines the
+/// process. Deliberate W-417 policy (supersedes "poison on any free error").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreeRecovery {
+    /// Free succeeded, post-state readable: record the before/after diff.
+    RecordDiff,
+    /// Free succeeded, post-state unreadable: record the pre-free set.
+    RecordPre,
+    /// Free failed, post-state readable: record the diff (revive what unmapped).
+    RecordPartial,
+    /// Free failed, post-state unreadable: quarantine (dangling keys unrecoverable).
+    Quarantine,
+}
+
+/// Pure: classify the `free_regions` recovery action from the free result and
+/// post-snapshot readability. Split out from the destructive path so the policy
+/// is unit-testable without a live Lean env or an injected FFI error.
+pub fn classify_free_recovery(free_ok: bool, after_readable: bool) -> FreeRecovery {
+    match (free_ok, after_readable) {
+        (true, true) => FreeRecovery::RecordDiff,
+        (true, false) => FreeRecovery::RecordPre,
+        (false, true) => FreeRecovery::RecordPartial,
+        (false, false) => FreeRecovery::Quarantine,
+    }
 }
 
 /// Read the environment's compacted-region count from the live environment
@@ -770,6 +718,23 @@ pub fn import_window_has_identity_churn(before: &[LeanVma], after: &[LeanVma]) -
     })
 }
 
+/// True if some pre-existing lean VMA's exact `[addr, addr+len)` range is
+/// absent from `after` — i.e. it was split, merged, or unmapped during the
+/// import window (a partial `munmap`/`mprotect`, or an adjacent mapping
+/// coalesced with it). [`diff_added_vmras`] decides "new" by exact `(addr, len)`
+/// alone, so a split/merge produces after-ranges that do not match the
+/// before-range and are counted as *added*; that can inflate `file_vmas_added`
+/// to match the region count and let the drop gate free a heap-mixed
+/// environment. When a pre-existing range disappears without an exact-range
+/// successor, the count is unreliable, so the caller marks the environment
+/// untrackable and leaks it. Complements [`import_window_has_identity_churn`]
+/// (same range, different file): this catches the range *shape* changing.
+pub fn import_window_has_partition_change(before: &[LeanVma], after: &[LeanVma]) -> bool {
+    before
+        .iter()
+        .any(|b| !after.iter().any(|a| a.addr == b.addr && a.len == b.len))
+}
+
 /// Record a freed module set and the lean regions `free_regions` unmapped for
 /// it. Called by leotower after `free_regions`, with the VMAs diffed out from
 /// before/after `/proc/self/maps` snapshots. Sets with no freed lean regions
@@ -878,17 +843,33 @@ pub fn remap_cross_set_bases(importing: &[&str]) -> Result<(), Vec<RemapError>> 
         candidates.push(i);
     }
 
-    // Validate the importing set's *own* pending regions. The importing set is
+    // Handle the importing set's *own* pending regions. The importing set is
     // deliberately skipped by the re-mmap loop above (it re-maps its own bases
-    // during the import), so none of the file-identity / range-occupation
-    // checks would otherwise run for it. Its import relies on re-mapping at
-    // exactly these bases to self-heal its dangling keys, which only works if
-    // each base is currently free (or still mapped by the identical file); a
-    // different occupant would force a heap fallback and dangle the keys.
+    // during the import). Two cases:
+    //
+    //   - It was previously cross-set-revived (`remapped`): its regions are
+    //     currently mapped at their recorded bases, ORPHANED — not owned by any
+    //     freed set's drop, so nothing unmaps them. A later same-set import
+    //     (W-417 item 9: A→drop→B→drop→A2) would find those bases occupied and
+    //     fall back to the heap, leaking the env. Unmap them now to free the
+    //     bases for THIS import's deterministic re-map; the
+    //     `g_native_symbol_cache` keys point to those addresses, which the
+    //     import re-maps identically, so they stay valid.
+    //   - It was not yet remapped: validate that each base is currently free
+    //     (or still mapped by the identical file) and identity-intact; a
+    //     different occupant would force a heap fallback and dangle the keys.
     if let Some(i) = guard.iter().position(|s| s.key == import_key) {
-        let set = &guard[i];
-        if !set.remapped {
-            for vma in &set.vmras {
+        if guard[i].remapped {
+            for vma in &guard[i].vmras {
+                // SAFETY: `vma.addr..vma.addr+vma.len` is the currently-mapped
+                // revived region (a prior cross-set `MAP_FIXED_NOREPLACE`), so
+                // unmapping it only frees this import's own deterministic base.
+                unsafe { libc::munmap(vma.addr as *mut c_void, vma.len) };
+            }
+            guard[i].remapped = false;
+        }
+        if !guard[i].remapped {
+            for vma in &guard[i].vmras {
                 check_identity(vma).map_err(|e| vec![e])?;
                 base_is_reusable(vma).map_err(|e| vec![e])?;
             }
@@ -937,7 +918,21 @@ pub fn remap_cross_set_bases(importing: &[&str]) -> Result<(), Vec<RemapError>> 
 /// device) and has not shrunk since the snapshot. Shared by the re-mmap path
 /// ([`remap_vma`]) and the importing-set self-heal validation
 /// ([`base_is_reusable`]).
-fn check_identity(vma: &LeanVma) -> Result<(), RemapError> {
+/// Open `vma`'s file and verify its identity via `fstat` on the *opened fd*
+/// (not a re-stat of the path), returning the validated `File`. [`remap_vma`]
+/// mmaps THIS same fd, so the file that is identity-checked is exactly the file
+/// that gets mapped — no TOCTOU window between a path-stat and a second `open`
+/// (an external build could otherwise rename/recreate the path between the two
+/// opens, and the second `open` would return a different inode that is never
+/// validated, yet be mapped at the old cache key's address).
+///
+/// Identity is `(device, inode, "size did not shrink")`: catches recreation
+/// (new inode), deletion (`deleted` flag) and in-place truncation (smaller
+/// size). It does NOT catch a same-inode, same-size in-place *rewrite* — the
+/// residual is closed by the deployment contract (the `.olean`/`.ir` files are
+/// compiler build artifacts that must not be rewritten in place for the
+/// lifetime of the process). See the module docs / CHANGELOG.
+fn open_and_validate(vma: &LeanVma) -> Result<File, RemapError> {
     // A deleted (unlinked) file cannot be re-opened, so it cannot be re-mapped
     // or re-read; refuse rather than leave the cached key dangling.
     if vma.deleted {
@@ -957,18 +952,13 @@ fn check_identity(vma: &LeanVma) -> Result<(), RemapError> {
                     .into(),
         });
     }
-    // Identity here is (device, inode, "size did not shrink"). That catches
-    // recreation (new inode), deletion (deleted flag) and in-place
-    // truncation (smaller size). It does NOT catch a same-inode, same-size
-    // in-place *rewrite* — the bytes at the revived address could differ from
-    // the bytes that produced the dangling `g_native_symbol_cache` keys. That
-    // residual is closed by the deployment contract: the `.olean`/`.ir` files
-    // are compiler build artifacts that must not be rewritten in place for the
-    // lifetime of the process. See the module docs / CHANGELOG.
     let file = File::open(&vma.path).map_err(|source| RemapError::OpenFailed {
         path: vma.path.clone(),
         source,
     })?;
+    // `File::metadata` is an `fstat` on the open fd — it reflects the file
+    // `open` actually returned, so the identity being checked is the identity
+    // of the file that will be mapped.
     let md = file.metadata().map_err(|e| RemapError::IdentityMismatch {
         path: vma.path.clone(),
         detail: format!("stat: {e}"),
@@ -997,7 +987,15 @@ fn check_identity(vma: &LeanVma) -> Result<(), RemapError> {
             detail: format!("file size shrank: recorded {0}, on disk {size}", vma.size),
         });
     }
-    Ok(())
+    Ok(file)
+}
+
+/// Verify a recorded VMA's file identity (exists, trackable, inode, device,
+/// size not shrunk) without mapping it. See [`open_and_validate`] for the
+/// identity contract and the residual in-place-rewrite case. Used by the
+/// cross-set pre-remap validation (no `mmap` here).
+fn check_identity(vma: &LeanVma) -> Result<(), RemapError> {
+    open_and_validate(vma).map(|_| ())
 }
 
 /// The importing set re-maps its own freed bases during the import (Lean's
@@ -1024,12 +1022,26 @@ fn base_is_reusable(vma: &LeanVma) -> Result<(), RemapError> {
         return Ok(());
     }
     let parsed: Vec<MapsVma> = maps.lines().filter_map(parse_maps_line).collect();
+    // Classify every byte of the recorded range `[vma.addr, end)` as:
+    //   - FREE: no VMA covers it
+    //   - SAME: covered by the identical file at the matching offset
+    //   - OTHER: covered by a different file / offset
+    // The import issues ONE `mmap` over the whole range, so it succeeds only if
+    // the range is uniformly FREE or uniformly SAME (identical). A mix — a
+    // prefix mapped by the identical file with a free gap, any OTHER occupant,
+    // or a partial overlap — makes that single `mmap` fail (EEXIST) and Lean
+    // fall back to the heap, leaving the un-mapped part's `g_native_symbol_cache`
+    // keys dangling. So: any OTHER occupant, or a mix of FREE and SAME, refuses
+    // the import.
+    let mut has_free = false;
+    let mut has_same = false;
     let mut pos = vma.addr;
     while pos < end {
         match parsed.iter().find(|m| m.start <= pos && pos < m.end) {
             None => {
-                // `pos` is unmapped (free) — the import will map it. Advance to
-                // the start of the next VMA (or `end`) to skip the gap.
+                // `pos` is unmapped (free). Advance to the start of the next VMA
+                // (or `end`) to skip the gap.
+                has_free = true;
                 let next = parsed
                     .iter()
                     .filter(|m| m.start > pos)
@@ -1053,9 +1065,17 @@ fn base_is_reusable(vma: &LeanVma) -> Result<(), RemapError> {
                 if off_at_pos != expected_offset {
                     return Err(RemapError::RangeOccupied { addr: vma.addr });
                 }
+                has_same = true;
                 pos = std::cmp::min(m.end, end);
             }
         }
+    }
+    if has_free && has_same {
+        // Partial coverage (a prefix mapped by the identical file with a free
+        // gap, or a hole): the import's single full-range `mmap` would fail
+        // (EEXIST) and fall back to the heap, so the un-mapped part's keys stay
+        // dangling. Refuse rather than let the import proceed.
+        return Err(RemapError::RangeOccupied { addr: vma.addr });
     }
     Ok(())
 }
@@ -1072,13 +1092,10 @@ fn base_is_reusable(vma: &LeanVma) -> Result<(), RemapError> {
 /// (the tail is zero-filled) — the size check therefore compares against the
 /// recorded *file* size, not the VMA length.
 fn remap_vma(vma: &LeanVma) -> Result<(), RemapError> {
-    // Verify the file identity (exists, inode, device, size not shrunk) before
-    // touching any mapping; see `check_identity`.
-    check_identity(vma)?;
-    let file = File::open(&vma.path).map_err(|source| RemapError::OpenFailed {
-        path: vma.path.clone(),
-        source,
-    })?;
+    // Open + identity-check via `fstat` on the SAME fd that is mmapped below, so
+    // the validated file and the mapped file are identical (no TOCTOU window
+    // between a path-stat and a second `open`).
+    let file = open_and_validate(vma)?;
     // MAP_FIXED_NOREPLACE maps at `addr` only if the range is free; if it is
     // already mapped the call fails with EEXIST instead of silently replacing
     // the occupant.
@@ -1686,6 +1703,11 @@ mod tests {
         }
         let _reset = ResetOnDrop;
         test_reset_poison(); // start clean
+                             // Hold the lifecycle lock: the real free/import boundaries check the
+                             // poison *under* this lock (a concurrent quarantining free latches the
+                             // poison while holding it), so the test models that serialization and
+                             // cannot race a concurrent re-map's poison gate.
+        let _lock = lifecycle_lock();
         poison_keepalive();
         assert!(keepalive_poisoned());
         let err = remap_cross_set_bases(&["S-poison-test"]).unwrap_err();
@@ -1741,5 +1763,124 @@ mod tests {
         // Churn via size change.
         let after_shrunk = vec![vm(0x7f00_0000_0000, 4096, 100, 5100, true, "/m.olean")];
         assert!(import_window_has_identity_churn(&before, &after_shrunk));
+    }
+
+    #[test]
+    fn partition_change_flags_unreliable_count() {
+        let before = vec![vm(0x7f00_0000_0000, 4096, 100, 5000, true, "/m.olean")];
+        // No change: the pre-existing range persists exactly -> not flagged.
+        let after_same = vec![before[0].clone()];
+        assert!(!import_window_has_partition_change(&before, &after_same));
+        // Split: the before range is replaced by two halves (neither matches the
+        // original `(addr, len)`); the after-ranges would be counted as *added*
+        // by the range-based diff, inflating the count -> partition changed.
+        let after_split = vec![
+            vm(0x7f00_0000_0000, 2048, 100, 2500, true, "/m.olean"),
+            vm(0x7f00_0000_0800, 2048, 100, 2500, true, "/m.olean"),
+        ];
+        assert!(import_window_has_partition_change(&before, &after_split));
+        // Unmap: the before range is gone entirely -> partition changed.
+        assert!(import_window_has_partition_change(&before, &[]));
+    }
+
+    #[test]
+    fn classify_free_recovery_policy() {
+        // Free succeeded, post-state readable: record the diff.
+        assert_eq!(classify_free_recovery(true, true), FreeRecovery::RecordDiff);
+        // Free succeeded, post-state unreadable: record the pre-free set.
+        assert_eq!(classify_free_recovery(true, false), FreeRecovery::RecordPre);
+        // Free failed but post-state readable: record what unmapped (revive), NO
+        // quarantine — the deliberate recover-vs-quarantine split (item 6).
+        assert_eq!(
+            classify_free_recovery(false, true),
+            FreeRecovery::RecordPartial
+        );
+        // Free failed AND post-state unreadable: quarantine (dangling keys
+        // unrecoverable).
+        assert_eq!(
+            classify_free_recovery(false, false),
+            FreeRecovery::Quarantine
+        );
+    }
+
+    #[test]
+    fn base_is_reusable_rejects_prefix_plus_gap() {
+        // A recorded region `[base, base+8192)` whose first half is mapped by the
+        // identical file and whose second half is free (unmapped) is a PARTIAL
+        // coverage: the import's single full-range mmap would fail (EEXIST) and
+        // fall back to the heap, so it must be refused (item 4). A uniformly
+        // same or uniformly free range is still reusable.
+        let path = std::env::temp_dir().join(format!("leo3_kareuse2_{}.olean", std::process::id()));
+        std::fs::write(&path, [0u8; 4096]).unwrap();
+        let md = std::fs::metadata(&path).unwrap();
+        let fd = File::open(&path).unwrap();
+        let base = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                8192,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        assert!(base != MAP_FAILED, "anonymous mmap failed");
+        let want = base as usize;
+        // Map the real file over the FIRST half only.
+        let p = unsafe {
+            libc::mmap(
+                base,
+                4096,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE | libc::MAP_FIXED,
+                fd.as_raw_fd(),
+                0,
+            )
+        };
+        assert_eq!(p as usize, want, "MAP_FIXED over our own page failed");
+        // Unmap the SECOND half so it is free (not occupied by the anon page).
+        unsafe { libc::munmap(base.add(4096), 4096) };
+        let dev = st_dev_to_maps(md.dev());
+        let full = LeanVma {
+            addr: want,
+            len: 8192,
+            offset: 0,
+            inode: md.ino(),
+            device: dev,
+            size: md.len(),
+            path: path.to_string_lossy().into_owned(),
+            deleted: false,
+            size_known: true,
+        };
+        // Full range = first half identical + second half free => REFUSED.
+        assert!(
+            matches!(
+                base_is_reusable(&full).unwrap_err(),
+                RemapError::RangeOccupied { .. }
+            ),
+            "a prefix (identical) + free gap must be refused: the import's single mmap would fail"
+        );
+        // First half alone = uniformly identical => reusable (already revived).
+        let first_half = LeanVma {
+            len: 4096,
+            ..full.clone()
+        };
+        assert!(
+            base_is_reusable(&first_half).is_ok(),
+            "a uniformly identical (already revived) half must be reusable"
+        );
+        // Second half alone = uniformly free => reusable (the import maps it).
+        let second_half = LeanVma {
+            addr: want + 4096,
+            len: 4096,
+            offset: 4096,
+            ..full.clone()
+        };
+        assert!(
+            base_is_reusable(&second_half).is_ok(),
+            "a uniformly free half must be reusable"
+        );
+        unsafe { libc::munmap(p, 4096) };
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -57,8 +57,10 @@ fn cross_set_remap_restores_freed_regions() {
         // Import set A and capture its lean regions.
         let env = import_modules(lean, &["Lean"], 0)?;
         let before = snapshot_lean_vmras().expect("maps readable");
-        // Free set A's regions (consumes `env`).
-        unsafe { env.free_regions() }?;
+        // Free set A's regions (consumes `env`). `free_regions` records the
+        // freed set under `"Lean"` for cross-set revival, so no manual
+        // `record_freed_set` is needed here.
+        unsafe { env.free_regions(&["Lean"]) }?;
         let after = snapshot_lean_vmras().expect("maps readable");
         let freed = diff_freed_vmras(&before, &after);
         assert!(
@@ -72,8 +74,6 @@ fn cross_set_remap_restores_freed_regions() {
                 "no freed {suffix} region — is the suffix coverage incomplete?"
             );
         }
-        // Record the freed set for cross-set revival.
-        record_freed_set(&["Lean"], freed.clone());
 
         // A same-set re-map must be a NO-OP: the freed set's base must not be
         // pinned (pinning would push same-set imports onto the heap and
@@ -100,4 +100,47 @@ fn cross_set_remap_restores_freed_regions() {
         Ok(())
     });
     result.expect("cross-set re-map test failed");
+}
+
+#[test]
+fn same_set_reimport_frees_orphaned_revived_bases() {
+    // W-417 item 9: A=import(Lean), drop A, B=cross-set import (revives A,
+    // remapped=true), drop B, A2=import(Lean). B's cross-set revive left A's
+    // bases mapped (ORPHANED — not owned by any freed set's drop), so A2's
+    // import found them occupied and fell back to the heap (leaking the env).
+    // The fix unmaps A's orphaned revived bases during A2's re-map, freeing
+    // them for A2's deterministic file-backed re-map.
+    let result: LeanResult<()> = leo3::test_with_lean(|lean| {
+        // A: import Lean, free it (records the "Lean" freed set, remapped=false).
+        let env = import_modules(lean, &["Lean"], 0)?;
+        let before = snapshot_lean_vmras().expect("maps readable");
+        unsafe { env.free_regions(&["Lean"]) }?;
+        let after = snapshot_lean_vmras().expect("maps readable");
+        let freed = diff_freed_vmras(&before, &after);
+        assert!(
+            !freed.is_empty(),
+            "free_regions unmapped no lean regions (test harness broken?)"
+        );
+
+        // B: a cross-set import revives "Lean" (the non-importing pending set).
+        remap_cross_set_bases(&["Other.Set"]).expect("cross-set re-map errored");
+        let revived = snapshot_lean_vmras().expect("maps readable");
+        assert!(
+            remapped_count(&freed, &revived) > 0,
+            "the cross-set import must revive the freed set's regions"
+        );
+
+        // A2: the SAME set imported again. Its re-map must UNMAP the orphaned
+        // revived bases so the deterministic import can re-map them
+        // (file-backed, not a heap fallback).
+        remap_cross_set_bases(&["Lean"]).expect("same-set re-import re-map errored");
+        let a2_bases = snapshot_lean_vmras().expect("maps readable");
+        assert_eq!(
+            remapped_count(&freed, &a2_bases),
+            0,
+            "the same-set re-import must free the orphaned revived bases, else it heap-falls-back (W-417 item 9)"
+        );
+        Ok(())
+    });
+    result.expect("same-set re-import base-freeing test failed");
 }

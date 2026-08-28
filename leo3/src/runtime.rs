@@ -19,6 +19,12 @@
 
 use leo3_ffi as ffi;
 use std::sync::mpsc;
+#[cfg(all(
+    lean_4_25,
+    target_os = "linux",
+    any(feature = "meta", feature = "task")
+))]
+use std::sync::{Condvar, LazyLock};
 use std::sync::{Mutex, Once};
 
 static ENV_INIT: Once = Once::new();
@@ -243,6 +249,116 @@ pub(crate) fn ensure_worker_initialized() {
     });
 }
 
+/// Process-wide, **reentrant** serialization for the environment lifecycle
+/// (import / free / record / re-map / snapshot / every worker-dispatched
+/// evaluation). Acquired by [`with_worker`], so every op that runs the Lean
+/// evaluator on the worker (tactics, commands, elaboration, constant lookup,
+/// pretty-printing) is serialized against a concurrent `free_regions` (a
+/// `Drop` on another thread) — see the W-417 keepalive stopgap. Moved from
+/// `meta::keepalive` to `runtime` so the worker-dispatch primitive itself can
+/// hold it; `meta::keepalive` re-exports it for compatibility.
+#[cfg(all(
+    lean_4_25,
+    target_os = "linux",
+    any(feature = "meta", feature = "task")
+))]
+struct ReentrantLifecycleLock {
+    /// `(holder, hold-count)`. `holder` is the thread currently owning the
+    /// lock; `hold-count` is how many times that thread has acquired it.
+    state: Mutex<(Option<std::thread::ThreadId>, u32)>,
+    cv: Condvar,
+}
+
+#[cfg(all(
+    lean_4_25,
+    target_os = "linux",
+    any(feature = "meta", feature = "task")
+))]
+impl ReentrantLifecycleLock {
+    const fn new() -> Self {
+        Self {
+            state: Mutex::new((None, 0)),
+            cv: Condvar::new(),
+        }
+    }
+
+    /// Acquire the lock, blocking until it is free. Re-acquiring from the same
+    /// thread increments the hold-count instead of blocking (reentrancy), so a
+    /// sequence that already holds the lock (import/free, or a multi-step
+    /// leotower drop) can call another instrumented entry without deadlocking.
+    fn lock(&self) -> ReentrantLifecycleGuard<'_> {
+        let me = std::thread::current().id();
+        let mut state = self.state.lock().unwrap();
+        if state.0 == Some(me) {
+            state.1 += 1;
+            return ReentrantLifecycleGuard {
+                lk: self,
+                _not_send: std::marker::PhantomData,
+            };
+        }
+        while state.0.is_some() {
+            state = self.cv.wait(state).unwrap();
+        }
+        state.0 = Some(me);
+        state.1 = 1;
+        ReentrantLifecycleGuard {
+            lk: self,
+            _not_send: std::marker::PhantomData,
+        }
+    }
+}
+
+/// Guard for [`ReentrantLifecycleLock`]. Dropping it decrements the hold-count
+/// and releases (waking a waiter) only on the last release.
+///
+/// The guard is deliberately `!Send`: the lock records the *holding thread's*
+/// `ThreadId`, so the guard must be dropped on the thread that acquired it.
+/// `PhantomData<*const ()>` is the standard "not movable across threads" marker.
+#[cfg(all(
+    lean_4_25,
+    target_os = "linux",
+    any(feature = "meta", feature = "task")
+))]
+pub struct ReentrantLifecycleGuard<'a> {
+    lk: &'a ReentrantLifecycleLock,
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+#[cfg(all(
+    lean_4_25,
+    target_os = "linux",
+    any(feature = "meta", feature = "task")
+))]
+impl Drop for ReentrantLifecycleGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self.lk.state.lock().unwrap();
+        state.1 -= 1;
+        if state.1 == 0 {
+            state.0 = None;
+            self.lk.cv.notify_all();
+        }
+    }
+}
+
+#[cfg(all(
+    lean_4_25,
+    target_os = "linux",
+    any(feature = "meta", feature = "task")
+))]
+static LIFECYCLE_LOCK: LazyLock<ReentrantLifecycleLock> =
+    LazyLock::new(ReentrantLifecycleLock::new);
+
+/// Acquire the process-wide lifecycle lock (reentrant). See
+/// [`ReentrantLifecycleLock`] for what it serializes.
+#[cfg(all(
+    lean_4_25,
+    target_os = "linux",
+    any(feature = "meta", feature = "task")
+))]
+pub fn lifecycle_lock() -> ReentrantLifecycleGuard<'static> {
+    LIFECYCLE_LOCK.lock()
+}
+
 /// Dispatch a closure to the long-lived worker thread and block until it completes.
 ///
 /// # Safety
@@ -256,6 +372,16 @@ where
     F: FnOnce() -> R,
 {
     ensure_worker_initialized();
+    // W-417: serialize every worker-dispatched evaluation against a concurrent
+    // `free_regions` (a `Drop` on another thread). Without this, a Repl could
+    // run the evaluator (`evalConst` → native symbol lookup) while another
+    // Repl's drop frees the compacted regions, dangling the global
+    // `g_native_symbol_cache` keys. Reentrant, so an entry that already holds
+    // the lock (import/free) re-enters without deadlocking. The guard is held
+    // on this caller thread across the rendezvous and dropped here; the worker
+    // itself never takes the lock, so this cannot self-deadlock.
+    #[cfg(all(lean_4_25, target_os = "linux"))]
+    let _lifecycle = lifecycle_lock();
 
     let sender = {
         let guard = WORKER.lock().unwrap();
@@ -328,5 +454,43 @@ pub(crate) unsafe fn reset_heartbeats() {
         // return is a raw unit scalar (never dec'd); the callee decs
         // `zero`.
         crate::ffi::io::lean_io_set_heartbeats(zero);
+    }
+}
+
+#[cfg(all(test, feature = "meta", lean_4_25, target_os = "linux"))]
+mod lifecycle_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// W-417 item 7: every worker-dispatched evaluation holds the lifecycle
+    /// lock, so a concurrent `free_regions`/`Drop` (which also takes the lock)
+    /// is serialized against it. A `with_worker` dispatched from another thread
+    /// must therefore BLOCK while this thread holds the lock — proving the eval
+    /// runs *inside* the lock (not merely before it), so a concurrent drop
+    /// cannot free the compacted regions mid-`evalConst`.
+    #[test]
+    fn with_worker_serializes_against_lifecycle_lock() {
+        crate::test_with_lean(|_lean| -> std::result::Result<(), crate::LeanError> {
+            let _held = lifecycle_lock();
+            let (tx, rx) = mpsc::channel::<bool>();
+            let h = std::thread::spawn(move || {
+                // Trivial no-op task (no Lean FFI): the only thing that can
+                // delay it is the lifecycle lock the main thread holds.
+                let ok = with_worker(|| true);
+                let _ = tx.send(ok);
+            });
+            assert!(
+                rx.recv_timeout(Duration::from_secs(3)).is_err(),
+                "with_worker completed while another thread held the lifecycle lock — \n                 eval is not serialized against a concurrent free_regions"
+            );
+            drop(_held);
+            h.join().expect("worker-dispatch thread panicked");
+            assert!(
+                rx.recv().unwrap(),
+                "the eval must complete once the lock is released"
+            );
+            Ok(())
+        })
+        .expect("with_worker / lifecycle-lock serialization test failed");
     }
 }

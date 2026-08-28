@@ -32,7 +32,7 @@ fn free_regions_after_elab_keeps_next_import_crash_free() {
             drop(meta_state);
             // Safety: `elab_env` is the last live reference to the imported
             // environment; all derived objects are dropped above.
-            unsafe { elab_env.free_regions() }?;
+            unsafe { elab_env.free_regions(&["Lean"]) }?;
         }
         // The next import must not crash.
         let _env = import_modules(lean, &["Lean"], 0)?;

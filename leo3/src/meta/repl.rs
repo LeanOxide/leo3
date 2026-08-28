@@ -868,26 +868,38 @@ pub fn import_modules_with_exts<'l>(
             "import_modules_with_exts must not be called from the Lean worker thread (with_worker would deadlock)",
         ));
     }
-    // Quarantined: a prior destructive `free_regions` failed unrecoverably, so
-    // the `g_native_symbol_cache` state may hold dangling keys. Refuse the
-    // import (it would walk the cache and dereference them) rather than crash.
-    // This is the real import boundary — leotower's `block_on_remap` also blocks
-    // on the quarantine, but a direct leo3 caller must be stopped here too.
+    // W-417: serialize this import against the keepalive free/record/re-map
+    // sequences (and other imports / evaluations). The import's `mmap`s change
+    // the lean VMA state and populate `g_native_symbol_cache`; an import
+    // interleaved with a drop's snapshot/free or a re-map would corrupt the VMA
+    // diff and the freed-set record. Reentrant, so a sequence already holding
+    // the lock (or the `with_worker` below, which re-enters) does not deadlock.
+    #[cfg(all(lean_4_25, target_os = "linux"))]
+    let _lifecycle = super::keepalive::lifecycle_lock();
+    // Quarantined: a prior destructive `free_regions` failed unrecoverably.
+    // Checked AFTER acquiring the lifecycle lock — a concurrent quarantining
+    // free latches the poison while it holds the lock, so reading the poison
+    // before the lock could race and miss it. Refuse the import (it would walk
+    // the cache and dereference dangling keys) rather than crash. This is the
+    // real import boundary: a direct leo3 caller is stopped here, not just in
+    // leotower's pre-import hook.
     #[cfg(all(lean_4_25, target_os = "linux"))]
     if super::keepalive::keepalive_poisoned() {
         return Err(LeanError::other(
             "import refused: keepalive is quarantined (a prior destructive free failed unrecoverably); the symbol-cache state may hold dangling keys",
         ));
     }
-    // W-417: serialize this import against the keepalive free/record/re-map
-    // sequences (and other imports). The import's `mmap`s change the lean VMA
-    // state and populate `g_native_symbol_cache`; an import interleaved with a
-    // drop's snapshot/free or a re-map would corrupt the VMA diff and the
-    // freed-set record. Reentrant, so a sequence already holding the lock does
-    // not deadlock. The lock is held on this (caller) thread across the
-    // `with_worker` import below.
+    // W-417: re-map any recorded freed cross-set regions BEFORE the import's
+    // symbol lookups dereference the dangling cache keys; block the import if
+    // that cannot be done safely. Moved into the import boundary (not just
+    // leotower's `block_on_remap`) so a direct leo3 caller that freed a set is
+    // protected too: the free records its VMAs, and this re-map revives them
+    // before the lookups run. Remap is idempotent (already-remapped and
+    // same-set bases are skipped, so the import self-heals its own bases).
     #[cfg(all(lean_4_25, target_os = "linux"))]
-    let _lifecycle = super::keepalive::lifecycle_lock();
+    super::keepalive::remap_cross_set_bases(names).map_err(|errs| {
+        LeanError::other(&format!("keepalive re-map before import failed: {errs:?}"))
+    })?;
     unsafe {
         ensure_search_path(lean)?;
         // `Lean.importModules` wraps each call in `withImporting`, whose

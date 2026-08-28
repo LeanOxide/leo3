@@ -57,14 +57,14 @@ fn test_free_regions_keeps_rss_flat_across_imports() {
             let env = import_modules(lean, &["Lean"], 0)?;
             // Safety: `env` is freshly imported and nothing derived from
             // the import escapes the block — it is the last live reference.
-            unsafe { env.free_regions() }?;
+            unsafe { env.free_regions(&["Lean"]) }?;
         }
         let rss_before = rss_bytes();
         for _ in 0..ITERS {
             let env = import_modules(lean, &["Lean"], 0)?;
             // Safety: as in the warm-up above — `env` is the last live
             // reference to a freshly imported environment.
-            unsafe { env.free_regions() }?;
+            unsafe { env.free_regions(&["Lean"]) }?;
         }
         let rss_after = rss_bytes();
         let growth = rss_after.saturating_sub(rss_before);

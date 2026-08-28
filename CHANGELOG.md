@@ -120,6 +120,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with an unreliable count. The `on_worker_thread` helper is `meta`-feature
   gated so a `meta`-off workspace build has no dead code (the CI clippy gate
   builds the whole workspace).
+  **Round-8 hardening (destructive boundaries self-contained, eval serialized):**
+  the quarantine and the recover/quarantine free policy now live in the *real
+  destructive boundaries* so a direct `leo3` caller (not just leotower) is
+  protected. `import_modules_with_exts` calls `remap_cross_set_bases` at its
+  own boundary (reviving recorded freed sets before the import's symbol lookups
+  dereference dangling keys) and `free_regions` takes the freed set's module
+  keys and, under the lifecycle lock, records the regions it unmapped — so a
+  direct `free_regions` + `import_modules` pair is safe without leotower.
+  The poison check runs *after* acquiring the lifecycle lock (a concurrent
+  quarantining free latches the poison while holding the lock, so a pre-lock
+  read could race and miss it). `free_regions`'s recovery is a pure, unit-
+  testable classifier: a *recoverable* error (post-snapshot readable) records
+  what the partial free unmapped (revived on a later import, **no** quarantine);
+  only an *unrecoverable* error (post-snapshot unreadable, freed set
+  undeterminable) latches the quarantine — resolving the earlier "poison on any
+  free error" / "recover then re-map" contradiction. The evaluator is now in the
+  lifecycle protocol: `with_worker` (hence every worker-dispatched op —
+  `run_tactic`, `run_command`, `MetaMContext::run`, the `pp_*` entry points)
+  holds the lifecycle lock across the rendezvous, so a concurrent `Drop`/`free_
+  regions` cannot unmap the compacted regions mid-`evalConst`. A re-map now
+  opens, `fstat`s, **and** `mmap`s the *same* file descriptor (no stat-then-
+  re-open TOCTOU window); a recorded region whose base is only *partially*
+  covered (an identical-file prefix with a free gap, or any other occupant) is
+  refused, because the import's single full-range `mmap` would fail (EEXIST) and
+  fall back to the heap; a pre-existing lean range that is split/merged/unmapped
+  during the import window is flagged (`import_window_has_partition_change`),
+  which would otherwise let the range-based count inflate and free a heap-mixed
+  env; and a same-set re-import after a cross-set import unmaps the *orphaned*
+  revived bases (a prior cross-set revive left them mapped but owned by no
+  freed set) so the re-import's deterministic `mmap` re-maps them file-backed
+  instead of finding them occupied and leaking. leotower's per-env tracking is
+  now stored as plain `bool`s (no `LeanVma` field), so its `EnvRegions` compiles
+  on every target (Windows/macOS). The `LEO3_KEEPALIVE_DISABLE=1` docs are
+  corrected: with tracking off the count gate cannot prove file-backed-ness and
+  fails **closed** (the env is leaked, not freed), so it must not be used as the
+  RSS "no-keepalive" baseline.
   **RSS cost of the safe choice:** a heap/mixed-backed env (e.g. a second
   concurrent import of a set whose deterministic bases are already held by a
   live session) is leaked in full, so holding two same-set sessions at once

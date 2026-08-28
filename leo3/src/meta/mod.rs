@@ -143,9 +143,10 @@ pub use tactic::{apply, assumption, exact, goal_type, intro, rfl, TacticResult, 
 
 #[cfg(all(lean_4_25, target_os = "linux"))]
 pub use keepalive::{
-    diff_added_vmras, diff_freed_vmras, environment_region_count, import_window_has_identity_churn,
-    keepalive_poisoned, lifecycle_lock, poison_keepalive, record_freed_set, remap_cross_set_bases,
-    safe_to_free_regions, snapshot_lean_vmras, LeanVma, RemapError,
+    classify_free_recovery, diff_added_vmras, diff_freed_vmras, environment_region_count,
+    import_window_has_identity_churn, import_window_has_partition_change, keepalive_poisoned,
+    lifecycle_lock, poison_keepalive, record_freed_set, remap_cross_set_bases,
+    safe_to_free_regions, snapshot_lean_vmras, FreeRecovery, LeanVma, RemapError,
 };
 #[cfg(lean_4_25)]
 pub use repl::{
