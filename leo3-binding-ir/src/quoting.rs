@@ -12,7 +12,10 @@ use crate::model::*;
 /// dylib symbol table, so `leo3-codegen` recovers the metadata by scanning the
 /// dedicated section instead. The entry is self-describing (see the `embed`
 /// module and [`crate::parse_metadata_entries`]) so the scanner can find it
-/// regardless of padding/ordering.
+/// regardless of padding/ordering. The section static is also a public,
+/// unmangled symbol because the linker may otherwise garbage-collect the
+/// custom section from a final `cdylib`, despite `#[used]` retaining it in the
+/// intermediate object file.
 ///
 /// * `static_ident` - unique identifier for the generated static.
 /// * `symbol_name` - the full metadata symbol name embedded in the framing
@@ -30,10 +33,14 @@ pub fn quote_metadata_section_static(
 
     quote! {
         #[doc(hidden)]
+        // `#[used]` keeps this static in the object file, while the exported
+        // symbol prevents the final cdylib linker's section GC from dropping
+        // the custom section before leo3-codegen can scan it.
+        #[no_mangle]
         #[used]
         #[cfg_attr(target_vendor = "apple", link_section = #METADATA_SECTION_NAME_APPLE)]
         #[cfg_attr(not(target_vendor = "apple"), link_section = #METADATA_SECTION_NAME)]
-        static #static_ident: [u8; #framed_len] = [#(#byte_literals),*];
+        pub static #static_ident: [u8; #framed_len] = [#(#byte_literals),*];
     }
 }
 
